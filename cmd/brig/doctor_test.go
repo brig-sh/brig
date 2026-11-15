@@ -479,6 +479,25 @@ func TestDoctorBrokerRowNamesARecovery(t *testing.T) {
 	}
 }
 
+// The broker serves a sandbox for its routes, its memory, or both. One with
+// memory alone is served too, and counted once with both.
+func TestDoctorBrokerRowCountsMemorySandboxes(t *testing.T) {
+	for _, tc := range []struct {
+		st   injector.Status
+		want string
+	}{
+		{injector.Status{Memory: []string{"brig-a"}}, "serving 1 sandboxes"},
+		{injector.Status{Sandboxes: []string{"brig-a"}, Memory: []string{"brig-a", "brig-b"}}, "serving 2 sandboxes"},
+		{injector.Status{Sandboxes: []string{"brig-a"}}, "serving 1 sandboxes"},
+		{injector.Status{}, "serving 0 sandboxes"},
+	} {
+		tc.st.PID, tc.st.Port = 7, 40123
+		if c := brokerStatusCheck(tc.st); !strings.Contains(c.Finding, tc.want) {
+			t.Errorf("routes %v, memory %v: %q, want %q", tc.st.Sandboxes, tc.st.Memory, c.Finding, tc.want)
+		}
+	}
+}
+
 // A route mode registered in this build adds its row, after the host's own
 // rows and ahead of the boot. Its row informs and never fails the report.
 func TestDoctorCarriesTheRowOfARegisteredMode(t *testing.T) {

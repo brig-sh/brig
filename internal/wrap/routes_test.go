@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -38,6 +39,18 @@ type fakeBroker struct {
 	// regions and vends are what Register reports of the vending routes.
 	regions map[string]string
 	vends   map[string]injector.VendInfo
+	// memory are the memory registrations it holds, by sandbox. A case
+	// clears it to stand for a broker that started again and lost them.
+	memory map[string]injector.MemorySandbox
+	// memRegistered and memMinted are the memory registrations and the
+	// memory tokens asked for, in order.
+	memRegistered []injector.MemorySandbox
+	memMinted     []injector.MemoryMintRequest
+	// memoryCA is the CA it hands a memory registration, or "" for the one
+	// Register hands.
+	memoryCA string
+	// routesForgotten are the sandboxes whose routes alone were removed.
+	routesForgotten []string
 }
 
 const fakeBrokerPort = 47821
@@ -77,7 +90,48 @@ func (f *fakeBroker) Mint(r injector.MintRequest) (string, error) {
 func (f *fakeBroker) Forget(id string) error {
 	f.forgotten = append(f.forgotten, id)
 	f.calls = append(f.calls, "forget "+id)
+	delete(f.memory, id)
 	return nil
+}
+
+func (f *fakeBroker) ForgetRoutes(id string) error {
+	f.routesForgotten = append(f.routesForgotten, id)
+	f.calls = append(f.calls, "forget-routes "+id)
+	return nil
+}
+
+func (f *fakeBroker) RegisterMemory(s injector.MemorySandbox) (injector.AddResponse, error) {
+	if f.registerErr != nil {
+		return injector.AddResponse{}, f.registerErr
+	}
+	f.memRegistered = append(f.memRegistered, s)
+	f.calls = append(f.calls, "register-memory "+s.ID)
+	f.running = true
+	if f.memory == nil {
+		f.memory = map[string]injector.MemorySandbox{}
+	}
+	f.memory[s.ID] = s
+	var added injector.AddResponse
+	if s.BrigInternal != "" {
+		dir, err := injector.Dir()
+		if err != nil {
+			return added, err
+		}
+		if added.DivertSocket, err = injector.DivertSocket(dir, s.ID); err != nil {
+			return added, err
+		}
+		added.CA = cmp.Or(f.memoryCA, f.ca, testBrigCA())
+	}
+	return added, nil
+}
+
+// MintMemory mints only for a sandbox it holds, as the broker does.
+func (f *fakeBroker) MintMemory(r injector.MemoryMintRequest) (string, error) {
+	if _, ok := f.memory[r.Sandbox]; !ok {
+		return "", errors.New("the credential broker refused: sandbox " + r.Sandbox + " is not registered for memory")
+	}
+	f.memMinted = append(f.memMinted, r)
+	return "memory-token-" + r.Sandbox, nil
 }
 
 func (f *fakeBroker) Status() (injector.Status, bool) {

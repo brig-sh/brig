@@ -3,6 +3,7 @@ package wrap
 import (
 	"bytes"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -37,6 +38,12 @@ var caBundleSources = []string{
 // create is written through.
 const caCreateScript = `set -e; for d in "$(dirname "$1")" "$1"; do [ ! -L "$d" ] || { echo "$d is a link" >&2; exit 1; }; done; ` +
 	`mkdir -p -m 0755 "$1"; chown root "$1"; chmod 0755 "$1"; rm -f -- "$2" "$3" "$3.new"; umask 022; set -C; : > "$2"`
+
+// guestFileCreateScript creates the file $2 empty, root's and 0644, in the
+// directory $1, root's and 0755, as caCreateScript does for the CA, with no
+// bundle beside it.
+const guestFileCreateScript = `set -e; for d in "$(dirname "$1")" "$1"; do [ ! -L "$d" ] || { echo "$d is a link" >&2; exit 1; }; done; ` +
+	`mkdir -p -m 0755 "$1"; chown root "$1"; chmod 0755 "$1"; rm -f -- "$2"; umask 022; set -C; : > "$2"`
 
 // caSizeScript exits non-zero when the file $1 is not $2 bytes. The answer is
 // its exit status: urunc's exec can drop the output of a command that exits
@@ -90,19 +97,8 @@ func (c *Config) deliverBrigCA() error {
 	if err := c.guestRoot("sh", "-c", caCreateScript, "sh", dir, injector.GuestCAPath, injector.GuestCABundlePath); err != nil {
 		return fmt.Errorf("could not create %s in the sandbox: %w", injector.GuestCAPath, err)
 	}
-	piece := len(c.brigCA)
-	if l, ok := c.Runtime.(runtime.FeedLimiter); ok && l.MaxFeed() > 0 && l.MaxFeed() < piece {
-		piece = l.MaxFeed()
-	}
-	for start := 0; start < len(c.brigCA); start += piece {
-		end := min(start+piece, len(c.brigCA))
-		if err := c.Runtime.Feed(runtime.ExecSpec{Name: c.VMName, User: guestRootUser,
-			Cmd: []string{"sh", "-c", `cat >> "$1"`, "sh", injector.GuestCAPath}, Stdin: strings.NewReader(c.brigCA[start:end])}); err != nil {
-			return fmt.Errorf("could not write %s in the sandbox: %w", injector.GuestCAPath, err)
-		}
-	}
-	if err := c.guestRoot("sh", "-c", caSizeScript, "sh", injector.GuestCAPath, fmt.Sprint(len(c.brigCA))); err != nil {
-		return fmt.Errorf("%s does not hold the %d bytes written: %w", injector.GuestCAPath, len(c.brigCA), err)
+	if err := c.feedGuestFile(injector.GuestCAPath, c.brigCA); err != nil {
+		return err
 	}
 	args := append([]string{"sh", "-c", caBundleScript, "sh", injector.GuestCABundlePath, injector.GuestCAPath},
 		caBundleSources...)
@@ -110,4 +106,65 @@ func (c *Config) deliverBrigCA() error {
 		return fmt.Errorf("could not write %s in the sandbox: %w", injector.GuestCABundlePath, err)
 	}
 	return nil
+}
+
+// feedGuestFile appends body to the guest file path, which exists, on stdin
+// and in pieces the runtime can carry, and checks that the file holds what
+// was written.
+func (c *Config) feedGuestFile(path, body string) error {
+	piece := len(body)
+	if l, ok := c.Runtime.(runtime.FeedLimiter); ok && l.MaxFeed() > 0 && l.MaxFeed() < piece {
+		piece = l.MaxFeed()
+	}
+	for start := 0; start < len(body); start += piece {
+		end := min(start+piece, len(body))
+		if err := c.Runtime.Feed(runtime.ExecSpec{Name: c.VMName, User: guestRootUser,
+			Cmd: []string{"sh", "-c", `cat >> "$1"`, "sh", path}, Stdin: strings.NewReader(body[start:end])}); err != nil {
+			return fmt.Errorf("could not write %s in the sandbox: %w", path, err)
+		}
+	}
+	if err := c.guestRoot("sh", "-c", caSizeScript, "sh", path, fmt.Sprint(len(body))); err != nil {
+		return fmt.Errorf("%s does not hold the %d bytes written: %w", path, len(body), err)
+	}
+	return nil
+}
+
+// memoryMCPConfig is the MCP configuration that points Claude Code at the
+// store of sandbox vm, at brig.internal. The token is named by its variable,
+// which Claude Code expands from its environment when it reads the file, so
+// the file holds no secret and is the same on every exec.
+func memoryMCPConfig(vm string) (string, error) {
+	type server struct {
+		Type    string            `json:"type"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+	}
+	b, err := json.Marshal(struct {
+		MCPServers map[string]server `json:"mcpServers"`
+	}{map[string]server{"brig-memory": {
+		Type:    "http",
+		URL:     injector.HostEndpoint{}.Base() + "/" + vm + "/memory",
+		Headers: map[string]string{"Authorization": "Bearer ${" + memoryTokenVar + "}"},
+	}}})
+	return string(b), err
+}
+
+// deliverMemoryConfig writes the MCP configuration of this run's memory to
+// memoryMCPConfigPath, for a run with memory, the way deliverBrigCA writes
+// the CA: root's and 0644 in a directory of root's, outside the guest home,
+// on stdin, on every exec. The agent reads it and cannot change it, so it
+// cannot point itself at another server with the token.
+func (c *Config) deliverMemoryConfig() error {
+	if c.memoryKey == "" {
+		return nil
+	}
+	body, err := memoryMCPConfig(c.VMName)
+	if err != nil {
+		return err
+	}
+	dir := pathpkg.Dir(memoryMCPConfigPath)
+	if err := c.guestRoot("sh", "-c", guestFileCreateScript, "sh", dir, memoryMCPConfigPath); err != nil {
+		return fmt.Errorf("could not create %s in the sandbox: %w", memoryMCPConfigPath, err)
+	}
+	return c.feedGuestFile(memoryMCPConfigPath, body)
 }

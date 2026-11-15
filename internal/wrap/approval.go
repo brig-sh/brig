@@ -62,6 +62,11 @@ type ApprovalSubject struct {
 	// Mounts are the host directories the guest reaches: the guest home, the
 	// project, and what --skills copies in.
 	Mounts []PlanMount `json:"mounts"`
+	// Memory is the host store of agent memory the run attaches, by key, or
+	// empty. --agent-memory on the line can ask for one that no setting or
+	// profile names, so the effective key is what is covered. Omitted when
+	// empty, so a run without memory keeps its digest.
+	Memory string `json:"memory,omitempty"`
 	// Settings are the BRIG_* settings that took effect, by the name that
 	// won and its value. See approvalSettings.
 	Settings []ApprovalSetting `json:"settings"`
@@ -191,6 +196,7 @@ func (c *Config) ApprovalSubject(in ApprovalInput) (ApprovalSubject, bool) {
 		Image:       ApprovalImage{Ref: c.Image, Pinned: strings.Contains(c.Image, "@sha256:"), Pull: c.Pull},
 		Limits:      PlanLimits{Mem: c.Mem, CPUs: c.CPUs},
 		Network:     ApprovalNet{Effective: string(c.Network)},
+		Memory:      c.memoryKey,
 		Settings:    c.approvalSettings(),
 		Credentials: c.approvalCredentials(),
 		Forwarded:   c.forwardedNames(),
@@ -291,7 +297,7 @@ func (c *Config) approvalSettings() []ApprovalSetting {
 // one more value an approval ignores.
 var approvalAgentSettings = []string{
 	"ALLOW_DENIED", "ALLOW_REFS", "COSIGN_BIN", "CPUS", "FORWARD_ENV", "FORWARD_GITHUB_TOKEN",
-	"GIT_CONFIG", "GIT_EMAIL", "GIT_HOSTS", "GIT_IDENTITY", "GIT_NAME", "GIT_USER", "HYPERVISOR", "IMAGE", "MEM", "NETWORK", "PULL",
+	"GIT_CONFIG", "GIT_EMAIL", "GIT_HOSTS", "GIT_IDENTITY", "GIT_NAME", "GIT_USER", "HYPERVISOR", "IMAGE", "MEM", "MEMORY", "NETWORK", "PULL",
 	"ROOTFS_MODE", "ROOTFS_TYPE", "SKILLS", "TRUST_WORKSPACE", "VERIFY", "VERIFY_IDENTITY",
 	"VERIFY_ISSUER", "VERIFY_REGISTRY", "VERIFY_RUNTIME_IDENTITY", "VERIFY_RUNTIME_ISSUER",
 }
@@ -468,6 +474,9 @@ func ApprovalChanges(was, now ApprovalSubject) []string {
 	if jsonSHA256(was.Mounts) != jsonSHA256(now.Mounts) {
 		add("the directories the guest reaches")
 	}
+	if was.Memory != now.Memory {
+		add("the agent memory store %s, and was %s", orNone(now.Memory), orNone(was.Memory))
+	}
 	setKey := func(s ApprovalSetting) string { return s.Name }
 	diffKeyed(was.Settings, now.Settings, setKey, func(s ApprovalSetting) string { return s.Value },
 		func(k string) { add("%s is set", k) }, func(k string) { add("%s is no longer set", k) },
@@ -538,6 +547,13 @@ func routeDest(r PlanRoute) string {
 		return "the Google APIs " + strings.Join(r.Services, ", ")
 	}
 	return r.Upstream
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 func listOr(list []string) string {

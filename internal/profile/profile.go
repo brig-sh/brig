@@ -142,6 +142,12 @@ type Profile struct {
 	// work rather than of the run: a formatter that only ever touches the
 	// workspace has no business holding a route to the internet.
 	Network string `json:"network,omitempty"`
+	// Memory turns agent memory on for every run of this profile: "project"
+	// for the store of the run's project folder, or the name of a store that
+	// sandboxes share. Empty leaves it to --agent-memory and BRIG_MEMORY. No
+	// shipped profile sets it: a store is a channel between the sandboxes that
+	// share it, and joining one should be the user's decision.
+	Memory string `json:"memory,omitempty"`
 	// RuntimeBin is the runtime binary to drive instead of the one on PATH.
 	//
 	// Unlike every other field this one is about your machine rather than the

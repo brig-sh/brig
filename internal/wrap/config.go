@@ -273,9 +273,12 @@ type Config struct {
 	// routeVars are what serveRoutes got for this exec: the variables that
 	// point the guest at its routes.
 	routeVars []runtime.Var
-	// brigCA is the brig CA certificate the broker handed serveRoutes for a
-	// guest that reaches brig.internal, in PEM, or "". It is checked to be
-	// one certificate and no key. See briginternal.go.
+	// memoryVars are what serveMemory got for this exec: the memory token
+	// and what goes with it. See memory.go.
+	memoryVars []runtime.Var
+	// brigCA is the brig CA certificate the broker handed serveRoutes or
+	// serveMemory for a guest that reaches brig.internal, in PEM, or "". It
+	// is checked to be one certificate and no key. See briginternal.go.
 	brigCA string
 	// routeSetup is the sandbox setup the route modes besides endpoint asked
 	// serveRoutes for, which the boot hands the runtime. See routemode.go.
@@ -332,6 +335,30 @@ type Config struct {
 	// levelled -- it is the report `brig info` was asked for by name.
 	Verbosity Verbosity
 
+	// memoryKey is the store this run attaches to, or "" when memory is off;
+	// memoryLabel is that store as the user named it. memoryRecorded is the
+	// key the sandbox of this name was booted with, or "" for none. A run
+	// that cannot have the memory it asked for carries the reason in
+	// memoryRefused, returned before boot. memoryAsked is set when a flag,
+	// the setting or the profile asked for memory or for none; a run that
+	// asked nothing inherits the record. See memory.go.
+	memoryAsked    bool
+	memoryKey      string
+	memoryLabel    string
+	memoryRecorded string
+	memoryRefused  error
+	// memoryMode and memoryRecordedMode say how memoryKey and
+	// memoryRecorded were chosen: memoryProject or memoryNamed.
+	memoryMode         string
+	memoryRecordedMode string
+	// memorySource is where memoryKey came from, as the plan names it.
+	// memoryUnread is why the record cannot be read, or nil. memoryNarrowed
+	// is the posture memory narrowed to isolated, or "" when it narrowed
+	// none.
+	memorySource   string
+	memoryUnread   error
+	memoryNarrowed Network
+
 	env Env
 }
 
@@ -365,6 +392,11 @@ type Options struct {
 	// plugins) read-only into the guest. Off unless asked for: it is the
 	// user's real config, and handing it to a sandbox should be a decision.
 	Skills bool
+	// Memory is --agent-memory: "project" for the store of this run's project
+	// folder, or the name of a store. Empty means the flag was not given.
+	// NoMemory is --no-agent-memory, which beats it and every other source.
+	Memory   string
+	NoMemory bool
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
@@ -933,6 +965,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		}
 		c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
 	}
+	// After the project, which a project store is keyed by.
+	c.resolveMemory(o)
+	c.narrowForMemory()
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}
