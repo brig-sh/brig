@@ -20,8 +20,8 @@ type Rules struct {
 	// Repos lists owner/name globs. When set, every repository(owner:,
 	// name:) field at the root of a query must name a match. It limits where
 	// a query starts, not where it goes: an edge such as Issue.parent or
-	// Repository.forks reaches other repositories. Mutations name node IDs,
-	// not repositories, so Repos does not limit them.
+	// Repository.forks reaches other repositories. A mutation names node IDs,
+	// not repositories, so Check returns them for the caller to look up.
 	Repos []string
 }
 
@@ -84,18 +84,28 @@ type Repo struct{ Owner, Name string }
 // String returns owner/name.
 func (r Repo) String() string { return r.Owner + "/" + r.Name }
 
-// Check reports whether req may go upstream under r, and returns the
-// repositories its query names at its root. The caller must confirm they
-// exist under those names, because GitHub resolves the old name of a renamed
-// or transferred repository.
-func Check(req *Request, r Rules) ([]Repo, error) {
+// Result is what the caller must look up before a request checked under
+// Repos goes upstream.
+type Result struct {
+	// Repos are the repositories a query names at its root. The caller must
+	// confirm they exist under those names, because GitHub resolves the old
+	// name of a renamed or transferred repository.
+	Repos []Repo
+	// Nodes are the node IDs a mutation names. The caller must find the
+	// repository of each and refuse the request unless it is in Repos.
+	Nodes []Node
+}
+
+// Check reports whether req may go upstream under r, and returns what the
+// caller must look up when r has Repos.
+func Check(req *Request, r Rules) (Result, error) {
 	doc, err := Parse(req.Query)
 	if err != nil {
-		return nil, fmt.Errorf("invalid query: %w", err)
+		return Result{}, fmt.Errorf("invalid query: %w", err)
 	}
 	op, err := doc.Operation(req.OperationName)
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	var allowed []string
 	switch op.Kind {
@@ -104,7 +114,7 @@ func Check(req *Request, r Rules) ([]Repo, error) {
 	case "mutation":
 		allowed = r.Mutations
 	default:
-		return nil, fmt.Errorf("%s operations are not supported", op.Kind)
+		return Result{}, fmt.Errorf("%s operations are not supported", op.Kind)
 	}
 	for _, f := range rootFields(doc, op.Selections) {
 		if f == "__typename" {
@@ -117,13 +127,17 @@ func Check(req *Request, r Rules) ([]Repo, error) {
 			continue
 		}
 		if !slices.Contains(allowed, "*") && !slices.Contains(allowed, f) {
-			return nil, fmt.Errorf("%s field %q is not in the allow list %s", op.Kind, f, list(allowed))
+			return Result{}, fmt.Errorf("%s field %q is not in the allow list %s", op.Kind, f, list(allowed))
 		}
 	}
-	if len(r.Repos) == 0 || op.Kind != "query" {
-		return nil, nil
+	if len(r.Repos) == 0 {
+		return Result{}, nil
 	}
 	c := repoCheck{op: op, vars: req.Variables, repos: r.Repos}
+	if op.Kind == "mutation" {
+		nodes, err := c.nodes(doc)
+		return Result{Nodes: nodes}, err
+	}
 	var repos []Repo
 	for _, f := range rootSelections(doc, op.Selections) {
 		if f.Name != "repository" {
@@ -131,11 +145,11 @@ func Check(req *Request, r Rules) ([]Repo, error) {
 		}
 		repo, err := c.repository(f)
 		if err != nil {
-			return nil, err
+			return Result{}, err
 		}
 		repos = append(repos, repo)
 	}
-	return repos, nil
+	return Result{Repos: repos}, nil
 }
 
 // rootFields returns the names of the fields an operation selects at its

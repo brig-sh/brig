@@ -1130,7 +1130,7 @@ request:
 | --- | --- |
 | `queries` | Each top-level field of a query, through fragments, by field name and not alias. `*` allows any |
 | `mutations` | Each mutation of a mutation, the same way. `*` allows any |
-| `repos` | The `owner` and `name` of each `repository` field at the root of a query, without ASCII case |
+| `repos` | The `owner` and `name` of each `repository` field at the root of a query, without ASCII case, and the repository of each node ID a mutation names |
 
 A list that is left out allows nothing, so a route without `mutations` is
 read-only. `__typename` is always allowed, and so are `__type` and
@@ -1169,8 +1169,47 @@ renamed or transferred repository to its new one, so a name that matches
 `repos` can reach a repository it never listed. With `repos`, the broker
 asks GitHub, with the route's credential, whether each repository exists
 under exactly that name (`followRenames: false`) before it forwards the
-request. It keeps each confirmation for five minutes for each route. The
-audit line does not record this lookup.
+request. It keeps each confirmation for five minutes for each route.
+
+**Mutations.** A mutation names its target by node ID, such as
+`subjectId: "PR_kw..."`, and not by repository. With `repos`, the broker
+reads every node ID in each mutation's arguments: each argument or input
+field named `id`, `ids`, `inReplyTo`, `allowedActors` or `reviewers`, or
+ending in `Id` or `Ids`, except `clientMutationId`, through input objects,
+lists, variables and their defaults. It asks GitHub for the repository of each ID with one
+`nodes(ids:)` query, with the route's credential, and forwards the mutation
+only when every ID belongs to a listed repository. An exact `owner/name`
+matches by repository ID, so a renamed repository matches only its current
+name. A glob matches the current `owner/name`.
+
+A pull request has two repositories: the base, and the head that
+`updatePullRequestBranch` writes to. Both must be listed, so a mutation on
+a pull request from a fork is refused unless `repos` also lists the fork.
+
+The broker refuses:
+
+- an ID that does not resolve, or that belongs to no repository, such as a
+  user
+- an ID field whose value is not a string or a list of strings
+- a field that names its target by name or by URL, such as
+  `repositoryNameWithOwner` or `subIssueUrl`, since only an ID can be looked
+  up. This includes fields such as `homepageUrl` that name no target
+- a `headRefName` written as `owner:branch`, which names a branch in a fork;
+  use `headRepositoryId`
+- a mutation that names no node ID, because nothing ties it to a repository
+- more than 100 node IDs in one request
+
+The broker keeps the repository of each ID for five minutes for each route,
+so an issue transferred to another repository is seen within that time. The
+audit line records each ID and its repository as
+`resolved="I_kw...=owner/name"`, and the head of a pull request from another
+repository as `PR_kw....head=owner/name`. The refusal sent to the guest does
+not name the repository, so a guest cannot use it to learn where a node ID
+is.
+
+A lookup that fails, because GitHub cannot be reached or answers with an
+error, is a `502` with `check=upstream`, as for a request that cannot reach
+its upstream. The cause is on the audit line, not in the response.
 
 A refusal is a `403` that names the rule:
 
@@ -1209,13 +1248,14 @@ github.com and skips the schema queries.
 
 **What `graphql` does not limit.**
 
-- A mutation names its target by node ID, such as `subjectId: "PR_kw..."`,
-  and not by repository. `repos` does not limit mutations: `addComment` can
-  comment on any pull request or issue the token reaches.
-- `repos` limits where a query starts, not where it goes. A query that
-  starts at a listed repository can follow an edge, such as an issue's
-  `parent`, a pull request's `headRepository`, or a cross-reference, into
-  another repository. `gh pr view` and `gh issue view` select such edges.
+- `repos` limits where a query starts and what a mutation changes, not
+  what either reads. A query that starts at a listed repository can follow
+  an edge, such as an issue's `parent`, a pull request's `headRepository`,
+  or a cross-reference, into another repository. `gh pr view` and `gh issue
+  view` select such edges. A mutation's response can select the same edges.
+- A closing keyword in a pull request or commit, such as `Fixes
+  other/repo#5`, closes an issue in another repository when the pull
+  request merges. The broker sees only the text.
 - The REST API stays readable on every path that `paths` allows.
 
 For each of these, the token's scope is the only limit. Use a fine-grained

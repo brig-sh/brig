@@ -336,11 +336,15 @@ holder's. Only the route's `request.allow` limits them, so make it as narrow
 as the certificate's purpose.
 
 A `github-api` route with `request.allow.graphql` limits the GraphQL
-operations the session token can run, and makes the REST API read-only. It
-does not limit a mutation by repository, because a mutation names its
-target by node ID, and `repos` limits only the repository a query starts
-at. The token's scope is the limit there. See
-[GraphQL requests](broker.md#graphql-requests).
+operations the session token can run, and makes the REST API read-only.
+With `repos`, it also limits the repository a query starts at and the
+repository of each node ID a mutation names: the broker looks up each ID
+before it forwards the mutation, and refuses an ID it cannot place in a
+listed repository. For a pull request, both its base and its head
+repository must be listed. It does not limit what a query or a mutation's
+response reads by following edges into other repositories, or an issue that
+a closing keyword such as `Fixes other/repo#5` closes on merge. The token's
+scope is the limit there. See [GraphQL requests](broker.md#graphql-requests).
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.

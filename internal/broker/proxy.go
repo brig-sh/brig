@@ -281,10 +281,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var gqRepos []graphql.Repo
+	var gqWant graphql.Result
 	if isGraphQL {
 		var reason string
-		if gqRepos, reason = checkGraphQL(r, held, gq); reason != "" {
+		if gqWant, reason = checkGraphQL(r, held, gq); reason != "" {
 			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql", reason)
 			return
 		}
@@ -332,9 +332,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if reason := h.confirmRepos(r, rt, upstream, value, gqRepos); reason != "" {
-		refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql.repos", reason)
-		return
+	if isGraphQL && len(gq.Repos) > 0 {
+		reason, err := h.confirmRepos(r, rt, upstream, value, gqWant.Repos)
+		if err == nil && reason == "" {
+			a.resolved, reason, err = h.confirmNodes(r, rt, upstream, value, gqWant.Nodes, gq.Repos)
+		}
+		if err != nil {
+			a.check, a.cause = "upstream", err.Error()
+			http.Error(rec, "brig broker: the upstream of route "+p.route+" could not be reached", http.StatusBadGateway)
+			return
+		}
+		if reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql.repos", reason)
+			return
+		}
 	}
 	h.forward(rec, r, a, out, rt, upstream, token, wl, doc, value, held)
 }
@@ -1000,14 +1011,20 @@ type auditLine struct {
 	// cert and certNotAfter name the client certificate a request presented:
 	// a short digest of the leaf and its expiry. Never the certificate.
 	cert, certNotAfter string
+	// resolved lists the node IDs a mutation named and the repository of
+	// each, as ID=owner/name. Node IDs are references, not credentials.
+	resolved string
+	// cause is why a lookup the broker made upstream failed.
+	cause string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
 // the broker's port can send a request, and the audit log must not grow by
 // what the sender chooses to write.
 const (
-	maxAuditMethod = 16
-	maxAuditPath   = 256
+	maxAuditMethod   = 16
+	maxAuditPath     = 256
+	maxAuditResolved = 1024
 )
 
 // clip cuts s to n bytes.
@@ -1074,6 +1091,12 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.cert != "" {
 		attrs = append(attrs, slog.String("cert", a.cert), slog.String("cert.notAfter", a.certNotAfter))
+	}
+	if a.resolved != "" {
+		attrs = append(attrs, slog.String("resolved", clip(a.resolved, maxAuditResolved)))
+	}
+	if a.cause != "" {
+		attrs = append(attrs, slog.String("cause", clip(a.cause, maxAuditResolved)))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }
