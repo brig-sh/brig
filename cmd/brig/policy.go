@@ -33,6 +33,7 @@ const policyUsage = `brig policy -- manage egress policies and what they bind
 usage:
   brig policy ls                                    every policy, and what binds it
   brig policy create <name> [--force]               write a starter, then open it
+  brig policy create <name> [--force] < FILE        write the policy on stdin
   brig policy edit <name> [--force]                 open yours in $VISUAL or $EDITOR
   brig policy show <name> [--json]                  print the parsed document, presets expanded
   brig policy show --preset <preset> [--json]       print the route a preset expands to
@@ -398,7 +399,8 @@ func parseNameAndForce(verb string, args []string) (name string, force bool, err
 }
 
 // createPolicy writes a starter policy document, then opens it in your
-// editor: $VISUAL, then $EDITOR, then vi.
+// editor: $VISUAL, then $EDITOR, then vi. With a pipe or a file on stdin, it
+// writes that document instead and opens no editor.
 func createPolicy(args []string) error {
 	name, force, err := parseNameAndForce("create", args)
 	if err != nil {
@@ -445,9 +447,38 @@ func createPolicy(args []string) error {
 		existed = true
 		mode = info.Mode().Perm()
 	}
+	piped := stdinPiped()
 	if !force && existed {
+		with := "a fresh starter"
+		if piped {
+			with = "the document on stdin"
+		}
 		return fmt.Errorf("%s already exists. Edit it directly with `brig policy edit %s`, "+
-			"or pass --force to replace it with a fresh starter", path, name)
+			"or pass --force to replace it with %s", path, name, with)
+	}
+
+	// A document on stdin is checked before anything is written, so a
+	// refused one leaves no file behind.
+	content := policyStarter(name)
+	if piped {
+		blob, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading stdin: %w", err)
+		}
+		if len(bytes.TrimSpace(blob)) == 0 {
+			return fmt.Errorf("stdin is empty; pipe a policy document into `brig policy create %s`, "+
+				"or run it in a terminal to edit a starter", name)
+		}
+		p, err := policy.Parse(blob)
+		if err != nil {
+			return fmt.Errorf("%s was not written: %w", path, err)
+		}
+		// The file name and the policy name must agree, or the policy is
+		// listed and attached under a name the command never used.
+		if p.Metadata.Name != name {
+			return fmt.Errorf("%s was not written: the document is named %q, not %q", path, p.Metadata.Name, name)
+		}
+		content = string(blob)
 	}
 
 	// The starter is written beside path, not over it, and only moved into
@@ -466,7 +497,7 @@ func createPolicy(args []string) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if _, err := tmp.WriteString(policyStarter(name)); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return err
@@ -476,20 +507,22 @@ func createPolicy(args []string) error {
 		return err
 	}
 
-	editor := editorCommand()
-	cmd := exec.Command(editor[0], append(editor[1:], tmpPath)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("%s: %w", editor[0], err)
-	}
+	if !piped {
+		editor := editorCommand()
+		cmd := exec.Command(editor[0], append(editor[1:], tmpPath)...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("%s: %w", editor[0], err)
+		}
 
-	if _, err := readPolicyFile(tmpPath); err != nil {
-		// Not written: path is exactly as it was before create ran (or
-		// still absent). The draft is left at tmpPath, named in the
-		// error, so it is not lost -- only not yet valid.
-		return fmt.Errorf("%s was not written: %w\nyour edit is still at %s",
-			path, err, tmpPath)
+		if _, err := readPolicyFile(tmpPath); err != nil {
+			// Not written: path is exactly as it was before create ran (or
+			// still absent). The draft is left at tmpPath, named in the
+			// error, so it is not lost -- only not yet valid.
+			return fmt.Errorf("%s was not written: %w\nyour edit is still at %s",
+				path, err, tmpPath)
+		}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
@@ -497,6 +530,14 @@ func createPolicy(args []string) error {
 	}
 	fmt.Printf("%s created\n", path)
 	return nil
+}
+
+// stdinPiped reports whether stdin is a pipe or a regular file, as `|`, `<`
+// and a heredoc give it. A terminal or /dev/null is neither, so create opens
+// the editor as before.
+func stdinPiped() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && (fi.Mode()&os.ModeNamedPipe != 0 || fi.Mode().IsRegular())
 }
 
 // policyStarter is a minimal, valid policy document to start editing from.

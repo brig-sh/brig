@@ -39,8 +39,10 @@ brig policy check claude-code
 ```
 
 `brig policy create` writes a starter document and opens it in your editor.
-Fill it in as shown above. `brig policy check` names each policy bound to
-the profile, and says where Brig can enforce it:
+Fill it in as shown above. With a document on stdin, such as a heredoc, it
+checks and writes that document instead and opens no editor.
+`brig policy check` names each policy bound to the profile, and says where
+Brig can enforce it:
 
 ```
 locked-down
@@ -874,7 +876,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | verb | what it does |
 | --- | --- |
 | `brig policy ls` | every policy that parses, by name and description, and, for one bound to anything, what binds it |
-| `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
+| `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi`. With a pipe or a file on stdin, write that document instead. Brig refuses it, and writes nothing, if it is empty, does not parse or validate, or names another policy in `metadata.name` |
 | `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that orphans anything bound to it, inline or attached, unless `--force` |
 | `brig policy show <name> [--json]` | print the parsed document, with each route's preset expanded |
 | `brig policy show --preset <preset> [--json]` | print the route that a preset expands to. See [Presets](#presets) |
