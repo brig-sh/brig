@@ -1133,10 +1133,11 @@ request:
 | `repos` | The `owner` and `name` of each `repository` field at the root of a query, without ASCII case |
 
 A list that is left out allows nothing, so a route without `mutations` is
-read-only. `__typename` is always allowed. The broker refuses subscriptions. With
-`repos`, `queries` may list only `repository` and `rateLimit`, because every
-other root field reaches repositories by a node ID, a search, a URL or an
-owner, which `repos` cannot check.
+read-only. `__typename` is always allowed, and so are `__type` and
+`__schema` in a query: they read the schema, not a repository. The broker
+refuses subscriptions. With `repos`, `queries` may list only `repository`
+and `rateLimit`, because every other root field reaches repositories by a
+node ID, a search, a URL or an owner, which `repos` cannot check.
 
 **On a route with `request.allow.graphql`:**
 
@@ -1188,14 +1189,23 @@ sandbox: brig-7f3a
 | --- | --- |
 | `gh pr list`, `gh pr view`, `gh issue list`, `gh issue view` | Allowed |
 | `gh pr comment`, `gh issue comment` | Allowed: `addComment` |
-| `gh pr checks` | Refused: its second query selects `node` |
-| `gh pr status` | Refused: it selects `search` |
+| `gh pr checks` | Refused: its query for the checks selects `node` |
+| `gh pr status` | Refused: it asks for the current user with `viewer`, then selects `search` |
 | `gh pr merge`, `gh pr create`, `gh issue close` and other changes | Refused, until their mutations are listed |
 | `gh api` on a REST path | `GET` alone |
 
-`gh pr checks` and `gh pr status` work without `repos`, with `node` and
-`search` in `queries`. To find the fields and mutations a command needs,
-run it on the host with `GH_DEBUG=api`, which prints each query.
+`gh pr checks` works without `repos`, with `node` in `queries`, and `gh pr
+status` with `viewer` and `search`.
+
+Because `GH_HOST` names the route, `gh` treats it as a GitHub Enterprise
+host. It reads `GET /api/v3/meta`, and before `gh pr checks`, `gh pr
+status`, `gh pr merge` and `gh issue view` it asks the schema which fields a
+type has, with `__type`. The broker allows both, so the rule that refuses a
+command is the one for the fields or mutation the command needs.
+
+To find the fields and mutations a command needs, run it in the sandbox
+with `GH_DEBUG=api`, which prints each query. On the host, `gh` talks to
+github.com and skips the schema queries.
 
 **What `graphql` does not limit.**
 

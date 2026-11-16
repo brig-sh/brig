@@ -153,3 +153,39 @@ func TestDeepJSONIsRefusedNotFatal(t *testing.T) {
 		t.Fatalf("err = %v, want the nesting limit", err)
 	}
 }
+
+// On an Enterprise host, which is what GH_HOST makes the route, gh asks the
+// schema which fields a type has before pr checks, pr status, pr merge and
+// issue view. The probes were captured from gh 2.103.3 in a sandbox. They read
+// the schema and no repository, so a repos policy lets them through.
+func TestGhEnterpriseProbesUnderPRCommentPolicy(t *testing.T) {
+	files, _ := filepath.Glob("testdata/gh_ghes_probe_*.graphql")
+	if len(files) != 3 {
+		t.Fatalf("found %d probe fixtures, want 3", len(files))
+	}
+	for _, f := range files {
+		base := strings.TrimSuffix(f, ".graphql")
+		if got := decide(ghRequest(t, base), prComment); got != "allowed" {
+			t.Errorf("%s: %s", filepath.Base(base), got)
+		}
+	}
+	body := func(q string) []byte {
+		b, _ := json.Marshal(map[string]any{"query": q})
+		return b
+	}
+	for _, c := range []struct{ name, query, want string }{
+		{"__schema", `query{__schema{queryType{name}}}`, "allowed"},
+		{"__type beside a listed repository", `query{t: __type(name:"Issue"){name} repository(owner:"brig-sh",name:"brig"){id}}`, "allowed"},
+		{"__type beside another repository", `query{t: __type(name:"Issue"){name} repository(owner:"NOFireAI",name:"engineering"){id}}`,
+			`refused: repo "NOFireAI/engineering" is not in the allow list [brig-sh/brig]`},
+		// The schema puts __type and __schema on Query alone.
+		{"__type in a mutation", `mutation{__type(name:"Issue"){name}}`,
+			`refused: mutation field "__type" is not in the allow list [addComment]`},
+		{"__schema in a mutation", `mutation{__schema{queryType{name}}}`,
+			`refused: mutation field "__schema" is not in the allow list [addComment]`},
+	} {
+		if got := decide(body(c.query), prComment); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.name, got, c.want)
+		}
+	}
+}
