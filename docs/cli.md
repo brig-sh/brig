@@ -847,6 +847,7 @@ brig policy ls
 ```
 brig policy ls
 brig policy create <name> [--force]
+brig policy create <name> [--force] < <file>
 brig policy edit <name> [--force]
 brig policy show <name> [--json]
 brig policy show --preset <preset> [--json]
@@ -860,6 +861,22 @@ Write a starter policy and open it in your editor:
 
 ```bash
 brig policy create locked-down
+```
+
+Or write a policy from stdin, with no editor. Stdin must be a pipe or a file,
+as `|`, `<` and a heredoc give it; Brig does not read a socket.
+`metadata.name` must match the name you give:
+
+```bash
+brig policy create gh-demo <<'EOF'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: gh-demo
+spec:
+  egress:
+    default: deny
+EOF
 ```
 
 Bind it to every run of an agent:
