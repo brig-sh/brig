@@ -247,11 +247,12 @@ type route struct {
 	cur    *tlsTransport
 	closed bool
 
-	// repoOK is when each owner/name, in lower case, was last confirmed to
-	// exist under that name, for request.allow.graphql.repos. repoMu guards
-	// it.
+	// repoOK is the ID of each owner/name, in lower case, and when it was
+	// looked up; nodeOK is the repository of each node ID a mutation named.
+	// Both are for request.allow.graphql.repos, and repoMu guards them.
 	repoMu sync.Mutex
-	repoOK map[string]time.Time
+	repoOK map[string]repoSeen
+	nodeOK map[string]repoSeen
 }
 
 // New returns a Handler built from cfg.

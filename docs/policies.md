@@ -339,7 +339,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
 | `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
 | `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
-| `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field must match. With it, `queries` may list only `repository` and `rateLimit` |
+| `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field, and the repository of each node ID a mutation names (both repositories of a pull request), must match. With it, `queries` may list only `repository` and `rateLimit` |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
