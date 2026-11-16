@@ -737,6 +737,12 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			network = NetIsolated
 		}
 	}
+	if routesErr == nil {
+		var tokenWarnings []string
+		t, bindings, tokenWarnings = withoutGitHubToken(t, bindings, routes,
+			strict("FORWARD_GITHUB_TOKEN", false), env.setting("FORWARD_GITHUB_TOKEN"))
+		envWarnings = append(envWarnings, tokenWarnings...)
+	}
 	// Dropped here rather than only where the guest env is built, so the run's
 	// own reports -- the CREDENTIALS row, plan, info -- never name a variable
 	// the guest does not get. See projectVar.

@@ -193,7 +193,7 @@ and on Linux with nerdctl.
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
-| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The client certificate, private key and CA bundle of a route's `inject.tls` stay there too. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The client certificate, private key and CA bundle of a route's `inject.tls` stay there too. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped, and so are `GH_TOKEN` and `GITHUB_TOKEN` on a run with a `github-token` or `github-api` route to GitHub |
 
 `brig info --json` names the channel of each credential as its `source`:
 `environment`, `secret`, `file` or `broker`.

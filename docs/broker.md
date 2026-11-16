@@ -1285,6 +1285,27 @@ The secret a route injects stays on the host, whatever the profile binds:
   value cannot stand in for it
 - Brig does not read it. The broker does
 
+A run with a `github-token` or `github-api` route also withholds `GH_TOKEN`
+and `GITHUB_TOKEN`, whatever secret or variable the profile reads them from.
+The route keeps the token on the host, and forwarding it as well would put
+the real token in the guest beside the route's session token:
+
+```
+brig: not forwarding GH_TOKEN: this sandbox reaches GitHub through route github, which keeps the token on the host
+```
+
+The guest's git credential helper reads `GH_TOKEN`. With a `github-api`
+route and no `github-token` route, git over HTTPS to github.com gets no
+token, and the notice says that git needs a `github-token` route. A preset
+route whose `upstream` is not the preset's own does not reach GitHub and
+does not count.
+
+A policy bound to one session with `brig policy attach -n` counts. To forward
+the token anyway, set `BRIG_FORWARD_GITHUB_TOKEN=1`; Brig then says that the real
+token is in the guest beside the route. Without a GitHub route, the shipped
+profiles forward `GH_TOKEN` as before, and `brig info` says that a route
+would keep it on the host.
+
 A run with a route runs isolated. A run with a route and the `offline`
 posture is refused.
 
