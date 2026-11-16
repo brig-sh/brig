@@ -72,12 +72,12 @@ func registeredModes() []v1alpha1.RouteMode {
 	return out
 }
 
-// otherModes returns the modes besides endpoint that this run's routes name,
+// otherModes returns the modes besides endpoint and host that this run's routes name,
 // in name order, whether this build serves them or not.
 func (c *Config) otherModes() []v1alpha1.RouteMode {
 	var out []v1alpha1.RouteMode
 	for _, r := range c.routes {
-		if r.Mode != "" && r.Mode != v1alpha1.ModeEndpoint && !slices.Contains(out, r.Mode) {
+		if !r.Mode.AtBrigInternal() && !slices.Contains(out, r.Mode) {
 			out = append(out, r.Mode)
 		}
 	}
@@ -147,7 +147,7 @@ func RouteModeServed(p profile.Profile, rt runtime.Runtime, m v1alpha1.RouteMode
 	}
 	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
 	switch {
-	case m == "" || m == v1alpha1.ModeEndpoint:
+	case m.AtBrigInternal():
 		return runtime.CheckBrigInternal(rt, path, net)
 	default:
 		return checkMode(m, env, rt, path, net)

@@ -321,7 +321,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | --- | --- | --- |
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
-| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
+| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. `host`: the guest reaches the route at `https://<route>.brig.internal`, so `name` is at most 63 characters and does not end with a dash. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
 | `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
@@ -335,8 +335,11 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
-| `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
-| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
+| `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
+| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
+| `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
+| `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
+| `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field, and the repository of each node ID a mutation names (both repositories of a pull request), must match. With it, `queries` may list only `repository` and `rateLimit` |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
@@ -411,7 +414,7 @@ user presents that certificate. Brig does not choose between certificates.
 
 ### Placeholders
 
-A route names values that the guest never holds through four placeholders:
+A route names values that the guest never holds through five placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
@@ -419,15 +422,17 @@ A route names values that the guest never holds through four placeholders:
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
 | `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile |
+| `{route.host}` | a `guest.env` value of a route in `mode: host` | the host name of the route, `<route>.brig.internal` |
 
-A `guest.env` value is one of the last three placeholders, and nothing else.
-Brig refuses `{route.region}` on a route that is not on the `aws` preset.
+A `guest.env` value is one of the last four placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset, and
+`{route.host}` on a route that is not in `mode: host`.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -446,8 +451,39 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `github-api` | `https://api.github.com`. `host` mode only. The broker maps `/api/v3` and `/api/graphql` to the API paths and refuses any other | `Authorization: Bearer {value}` | `GH_HOST={route.host}`, `GH_ENTERPRISE_TOKEN={session.token}` | none, the token is static. See [The github-api preset](broker.md#the-github-api-preset) |
 | `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 | `gcp` | none. Each service is forwarded to `https://<service>.googleapis.com` | `Authorization: Bearer {value}` | `BRIG_GCP_URL={route.url}`, `BRIG_GCP_TOKEN={session.token}`, and the gcloud variables of [The gcp preset](#the-gcp-preset) | none, the access token is static. See [The gcp preset](#the-gcp-preset) |
+
+A `github-api` route needs only the credential:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+```
+
+To limit what `gh` may do, add `request.allow.graphql`. This route reads pull
+requests and issues in one repository and comments on them, and nothing
+else:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+  request:
+    allow:
+      graphql:
+        queries: [repository]
+        mutations: [addComment]
+        repos: [brig-sh/brig]
+```
+
+On a route with `request.allow.graphql`, the REST API is read-only. See
+[GraphQL requests](broker.md#graphql-requests) for what the broker checks,
+which `gh` commands work, and the limits.
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -1114,7 +1150,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
@@ -1285,8 +1321,9 @@ A guest of nerdctl reaches its routes at `brig.internal` (see
 sandbox with routes and no policy gets the same resolver and table, which
 then filter nothing else.
 
-The resolver answers `brig.internal` with the bridge address, under any
-policy. The table sends a connection to port 443 of that address to a
+The resolver answers `brig.internal`, and each host route's
+`<route>.brig.internal`, with the bridge address, under any policy.
+The table sends a connection to port 443 of that address to a
 relay of the resolver, which passes it to the broker. On a run with a route
 that vends, it also sends a connection to port 80 of `169.254.170.2` to the
 relay. Under a policy with a default, every other address and port of

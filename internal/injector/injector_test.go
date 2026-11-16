@@ -1132,3 +1132,21 @@ func TestGuestEnvGCPRouteNoCAOffBrigInternal(t *testing.T) {
 		}
 	}
 }
+
+// gh's GH_HOST takes a host name, not a URL.
+func TestGuestEnvFillsRouteHost(t *testing.T) {
+	r := expand(t, v1alpha1.Route{Name: "github-api", Mode: v1alpha1.ModeHost,
+		Upstream:   "https://api.github.com",
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "gh"}},
+		Inject: &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{
+			Set: []v1alpha1.Header{{Name: "Authorization", Value: "Bearer {value}"}}}},
+		Guest: &v1alpha1.Guest{Env: map[string]string{"GH_HOST": "{route.host}"}}})
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{r}, map[string]string{"github-api": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := vars(got)["GH_HOST"]; v.Value != "github-api.brig.internal" || v.Secret {
+		t.Errorf("GH_HOST = %+v", v)
+	}
+}

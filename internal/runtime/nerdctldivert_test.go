@@ -177,3 +177,25 @@ func TestDivertArgsRouteBrigInternalToTheBridgeAddress(t *testing.T) {
 		t.Error("the egress record does not hold brig.internal")
 	}
 }
+
+// A host route is one more --host record of the bridge's address, and no divert.
+func TestResolverArgsAddAHostRecordPerHostRoute(t *testing.T) {
+	gw := netip.MustParseAddr("10.4.9.1")
+	d := Divert{BrigInternal: true, Socket: testDivert.Socket, Hosts: []string{"github-api.brig.internal"}}
+	want := []string{"--divert", "10.4.9.1:443", "--host", "brig.internal=10.4.9.1",
+		"--host", "github-api.brig.internal=10.4.9.1", "--divert-socket", testDivert.Socket}
+	if got := d.args(gw); !slices.Equal(got, want) {
+		t.Errorf("args = %q, want %q", got, want)
+	}
+}
+
+// A sandbox booted before its policy gained a host route is booted again, so
+// the resolver has the record.
+func TestEgressSpecChangesWithHosts(t *testing.T) {
+	base := Divert{BrigInternal: true, Socket: testDivert.Socket}
+	with := base
+	with.Hosts = []string{"github-api.brig.internal"}
+	if egressSpec(Egress{Divert: base}) == egressSpec(Egress{Divert: with}) {
+		t.Error("the egress record does not hold the host routes")
+	}
+}

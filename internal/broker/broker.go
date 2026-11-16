@@ -246,6 +246,13 @@ type route struct {
 	tlsMu  sync.Mutex
 	cur    *tlsTransport
 	closed bool
+
+	// repoOK is the ID of each owner/name, in lower case, and when it was
+	// looked up; nodeOK is the repository of each node ID a mutation named.
+	// Both are for request.allow.graphql.repos, and repoMu guards them.
+	repoMu sync.Mutex
+	repoOK map[string]repoSeen
+	nodeOK map[string]repoSeen
 }
 
 // New returns a Handler built from cfg.
@@ -351,7 +358,7 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly()) {
 			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
 		}
-		if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint && !slices.Contains(s.Modes, m) {
+		if m := r.Route.Mode; !m.AtBrigInternal() && !slices.Contains(s.Modes, m) {
 			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
 				"to serve it", s.ID, name, m)
 		}
