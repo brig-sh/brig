@@ -110,6 +110,12 @@ func Check(req *Request, r Rules) ([]Repo, error) {
 		if f == "__typename" {
 			continue
 		}
+		// __type and __schema read the schema, not a repository. gh sends
+		// them to an Enterprise host before issue view, pr checks, pr status
+		// and pr merge. The schema has them on Query alone.
+		if op.Kind == "query" && (f == "__type" || f == "__schema") {
+			continue
+		}
 		if !slices.Contains(allowed, "*") && !slices.Contains(allowed, f) {
 			return nil, fmt.Errorf("%s field %q is not in the allow list %s", op.Kind, f, list(allowed))
 		}

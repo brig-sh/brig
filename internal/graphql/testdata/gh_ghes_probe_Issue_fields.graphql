@@ -1,0 +1,1 @@
+query Issue_fields{Issue: __type(name: "Issue"){fields(includeDeprecated: true){name}}}
