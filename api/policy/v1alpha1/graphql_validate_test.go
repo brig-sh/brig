@@ -1,6 +1,9 @@
 package v1alpha1
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGraphQLAllowValidate(t *testing.T) {
 	for _, c := range []struct {
@@ -32,5 +35,25 @@ func TestGraphQLAllowValidate(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
 		}
+	}
+}
+
+// An empty graphql.repos counted as unset, so queries: ["*"] next to it opened
+// every repository the credential reaches. A reader takes it to mean none.
+func TestGraphQLReposRefusesAnEmptyList(t *testing.T) {
+	const want = "request.allow.graphql.repos is empty; list at least one, or leave the key out"
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: github-api\n      preset: github-api\n      credential: {secretRef: {name: gh-token}}\n" +
+		"      request: {allow: {graphql: {queries: [\"*\"], repos: []}}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a policy with graphql.repos: [] passed Validate, err = %v", err)
+	}
+	r := p.Spec.Routes[0]
+	if err := r.DeepCopy().validateWritten(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("DeepCopy turned the empty list into an unset one, err = %v", err)
 	}
 }
