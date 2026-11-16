@@ -540,6 +540,11 @@ func (a *RequestAllow) validate(preset Preset) error {
 				}
 			}
 		}
+		// An empty repos would count as unset and open every repository the
+		// credential reaches, while a reader takes it to allow none.
+		if g.Repos != nil && len(g.Repos) == 0 {
+			return fmt.Errorf("request.allow.graphql.repos is empty; list at least one, or leave the key out")
+		}
 		for _, repo := range g.Repos {
 			owner, name, ok := strings.Cut(repo, "/")
 			if !ok || owner == "" || name == "" || strings.Contains(name, "/") || !isASCIIPrint(repo) {
