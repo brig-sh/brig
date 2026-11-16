@@ -484,7 +484,7 @@ routes:
           - "https://github.com/"        # refused
 ```
 
-An `https://` prefix must also name the upstream's port, and must end the
+An `https://` prefix must also match the upstream's port, and must end the
 host with a slash.
 
 **A preset stays what Brig ships.** On a preset route, a repository policy
@@ -508,7 +508,7 @@ A repository policy may not change:
 
 | Field of a preset route | Why it is refused |
 | --- | --- |
-| `upstream` of `anthropic-api-key` | The guest finds that route through a variable, which names no host to hold the route to |
+| `upstream` of `anthropic-api-key` or `github-api` | The guest finds those routes through a variable, which names no host to hold the route to |
 | `inject` | The preset says how the secret is sent |
 | `request` of `aws` | The preset says which requests it takes |
 
