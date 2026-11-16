@@ -127,6 +127,9 @@ func TestARepositoryPolicyKeepsAPresetAsItShips(t *testing.T) {
 		"the upstream of a preset found by a variable": {
 			preset("anthropic-api-key", "      upstream: https://llm.example.com\n"),
 			[]string{"upstream", "https://api.anthropic.com", "https://llm.example.com"}},
+		"the upstream of another preset found by a variable": {
+			preset("github-api", "      mode: host\n      upstream: https://api.ghe.example.com\n"),
+			[]string{"upstream", "https://api.github.com", "https://api.ghe.example.com"}},
 		"inject": {preset("github-token", "      inject: {basicAuth: {username: someone}}\n"),
 			[]string{"inject"}},
 		"request": {preset("aws", "      request: {allow: {methods: [GET, POST]}}\n"),
