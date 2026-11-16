@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"bytes"
+	"compress/gzip"
 	"net/http"
 	"strings"
 	"testing"
@@ -62,6 +64,46 @@ func TestGraphQLPolicyCannotBeWalkedAround(t *testing.T) {
 			resp := ghDo(r, c.method, c.path, c.ctype, c.body)
 			wantStatus(t, resp, c.want)
 			if c.want == 403 && up.count() != 0 {
+				t.Fatalf("the upstream saw %s", up.last(t).path)
+			}
+		})
+	}
+}
+
+// The broker reads the first Content-Type or Content-Encoding line and every
+// line goes upstream, so a second line could make GitHub read a body the
+// broker did not check.
+func TestGraphQLRefusesARepeatedContentHeader(t *testing.T) {
+	merge := `{"query":"mutation{mergePullRequest(input:{pullRequestId:\"PR_x\"}){clientMutationId}}"}`
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(merge))
+	_ = zw.Close()
+	for name, c := range map[string]struct {
+		h    [][2]string
+		body string
+	}{
+		"two Content-Type": {[][2]string{{"Content-Type", "application/json"}, {"Content-Type", "application/graphql"}}, merge},
+		"two Content-Encoding": {[][2]string{{"Content-Type", "application/json"}, {"Content-Encoding", "identity"},
+			{"Content-Encoding", "gzip"}}, gz.String()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, up := gqlRig(t, &v1alpha1.RequestAllow{GraphQL: &v1alpha1.GraphQLAllow{Queries: []string{"*"}, Mutations: []string{"*"}}})
+			req, _ := http.NewRequest("POST", r.srv.URL+"/api/graphql", strings.NewReader(c.body))
+			req.Host = "github-api.brig.internal"
+			req.Header.Set("Authorization", "token "+r.mint("brig-a", "github-api"))
+			for _, kv := range c.h {
+				req.Header.Add(kv[0], kv[1])
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			r.lines++
+			wantAudit(t, r.waitAudit(r.lines), "check=request.allow.graphql")
+			wantStatus(t, resp, 403)
+			if up.count() != 0 {
 				t.Fatalf("the upstream saw %s", up.last(t).path)
 			}
 		})

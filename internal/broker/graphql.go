@@ -55,6 +55,11 @@ func checkGraphQL(r *http.Request, held *heldBody, g *v1alpha1.GraphQLAllow) ([]
 	if r.URL.RawQuery != "" {
 		return nil, "GraphQL request has a query string; send the query in the JSON body"
 	}
+	// Header.Get reads the first line and every line goes upstream, so a
+	// second line could make GitHub read the body another way.
+	if len(r.Header.Values("Content-Type")) > 1 || len(r.Header.Values("Content-Encoding")) > 1 {
+		return nil, "GraphQL request repeats Content-Type or Content-Encoding; send each header once"
+	}
 	if ce := r.Header.Get("Content-Encoding"); ce != "" && ce != "identity" {
 		return nil, "GraphQL request body is compressed; send it uncompressed"
 	}
