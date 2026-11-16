@@ -1417,6 +1417,7 @@ profile's binding wins and Brig warns about the name. See
 | --- | --- | --- |
 | `BRIG_ALLOW_REFS` | `0` | `1` forwards a value that still looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | `1` forwards a variable on the agent's own billing denylist |
+| `BRIG_FORWARD_GITHUB_TOKEN` | `0` | `1` forwards `GH_TOKEN` and `GITHUB_TOKEN` beside a `github-token` or `github-api` route to GitHub, which otherwise withholds them |
 | `BRIG_GIT_CONFIG` | `0` | `1` writes a credential helper and gitconfig into the guest, routing an SSH GitHub remote over HTTPS |
 | `BRIG_GIT_HOSTS` | `github.com` | space-separated hosts the forwarded token applies to |
 | `BRIG_GIT_USER` | resolved on the host | username paired with the forwarded token |
@@ -1425,8 +1426,8 @@ profile's binding wins and Brig warns about the name. See
 | `BRIG_TRUST_WORKSPACE` | `1` | pre-answers the agent's own "do you trust this folder" question for the directory a run starts in |
 | `BRIG_ENV_ARGV` (global only) | (unset) | `1`, and no other value, puts a forwarded value on the runtime's own command line, where `ps` can read it. It never applies to a value Brig resolved itself, such as a stored secret |
 
-`BRIG_SKILLS`, `BRIG_GIT_CONFIG`, `BRIG_TRUST_WORKSPACE`, `BRIG_ALLOW_REFS`
-and `BRIG_ALLOW_DENIED` accept `1`, `true`, `yes` or `on`, and `0`, `false`,
+`BRIG_SKILLS`, `BRIG_GIT_CONFIG`, `BRIG_TRUST_WORKSPACE`, `BRIG_ALLOW_REFS`,
+`BRIG_ALLOW_DENIED` and `BRIG_FORWARD_GITHUB_TOKEN` accept `1`, `true`, `yes` or `on`, and `0`, `false`,
 `no` or `off`. Any other value refuses the run.
 
 [Authentication](authentication.md) and [Secrets](secrets.md) cover what

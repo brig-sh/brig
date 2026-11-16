@@ -513,6 +513,10 @@ env:
 | `ref: secrets.<name>` | The named secret, out of Brig's own store |
 | `ref: env.<name>` | The named variable, out of Brig's own environment |
 
+A run whose policy has a `github-token` or `github-api` route to GitHub
+does not forward `GH_TOKEN` or `GITHUB_TOKEN`, from any `ref`. See
+[What the guest gets](broker.md#what-the-guest-gets).
+
 Limits:
 
 - Any namespace other than `secrets` or `env` is a parse error.

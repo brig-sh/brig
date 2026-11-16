@@ -50,6 +50,7 @@ func (c *Config) Status(set creds.Set) {
 	}
 	c.reportDeny(set)
 	c.reportOverride()
+	c.reportGitHubToken(set)
 
 	if c.GitConfig {
 		c.sayf("guest git over HTTPS: on, user %q (hosts: %s)", c.GitUser,
@@ -279,4 +280,18 @@ var nowMilli = defaultNowMilli
 // wrong, because nothing fails to make it visible.
 func (c *Config) reportVerify() {
 	c.sayf("image verification: %s", c.verifyLine())
+}
+
+// reportGitHubToken says when a GitHub token is in the guest and no route
+// reaches GitHub, because a route would keep it on the host. With a route,
+// Load already withheld the token or warned that it did not.
+func (c *Config) reportGitHubToken(set creds.Set) {
+	if api, git := githubRoutes(c.routes); api != "" || git != "" {
+		return
+	}
+	for _, name := range githubTokenVars {
+		if set.Has(name) {
+			c.sayf("%s is in the guest; a github-api or github-token route keeps it on the host, see https://www.brig.sh/docs/broker/#the-github-api-preset", name)
+		}
+	}
 }
