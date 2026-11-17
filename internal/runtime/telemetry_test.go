@@ -256,6 +256,7 @@ func TestOlderHullIsNotCountedTwice(t *testing.T) {
 		"hull 0.1.0 (go1.26.4, darwin/arm64)":                                              "HULL_TELEMETRY_SUPPRESS=command",
 		"hull v0.1.0-rc30.0.20261004171943-6c40ea424cbf (6c40ea4, go1.26.5, darwin/arm64)": "HULL_TELEMETRY_SUPPRESS=1",
 		"hull dev": "HULL_TELEMETRY_SUPPRESS=1",
+		"hull v0.0.0-20261111171032-fb41d4a05d4a (fb41d4a, go1.26.8, linux/amd64)": "HULL_TELEMETRY_SUPPRESS=1",
 	} {
 		h := &hull{bin: "unused"}
 		h.versionOnce.Do(func() { h.versionOut = version })

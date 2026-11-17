@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -270,13 +271,24 @@ func hullVersionPinsDigest(out string) bool {
 	return hullVersionAtLeast(out, 23, true)
 }
 
+// untaggedPseudoVersion is the pseudo-version Go gives a commit with no tag
+// behind it, without its leading v: 0.0.0, the commit time as fourteen digits
+// and twelve hex digits of the commit, then hull's +dirty when the tree was.
+var untaggedPseudoVersion = regexp.MustCompile(`^0\.0\.0-[0-9]{14}-[0-9a-f]{12}(\+\S*)?$`)
+
 // hullVersionAtLeast reads `hull --version` and reports whether that hull is
 // 0.1.0-rc<rc> or later. Anything that does not read as a version is a build
 // from source, and gets unknown: each caller knows which wrong guess costs
 // less.
+//
+// So does Go's pseudo-version for a commit with no tag behind it,
+// 0.0.0-<date>-<commit>. It is what a checkout without hull's tags builds as,
+// a one-commit-deep fetch among them, and it says nothing about which release
+// the commit follows. Read as 0.0.0 it put a current hull below rc23, and brig
+// stopped pinning boot images by digest under it.
 func hullVersionAtLeast(out string, rc int, unknown bool) bool {
 	word := VersionToken(out)
-	if word == "" {
+	if word == "" || untaggedPseudoVersion.MatchString(word) {
 		return unknown
 	}
 	base, pre, _ := strings.Cut(word, "-")
