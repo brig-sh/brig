@@ -381,7 +381,7 @@ where `brig secret import` finds it:
 secrets:
   - name: claude-credentials
     required: false                     # warn and boot, instead of refusing
-    expiryField: expiresAt              # found at any depth; drives the stale warning
+    expiryField: claudeAiOauth.expiresAt  # the login, not an MCP entry; drives the stale warning
     sources:                            # where `brig secret import` looks
       - from: keychain
         service: Claude Code-credentials
@@ -431,6 +431,13 @@ Limits of `field:` and `expiryField:`:
   must yield the same document shape.
 - An absent `field:` stores the value verbatim, which suits a file-shaped
   secret.
+- A dotted name, such as `claudeAiOauth.expiresAt`, is first a path from the
+  top of the document. Brig then tries a top-level key that holds the whole
+  name, and only then searches at any depth. A search at depth that finds
+  two different values finds nothing. So `field:` refuses the import, and
+  `expiryField:` records no expiry. Claude's document holds `expiresAt` for
+  the login and again for each MCP server that signed in with OAuth, which
+  is why the shipped profiles name the path.
 - A credential whose two host locations differ in shape needs two secrets.
   A `files:` binding names one secret, and Brig refuses two bindings on one
   `path:`. So one portable profile cannot yet serve an agent whose
