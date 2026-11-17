@@ -255,6 +255,11 @@ refuses an entry that names both, and an entry that names neither.
 A `host:` glob matches the name that the guest looks up. `*` spans dots,
 and `*.example.com` does not cover `example.com` itself.
 
+A rule names a host or a range, never an HTTP method or path. So
+`host: api.github.com` allows every GitHub GraphQL request, reads and writes
+alike. To limit what `gh` may do, send it through a `github-api` route with
+`request.allow.graphql` (see [Routes](#routes)).
+
 Parsing is strict. A field that the format does not recognize fails to
 parse, such as `engine:` under `spec` or a typo such as `descripton:`. A key
 must match the field name byte for byte, so `Spec:`, or a key with a
@@ -464,9 +469,9 @@ A `github-api` route needs only the credential:
     secretRef: { name: brig-gh-token }
 ```
 
-To limit what `gh` may do, add `request.allow.graphql`. This route reads pull
-requests and issues in one repository and comments on them, and nothing
-else:
+To limit what `gh` may do, add `request.allow.graphql`. On this route, a
+GraphQL request may read pull requests and issues in one repository and
+comment on them:
 
 ```yaml
 - name: github-api
@@ -481,7 +486,12 @@ else:
         repos: [brig-sh/brig]
 ```
 
-On a route with `request.allow.graphql`, the REST API is read-only. See
+On a route with `request.allow.graphql`, the REST API is read-only: `GET`
+and `HEAD` stay open on every path the token reaches, such as `/user` and
+`/search`, unless `request.allow.methods` or `request.allow.paths` narrows
+them. A query can also follow an edge, such as
+an issue's `parent`, into another repository. The token's scope is the limit
+for both, so use a fine-grained token. See
 [GraphQL requests](broker.md#graphql-requests) for what the broker checks,
 which `gh` commands work, and the limits.
 
@@ -812,6 +822,17 @@ note: enforced on the hvi backend and on Linux with nerdctl, which give the sand
 
 A run with a route needs the `isolated` posture. The `posture:` line is that
 plan.
+
+A route with `request.allow` has a row for its rules: `allow` with its
+`methods`, `paths` and `repos`, and `allow graphql` with its `queries`,
+`mutations` and `repos`. A GraphQL list that is left out allows nothing and
+prints as `(none)`. A route with `services` has a row for each service with
+rules:
+
+```console
+  route github-api  preset github-api  mode host
+    allow graphql  queries repository  mutations addComment  repos brig-sh/brig
+```
 
 A route with `inject.tls` has a `tls` row that names the secrets the route
 uses:

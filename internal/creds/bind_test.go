@@ -260,3 +260,27 @@ func TestBindWarnsAboutAnUndeclaredSecretRef(t *testing.T) {
 		t.Errorf("an absent secret is reported as an emptied one: %s", set.Warnings[0])
 	}
 }
+
+// The refusal gives the billing reason only for a variable a profile brig
+// ships denies for it.
+func TestDenyGivesTheBillingReasonOnlyForBillingVariables(t *testing.T) {
+	p := profileWith(t, "deny: [ANTHROPIC_API_KEY, GH_TOKEN]\n")
+	bindings := []profile.EnvBinding{{Name: "ANTHROPIC_API_KEY", Ref: "env.ANTHROPIC_API_KEY"}, {Name: "GH_TOKEN", Ref: "env.GH_TOKEN"}}
+	env := lookupFrom(map[string]string{"ANTHROPIC_API_KEY": "sk-x", "GH_TOKEN": "ghp-x"})
+	set := Bind(p, bindings, nil, env, Options{})
+	if len(set.Warnings) != 2 {
+		t.Fatalf("warnings: %v", set.Warnings)
+	}
+	for _, w := range set.Warnings {
+		billing := strings.Contains(w, "metered billing")
+		switch {
+		case strings.Contains(w, "ANTHROPIC_API_KEY") && !billing:
+			t.Errorf("ANTHROPIC_API_KEY lost the billing reason: %s", w)
+		case strings.Contains(w, "GH_TOKEN") && billing:
+			t.Errorf("GH_TOKEN got the billing reason: %s", w)
+		}
+		if !strings.Contains(w, "BRIG_ALLOW_DENIED=1") {
+			t.Errorf("the warning does not say how to override it: %s", w)
+		}
+	}
+}

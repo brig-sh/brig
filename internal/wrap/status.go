@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -170,8 +171,11 @@ func (c *Config) reportDeny(set creds.Set) {
 	// never set sends them looking for a variable that is not there.
 	override := c.env.setting("ALLOW_DENIED")
 	if len(forwarded) > 0 {
-		c.sayf("DENYLIST OVERRIDDEN by %s, forwarding: %s "+
-			"(this moves the sandbox onto metered billing)", override, strings.Join(forwarded, " "))
+		why := ""
+		if slices.ContainsFunc(forwarded, profile.Billing) {
+			why = " (this moves the sandbox onto metered billing)"
+		}
+		c.sayf("DENYLIST OVERRIDDEN by %s, forwarding: %s%s", override, strings.Join(forwarded, " "), why)
 	}
 	if len(withheld) == 0 {
 		return
@@ -181,8 +185,23 @@ func (c *Config) reportDeny(set creds.Set) {
 			"if set: %s", c.Profile.Name, override, strings.Join(withheld, " "))
 		return
 	}
-	c.sayf("never forwarded for %s: %s (they would move this sandbox onto metered billing)",
-		c.Profile.Name, strings.Join(withheld, " "))
+	// A profile file may deny a variable for a reason other than billing,
+	// such as GH_TOKEN when gh goes through a route.
+	var billing, other []string
+	for _, name := range withheld {
+		if profile.Billing(name) {
+			billing = append(billing, name)
+		} else {
+			other = append(other, name)
+		}
+	}
+	if len(billing) > 0 {
+		c.sayf("never forwarded for %s: %s (they would move this sandbox onto metered billing)",
+			c.Profile.Name, strings.Join(billing, " "))
+	}
+	if len(other) > 0 {
+		c.sayf("never forwarded for %s: %s (on its deny list)", c.Profile.Name, strings.Join(other, " "))
+	}
 }
 
 // reportOverride says when the profile being run came out of a file rather

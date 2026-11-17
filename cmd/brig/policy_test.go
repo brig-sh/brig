@@ -2241,7 +2241,8 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 		rows += "    " + rec.Path.String() + "  " + rec.Line() + "\n"
 	}
 	want := "  route anthropic  preset claude-code  mode endpoint\n" + rows +
-		"  route github  preset github-token  mode endpoint\n" + rows +
+		"  route github  preset github-token  mode endpoint\n" +
+		"    allow  repos brig-sh/*\n" + rows +
 		"posture: isolated\n"
 	if !strings.HasPrefix(stderr, want) {
 		t.Errorf("stderr printed:\n%s\nwant it to start with:\n%s", stderr, want)
@@ -2521,5 +2522,43 @@ func TestRouteModesGroupsAPresetRouteByItsMode(t *testing.T) {
 	}
 	if got := byMode[v1alpha1.ModeEndpoint]; len(got) != 0 {
 		t.Errorf("endpoint routes = %v, want none", got)
+	}
+}
+
+// check prints a route's request.allow, so the rules a run enforces show
+// without brig policy show. A GraphQL list that is left out allows nothing,
+// and the row says so rather than leave it out.
+func TestPolicyCheckPrintsRequestAllow(t *testing.T) {
+	var p policy.Policy
+	p.Metadata.Name = "gh"
+	p.Spec.Routes = []v1alpha1.Route{
+		{Name: "github-api", Preset: "github-api", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{
+			Paths:   []string{"/api/v3/repos/brig-sh/*", "/api/graphql"},
+			GraphQL: &v1alpha1.GraphQLAllow{Queries: []string{"repository"}, Repos: []string{"brig-sh/brig"}},
+		}}},
+		{Name: "github", Preset: "github-token", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{
+			Methods: []string{"GET", "POST"}, Repos: []string{"brig-sh/*"},
+		}}},
+		{Name: "gcp", Preset: "gcp", Services: []v1alpha1.Service{
+			{Name: "storage", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{Methods: []string{"GET"}}}},
+			{Name: "bigquery"},
+		}},
+	}
+	stderr := captureStderr(t, func() { printRoutes(p) })
+	if strings.Contains(stderr, "bigquery") {
+		t.Errorf("a service without rules got a row:\n%s", stderr)
+	}
+	for _, want := range []string{
+		"  route github-api  preset github-api  mode host\n" +
+			"    allow  paths /api/v3/repos/brig-sh/*,/api/graphql\n" +
+			"    allow graphql  queries repository  mutations (none)  repos brig-sh/brig\n",
+		"  route github  preset github-token  mode endpoint\n" +
+			"    allow  methods GET,POST  repos brig-sh/*\n",
+		"  route gcp  preset gcp  mode endpoint\n" +
+			"    service storage  allow  methods GET\n",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks\n%s\nin:\n%s", want, stderr)
+		}
 	}
 }

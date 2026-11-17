@@ -110,10 +110,12 @@ type Options struct {
 // refuse a perfectly good value that merely looks like a reference.
 func admit(t profile.Profile, name, value string, fromEnv bool, opt Options) (string, bool) {
 	if t.Denied(name) && !opt.AllowDenied {
-		return notice.Newf("not forwarding %s: it is on the %s denylist", name, t.Name).
-			Note("it outranks the subscription credential, and would move this sandbox onto "+
-				"metered billing without saying so").
-			Do("to forward it anyway", "BRIG_ALLOW_DENIED=1").String(), false
+		n := notice.Newf("not forwarding %s: it is on the %s denylist", name, t.Name)
+		if profile.Billing(name) {
+			n = n.Note("it outranks the subscription credential, and would move this sandbox onto " +
+				"metered billing without saying so")
+		}
+		return n.Do("to forward it anyway", "BRIG_ALLOW_DENIED=1").String(), false
 	}
 	if fromEnv && !opt.AllowRefs {
 		if scheme, ok := unresolvedRef(value); ok {
