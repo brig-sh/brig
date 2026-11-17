@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -126,5 +127,22 @@ func TestCreatePolicyFromStdinKeepsTheForceRule(t *testing.T) {
 	}
 	if blob, _ := os.ReadFile(path); string(blob) != pipedPolicy {
 		t.Fatalf("--force did not replace it:\n%s", blob)
+	}
+}
+
+// A socket on stdin is not a document: create opens the editor, as
+// docs/cli.md says.
+func TestStdinPipedIsFalseForASocket(t *testing.T) {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fds[0]), "socket")
+	t.Cleanup(func() { syscall.Close(fds[1]) })
+	old := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() { os.Stdin = old; f.Close() })
+	if stdinPiped() {
+		t.Error("stdinPiped() = true for a socket, want false")
 	}
 }

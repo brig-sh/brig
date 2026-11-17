@@ -864,7 +864,8 @@ brig policy create locked-down
 ```
 
 Or write a policy from stdin, with no editor. Stdin must be a pipe or a file,
-as `|`, `<` and a heredoc give it; Brig does not read a socket.
+as `|`, `<` and a heredoc give it; Brig does not read a socket. To get the
+editor when stdin is a pipe, such as in a `while read` loop, add `< /dev/null`.
 `metadata.name` must match the name you give:
 
 ```bash
