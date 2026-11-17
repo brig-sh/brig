@@ -95,3 +95,30 @@ func TestDockerNamedBySettingSaysNothing(t *testing.T) {
 		}
 	})
 }
+
+// hull reads no BRIG_CONTAINERD_RUNTIME and boots on urunc whatever it names,
+// so with the variable set it says so, on either platform. Without it there is
+// nothing to say.
+func TestHullSaysItDoesNotReadTheContainerdRuntime(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	for _, h := range []*hull{{bin: "hull", linux: true}, {bin: "hull"}} {
+		if note := h.Fallback(); note != "" {
+			t.Errorf("linux %v, nothing set: %q", h.linux, note)
+		}
+	}
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.runc.v2")
+	for _, tt := range []struct {
+		h    *hull
+		want []string
+	}{
+		{&hull{bin: "hull", linux: true}, []string{"BRIG_CONTAINERD_RUNTIME=io.containerd.runc.v2", "not read by hull", uruncShim, "nerdctl"}},
+		{&hull{bin: "hull"}, []string{"BRIG_CONTAINERD_RUNTIME=io.containerd.runc.v2", "not read by hull", "nerdctl"}},
+	} {
+		note := tt.h.Fallback()
+		for _, w := range tt.want {
+			if !strings.Contains(note, w) {
+				t.Errorf("linux %v: %q does not say %q", tt.h.linux, note, w)
+			}
+		}
+	}
+}
