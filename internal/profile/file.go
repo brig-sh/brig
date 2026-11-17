@@ -322,6 +322,27 @@ func safeName(s string) bool {
 	return true
 }
 
+// Check is what brig asks of a profile file before it will take it in: Parse,
+// and then the two rules about its name that Parse cannot apply because they
+// look at what brig already has. Import is Check followed by a write, and a
+// caller that wants the answer without the write -- to tell an author the file
+// is good before it travels -- calls Check, so the two cannot drift into
+// accepting different files.
+func Check(blob []byte) (Profile, error) {
+	t, err := Parse(blob)
+	if err != nil {
+		return Profile{}, err
+	}
+	if owner, reserved := Reserved(t.Name); reserved && t.Name != owner {
+		return Profile{}, fmt.Errorf("name %q collides with the %s profile", t.Name, owner)
+	}
+	if reservedName(t.Name) {
+		return Profile{}, fmt.Errorf("name %q is reserved: a file of that name in the "+
+			"profile directory is brig's own, so the profile would never load", t.Name)
+	}
+	return t, nil
+}
+
 // Import validates a profile and writes it into the profile directory,
 // where the next brig invocation will find it. It returns the path written.
 //
@@ -330,16 +351,9 @@ func safeName(s string) bool {
 // round-tripping it through a marshaller would drop their comments and
 // reorder their fields for no gain -- brig has already checked it parses.
 func Import(blob []byte, dir string) (Profile, string, error) {
-	t, err := Parse(blob)
+	t, err := Check(blob)
 	if err != nil {
 		return Profile{}, "", err
-	}
-	if owner, reserved := Reserved(t.Name); reserved && t.Name != owner {
-		return Profile{}, "", fmt.Errorf("name %q collides with the %s profile", t.Name, owner)
-	}
-	if reservedName(t.Name) {
-		return Profile{}, "", fmt.Errorf("name %q is reserved: a file of that name in the "+
-			"profile directory is brig's own, so the profile would never load", t.Name)
 	}
 	// 0700 per the XDG spec cited on Dir, and the better default anyway for a
 	// directory of files that name credential variables.
