@@ -54,6 +54,8 @@ usage:
   brig sh   <ref> -c '<script>'                  a script, run by the login shell
   brig stop <ref>                                stop the sandbox, keep it
   brig rm   <ref> [--dry-run]                    stop and remove the sandbox
+  brig rm   <ref> --forget [--dry-run]           forget a session whose runtime
+                                                 is gone, and keep its home
   brig rm   --all [--dry-run] [-y]               list every brig sandbox, confirm,
                                                  then stop and remove them
   brig ls   [-q]                                 list sandboxes; -q prints the refs
@@ -302,6 +304,7 @@ func dispatch(args []string) error {
 	// rm's --dry-run, read off the line in the switch below and acted on where
 	// the run line reaches rm, after the ref has been resolved to a sandbox.
 	rmDryRun := false
+	rmForget := false
 
 	// Completion is answered before the notices below, and that ordering is the
 	// whole of its output contract: a profile that would not parse, a legacy
@@ -415,6 +418,11 @@ func dispatch(args []string) error {
 			return err
 		}
 		if o.all {
+			// --forget names one session; --all is every sandbox of this
+			// runtime, and forgets no session of another.
+			if o.forget {
+				return usagef("--forget forgets one session, and goes with a ref, not with --all")
+			}
 			return removeAll("brig rm --all", others, o)
 		}
 		// One sandbox is removed without a question, so an answer given in
@@ -424,7 +432,7 @@ func dispatch(args []string) error {
 			return usagef("%s answers a question `brig rm <ref>` does not ask; "+
 				"it goes with --all", o.yes)
 		}
-		rmDryRun = o.dryRun
+		rmDryRun, rmForget = o.dryRun, o.forget
 		rest = others
 	case "run", "sh", "stop", "info", "plan":
 		// The taught lifecycle spellings. They fall through to the run line
@@ -584,7 +592,7 @@ func dispatch(args []string) error {
 		if verb == "plan" {
 			return planTarget(opts, wantJSON)
 		}
-		return projectLifecycle(verb, opts, rmDryRun)
+		return projectLifecycle(verb, opts, rmDryRun, rmForget)
 	}
 	t, ok := profile.Lookup(profileName)
 	if !ok {
@@ -683,7 +691,11 @@ func dispatch(args []string) error {
 		// The slug, not the name as typed: ParseRef refuses a label that is not
 		// already its own slug, so naming RawName here would print a ref brig
 		// would then turn away. The index is keyed by the slug too.
-		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.Slug}.String(), rmDryRun)
+		ref := session.Ref{Agent: profileName, Label: cfg.Slug}.String()
+		if rmForget {
+			return forgetSession(cfg, ref, "brig rm "+ref, rmDryRun, nil)
+		}
+		return removeSandbox(cfg, ref, rmDryRun)
 	case "network ls":
 		return reportPorts(cfg, refDisplay(profileName, opts), wantJSON)
 	case "network publish":
@@ -1981,7 +1993,7 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 	// an entry for a sandbox that went away without going through `brig rm`
 	// can be dropped. See wrap.PruneSessions. Not under brig report, which
 	// runs ls to show the listing and nothing else.
-	pruneUnlessKept(list)
+	pruneUnlessKept(rt, list)
 	rows := sandboxRows(list, rt)
 	// --json before either text form, so `brig -q --json ls` is JSON and not the
 	// -q refs: the two answer different readers, and asking for both asks for the
@@ -2058,10 +2070,33 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 			workspace: workspaceOf(inst.Name, rt),
 		})
 	}
+	// The sessions the index records on another runtime, which this one
+	// cannot list. A session of a target among them is shown as that, not as
+	// unlisted: its sandbox may be running there, and rm --target is refused.
+	elsewhere := map[string]string{}
+	if rt != nil {
+		listed := map[string]bool{}
+		for _, inst := range list {
+			listed[inst.Name] = true
+		}
+		for _, s := range wrap.OtherRuntimeSessions(rt.Kind()) {
+			switch {
+			case listed[s.Sandbox]:
+			case wrap.IsProjectSandbox(s.Sandbox):
+				elsewhere[s.Sandbox] = s.Runtime
+			default:
+				rows = append(rows, sandboxRow{ref: s.Ref, name: s.Sandbox, state: stateOtherRuntime,
+					workspace: s.Home, runtime: s.Runtime})
+			}
+		}
+	}
 	unlisted := make([]sandboxRow, 0, len(projects))
 	for _, ps := range projects {
-		unlisted = append(unlisted, sandboxRow{name: ps.Sandbox, state: stateUnlisted,
-			workspace: ps.Home, projectSandbox: true, project: &ps})
+		row := sandboxRow{name: ps.Sandbox, state: stateUnlisted, workspace: ps.Home, projectSandbox: true, project: &ps}
+		if on := elsewhere[ps.Sandbox]; on != "" {
+			row.state, row.runtime = stateOtherRuntime, on
+		}
+		unlisted = append(unlisted, row)
 	}
 	sort.Slice(unlisted, func(i, j int) bool { return unlisted[i].name < unlisted[j].name })
 	return append(rows, unlisted...)
@@ -2075,11 +2110,11 @@ const stateUnlisted = "unlisted"
 // index. brig report sets it on the ls it runs.
 const lsKeepIndexEnv = "BRIG_LS_KEEP_INDEX"
 
-// pruneUnlessKept prunes the session index against list, unless
+// pruneUnlessKept prunes the session index against what rt lists, unless
 // lsKeepIndexEnv is set.
-func pruneUnlessKept(list []runtime.Instance) {
+func pruneUnlessKept(rt runtime.Runtime, list []runtime.Instance) {
 	if os.Getenv(lsKeepIndexEnv) == "" {
-		pruneSessionIndex(list)
+		pruneSessionIndex(rt.Kind(), list)
 	}
 }
 
@@ -2089,12 +2124,15 @@ func pruneUnlessKept(list []runtime.Instance) {
 //
 // Every instance and not only brig's own: a sandbox brig would not recognise
 // still exists, and the question the index is asking is whether the sandbox is
-// there at all.
-func pruneSessionIndex(list []runtime.Instance) {
+// there at all. For the same reason a sandbox the index records on another
+// runtime than kind counts as there: kind's runtime cannot list it, and it may
+// still be running.
+func pruneSessionIndex(kind string, list []runtime.Instance) {
 	live := make([]string, 0, len(list))
 	for _, inst := range list {
 		live = append(live, inst.Name)
 	}
+	live = append(live, wrap.SandboxesOfOtherRuntimes(kind)...)
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
 }
@@ -2116,6 +2154,22 @@ type sandboxRow struct {
 	// what the project index records about it, or nil when it has no record.
 	projectSandbox bool
 	project        *wrap.ProjectSession
+	// runtime is the runtime the session index records the session on, set
+	// only for a session of another runtime than the one listing. Its state
+	// is stateOtherRuntime. See wrap.OtherRuntimeSessions.
+	runtime string
+}
+
+// stateOtherRuntime is the state of a session the index records on another
+// runtime. The table shows "on <runtime>" in its place.
+const stateOtherRuntime = "other-runtime"
+
+// stateCell is a row's state as a table prints it.
+func stateCell(r sandboxRow) string {
+	if r.runtime != "" {
+		return "on " + r.runtime
+	}
+	return r.state
 }
 
 // sandboxListJSON is `brig ls` as data, the SandboxList payload. The runtime
@@ -2152,6 +2206,9 @@ type sandboxJSON struct {
 	State     string              `json:"state"`
 	Workspace string              `json:"workspace,omitempty"`
 	Project   *sandboxProjectJSON `json:"project,omitempty"`
+	// RecordedRuntime is the runtime the session is recorded on, set only
+	// when it is not the runtime that listed it. state is then other-runtime.
+	RecordedRuntime string `json:"recordedRuntime,omitempty"`
 }
 
 // sandboxProjectJSON is the session of a Brigfile target a sandbox carries.
@@ -2175,7 +2232,7 @@ func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
 		out.Runtime = sandboxRuntimeJSON{Kind: rt.Kind(), Bin: rt.Bin(), Available: true}
 	}
 	for _, r := range rows {
-		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace}
+		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace, RecordedRuntime: r.runtime}
 		if r.projectSandbox {
 			s.Project = &sandboxProjectJSON{}
 			if ps := r.project; ps != nil {
@@ -2245,7 +2302,7 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 	fmt.Fprintf(w, "%-*s %-*s %-10s %s\n", ref, "REF", name, "SANDBOX", "STATE", "WORKSPACE")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%-*s %-*s %-10s %s\n",
-			ref, refCell(r.ref), name, r.name, r.state, r.workspace)
+			ref, refCell(r.ref), name, r.name, stateCell(r), r.workspace)
 	}
 }
 
@@ -2264,7 +2321,7 @@ func printProjects(w io.Writer, rows []sandboxRow) {
 		if !r.projectSandbox {
 			continue
 		}
-		l := line{target: noRef, session: noRef, name: r.name, state: r.state,
+		l := line{target: noRef, session: noRef, name: r.name, state: stateCell(r),
 			project: "unknown: brig has no record of this session"}
 		if ps := r.project; ps != nil {
 			l.target, l.project = shown(ps.Target), shown(ps.Root)
@@ -2298,7 +2355,9 @@ func printProjects(w io.Writer, rows []sandboxRow) {
 // there at all.
 func printRefs(w io.Writer, rows []sandboxRow) {
 	for _, r := range rows {
-		if r.ref == "" {
+		// A session of another runtime too: no verb but rm --forget takes its
+		// ref here, so a loop over -q would be refused on every one of them.
+		if r.ref == "" || r.runtime != "" {
 			continue
 		}
 		fmt.Fprintln(w, r.ref)
@@ -2410,6 +2469,9 @@ func workspaceOf(vmName string, rt runtime.Runtime) string {
 type removeOpts struct {
 	all    bool
 	dryRun bool
+	// forget is --forget: forget the session of a sandbox on another runtime.
+	// See forgetSession.
+	forget bool
 	// yes is the spelling of -y as typed, or "" when it was not. The spelling
 	// rather than a bool so the refusal on `brig rm <ref> -y` can name the
 	// token the reader wrote.
@@ -2438,12 +2500,14 @@ func takeRemoveFlags(args []string) (rest []string, o removeOpts, err error) {
 			o.all = true
 		case "--dry-run":
 			o.dryRun = true
+		case "--forget":
+			o.forget = true
 		case "-y", "--yes":
 			o.yes = a
 		default:
 			if spelling, _, ok := strings.Cut(a, "="); ok {
 				switch spelling {
-				case "--all", "--dry-run", "--yes":
+				case "--all", "--dry-run", "--forget", "--yes":
 					return nil, removeOpts{}, usagef("%s takes no value", spelling)
 				}
 			}
@@ -2451,6 +2515,64 @@ func takeRemoveFlags(args []string) (rest []string, o removeOpts, err error) {
 		}
 	}
 	return rest, o, nil
+}
+
+// forgetSession is `brig rm --forget <ref>`: forget the session of a sandbox
+// that brig records on another runtime, and touch nothing on any runtime.
+//
+// A session recorded on another runtime is refused by every verb, which names
+// the setting that reaches that runtime. When the runtime is gone there is no
+// such setting, and ls keeps the entry, since it cannot tell gone from out of
+// reach. --forget is the way past, and it is asked for rather than inferred:
+// a runtime brig reaches through BRIG_RUNTIME_BIN or a profile's runtimeBin is
+// not on PATH, and inferring it gone would revoke the tokens and forget the
+// session of a sandbox still running on it. After that the next run deletes
+// its home as one no session owns, which is what the refusal exists to stop.
+//
+// It forgets what rm forgets of a session whose sandbox the runtime reports
+// missing: the broker's tokens, the published ports, the session, its network
+// record and its slug claim. A guest home brig created stays, and the next
+// run of the ref deletes it. A session of this runtime is refused: rm is the
+// way to remove it, and --forget would leave its sandbox running unrecorded.
+//
+// command is the rm line that removes the session instead. forgetProject is
+// the extra step of a target's session, which a target's rm also forgets, and
+// nil for a profile's session.
+func forgetSession(cfg *wrap.Config, ref, command string, dryRun bool, forgetProject func() error) error {
+	err := cfg.RuntimeRefusal()
+	var other *wrap.OtherRuntimeError
+	if !errors.As(err, &other) {
+		if err != nil {
+			return err
+		}
+		return usagef("--forget forgets a session that brig records on another runtime, and %s is not one. "+
+			"`%s` removes it", ref, command)
+	}
+	// Read before the entry that names the home goes.
+	stays := forgetNotes(cfg, ref)
+	if dryRun {
+		fmt.Printf("would forget %s (sandbox %s, recorded on %s), and touch no sandbox\n", ref, cfg.VMName, other.Recorded)
+		for _, n := range stays {
+			warnf("%s", n)
+		}
+		return nil
+	}
+	if err := revokeRoutes(cfg.VMName); err != nil {
+		warnf("the credential broker could not revoke the session tokens of %s: %v", cfg.VMName, err)
+	}
+	runtime.ForgetPublications(cfg.VMName)
+	if forgetProject != nil {
+		if err := forgetProject(); err != nil {
+			return fmt.Errorf("brig could not forget the session of %s: %w", ref, err)
+		}
+	}
+	if _, err := wrap.ForgetSandbox(cfg.VMName); err != nil {
+		return fmt.Errorf("brig could not forget the session of %s: %w", ref, err)
+	}
+	runtime.ForgetBootedNet(cfg.VMName)
+	wrap.ForgetSlugClaim(cfg.VMName)
+	warnf("%s", notes(notice.New("forgot "+ref+", which "+other.Recorded+" booted; no sandbox was touched"), stays))
+	return nil
 }
 
 // removeSandbox is `brig rm <ref>`: be rid of the one sandbox the ref names.
@@ -2469,6 +2591,12 @@ func takeRemoveFlags(args []string) (rest []string, o removeOpts, err error) {
 // is a preview of nothing. When brig still has a session for it, the preview
 // says rm would forget that session.
 func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
+	// Before the runtime is asked: one that does not have the sandbox reports
+	// it absent, and rm would then revoke the tokens and forget the session of
+	// a sandbox still running on another runtime. See wrap.RuntimeRefusal.
+	if err := cfg.RuntimeRefusal(); err != nil {
+		return err
+	}
 	present, err := sandboxPresent(cfg.Runtime, cfg.VMName)
 	if err != nil {
 		return err

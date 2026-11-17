@@ -234,3 +234,16 @@ func TestHypervisorComesFromTheSpec(t *testing.T) {
 		t.Errorf("hypervisor = %q, want the requested hvi", got)
 	}
 }
+
+// OnPath looks the binary of a runtime up on PATH, and nowhere else. A kind
+// brig does not know reads as on PATH, so its refusal names no --forget.
+func TestOnPathLooksTheRuntimeUp(t *testing.T) {
+	dir := t.TempDir()
+	executableFile(t, dir, "hull")
+	t.Setenv("PATH", dir)
+	for kind, want := range map[string]bool{"hull": true, "nerdctl": false, "docker": false, "podman": true} {
+		if got := OnPath(kind); got != want {
+			t.Errorf("OnPath(%q) = %v, want %v", kind, got, want)
+		}
+	}
+}

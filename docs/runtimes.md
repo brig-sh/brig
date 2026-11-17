@@ -327,6 +327,22 @@ If PATH has no `nerdctl` and Brig takes `docker`, Brig says so in one line:
 your choice and remove that line, name `docker` in `BRIG_RUNTIME_BIN`, or its
 full path in `runtimeBin`.
 
+A session stays on the runtime that booted it. Brig records that runtime
+with the session, and refuses a run, `brig sh`, `brig stop`, `brig rm <ref>`
+or `brig rm --target` of the session under another runtime. The refusal
+names the setting that selects the session's runtime. If that runtime is
+gone, `brig rm --forget <ref>` forgets the session, touches no sandbox and
+keeps its guest home. Brig never decides by itself that a runtime is gone: a
+runtime that `BRIG_RUNTIME_BIN` or a profile's `runtimeBin` reaches need not
+be on `PATH`, and its sandbox may still run. The runtimes do not see each
+other's sandboxes, so another runtime would boot a second VM on the same
+guest home. `brig ls` lists the sandboxes of the runtime that Brig finds,
+and the sessions of the other runtimes as `on <runtime>`. `brig rm --all`
+removes only the sandboxes of the runtime that Brig finds, and keeps the
+sessions of the other runtimes, but it revokes every session token the
+credential broker holds, including those of sandboxes that run on another
+runtime.
+
 `brig info <ref>` prints the runtime that Brig found, as
 `runtime hull (/opt/homebrew/bin/hull)`. `brig doctor` reports the version of
 the runtime.

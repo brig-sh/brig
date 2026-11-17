@@ -331,9 +331,9 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		}
 		if verb == "rm" {
 			// rm's own flags are not in brigFlags: they are read before the run
-			// line. --dry-run goes on either side of the ref; --all replaces the
-			// ref rather than accompanying it.
-			flags = append(flags, "--dry-run")
+			// line. --dry-run and --forget go on either side of the ref; --all
+			// replaces the ref rather than accompanying it.
+			flags = append(flags, "--dry-run", "--forget")
 			if !line.refGiven {
 				flags = append(flags, "--all")
 			}

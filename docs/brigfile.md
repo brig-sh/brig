@@ -409,6 +409,7 @@ sessions of profiles. Its columns are `TARGET`, `SESSION`, `SANDBOX`,
 | --- | --- | --- |
 | A target and a project | A session that Brig has a record of | `brig rm --target <name>` in that project |
 | `STATE` is `unlisted` | Brig has a record of the session, and the runtime did not list its sandbox | `brig rm --target <name>` |
+| `STATE` is `on <runtime>` | Another runtime booted the session, and Brig keeps it on that runtime | `brig rm --target <name>` under that runtime, or `brig rm --forget --target <name>` if that runtime is gone |
 | `TARGET` is `-` and `PROJECT` is `unknown` | The runtime has a sandbox of a target that Brig has no record of | `brig rm --all` |
 
 A session of a target has no ref, so `brig ls -q` prints no line for it. In
