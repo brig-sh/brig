@@ -22,7 +22,7 @@ guestHome: /home/claude
 secrets:
   - name: claude-credentials
     required: false
-    expiryField: expiresAt              # found at any depth; drives the stale warning
+    expiryField: claudeAiOauth.expiresAt  # the login, not an MCP entry; drives the stale warning
     sources:
       - from: keychain
         service: Claude Code-credentials    # macOS keeps it here
