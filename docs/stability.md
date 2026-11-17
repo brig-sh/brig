@@ -36,8 +36,13 @@ gives. A variable that is not in that table, `BRIG_TEST_*` for example, is
 Brig's own and can change or go without notice.
 
 **The profile schema.** The fields that the `brig agent export` header
-documents. Brig refuses a profile file with a field it does not know, so a
-field that goes away becomes an error you see.
+documents, `schemaVersion` among them. Brig refuses a profile file with a field
+it does not know, so a field that goes away becomes an error you see. A profile
+may name its `schemaVersion`, and Brig refuses a version it does not read and
+names the one it does. Within one version Brig adds keys, and removes one only
+through the [deprecation rule](#retired-spellings). A change that cannot be
+made that way raises `schemaVersion`. See
+[profiles.md](profiles.md#schemaversion).
 
 **The `--json` envelope.** Within one `apiVersion`, the JSON only gains
 fields. It never renames or drops one. No field carries a credential value. `--json` works on the read

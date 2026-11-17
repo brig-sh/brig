@@ -314,6 +314,7 @@ one, import a profile of the same name.
 
 | field | required | what it is |
 | --- | --- | --- |
+| `schemaVersion` | no | Which schema the file is written against. `1` is the only one, and a file that does not say is read as `1`. Brig refuses any other number and names the one it reads. See [`schemaVersion`](#schemaversion) |
 | `name` | yes | The profile name. It becomes the guest home directory and the sandbox name. So it is restricted to lowercase letters, digits, dot, dash and underscore |
 | `image` | yes | The guest image to boot |
 | `guestHome` | yes | Absolute path where the guest home is mounted. The agent's state lands here, which makes the guest home the unit of persistence |
@@ -343,6 +344,45 @@ one, import a profile of the same name.
 Brig refuses a misspelled field, such as `volume:` in place of `volumes:`.
 It also refuses a key that v0.5.0 removed, and the error names the key that
 replaced it. See [migration.md](migration.md#profile-keys).
+
+## `schemaVersion`
+
+`schemaVersion` says which version of this format the file is written against:
+
+```yaml
+schemaVersion: 1
+name: mine
+```
+
+It is optional, and `1` is the only version there is. A file without it is read
+as version 1, so every profile written before the key existed loads as it did.
+It must be a whole number of 1 or more. `"1"` in quotes is a string and is
+refused, because Brig does not guess that you meant a number.
+
+A version that Brig does not read is refused, and the error names it. The
+check runs before any other, so a file written for a newer Brig is refused for
+its version and not for the first field of it that this Brig has never heard
+of:
+
+```
+$ brig agent import newer.yaml
+brig: schemaVersion 2 is not supported: this brig reads schemaVersion 1, so the file was written for a newer brig
+```
+
+A file of that kind in the profile directory is named in a warning and skipped,
+as any file Brig cannot use is.
+
+Nothing writes the key for you yet: `brig agent export`, `brig agent new` and
+the profiles Brig ships carry none. Add it by hand when you want the file to
+say which schema it follows. A Brig that predates the key refuses a file that
+has it, as a field it does not know, so add it only when every Brig that will
+read the file is new enough to know it.
+
+**What stays the same inside one version.** Within one `schemaVersion`, Brig
+adds keys. It removes a key only through the deprecation rule in
+[Stability](stability.md#retired-spellings): in a minor release, at least one
+release after a notice, and a removed key is refused with the error naming what
+replaced it. A change that cannot be made that way raises `schemaVersion`.
 
 ## `secrets` and `env`, for a credential Brig resolves itself
 
