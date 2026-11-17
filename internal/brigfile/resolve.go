@@ -328,6 +328,11 @@ func parseRepositoryProfile(doc []byte) (profile.Profile, error) {
 	if err := noControl(doc); err != nil {
 		return profile.Profile{}, err
 	}
+	// Before the strict decode below, which would blame a field of a newer
+	// brig's file and never name the version. See profile.CheckSchemaVersion.
+	if err := profile.CheckSchemaVersion(doc); err != nil {
+		return profile.Profile{}, err
+	}
 	var probe profile.Profile
 	if err := v1alpha1.UnmarshalStrict(doc, &probe); err != nil {
 		return profile.Profile{}, err

@@ -240,3 +240,38 @@ func TestARepositoryPolicyHoldsNoControlCharacter(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// A repository profile names its schemaVersion like any other profile, and a
+// version this brig does not read is named as the cause even when the profile
+// also carries a field of a newer brig: the strict decode here would otherwise
+// blame that field. Both declaration forms, because they decode separately.
+func TestARepositoryProfileWithAnUnknownSchemaVersionIsRefusedNamingIt(t *testing.T) {
+	const newer = "schemaVersion: 2\nfuture: true\n"
+	check := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "schemaVersion 2 is not supported") ||
+			strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("Load = %v, want the version named and no unknown-field refusal", err)
+		}
+	}
+	t.Run("a file", func(t *testing.T) {
+		_, err := loadRepoProfile(t, newer+repoProfileBase)
+		check(t, err)
+	})
+	t.Run("inline", func(t *testing.T) {
+		var inline strings.Builder
+		inline.WriteString("apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool:\n    inline:\n")
+		for _, line := range strings.Split(strings.TrimSuffix(newer+repoProfileBase, "\n"), "\n") {
+			inline.WriteString("      " + line + "\n")
+		}
+		inline.WriteString("targets:\n  dev: {profile: tool}\n")
+		dir := project(t, map[string]string{FileName: inline.String()})
+		_, err := Load(filepath.Join(dir, FileName))
+		check(t, err)
+	})
+	t.Run("version 1 is read like no version", func(t *testing.T) {
+		if _, err := loadRepoProfile(t, "schemaVersion: 1\n"+repoProfileBase); err != nil {
+			t.Errorf("Load: %v", err)
+		}
+	})
+}
