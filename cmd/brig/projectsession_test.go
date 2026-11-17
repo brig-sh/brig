@@ -520,7 +520,7 @@ func TestPruningTheListingKeepsProjectSessions(t *testing.T) {
 	root := projectsHost(t, rt)
 	dev := seedProject(t, rt, root, "dev", "")
 	rt.unlisted[dev.Sandbox] = true
-	pruneSessionIndex(mustList(t, rt))
+	pruneSessionIndex(rt.Kind(), mustList(t, rt))
 	if got, ok := wrap.LookupProject(dev.Sandbox); !ok || got != dev {
 		t.Errorf("the prune dropped the entry: %+v %v", got, ok)
 	}

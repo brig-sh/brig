@@ -96,7 +96,7 @@ func (p projectRef) notFound(sandbox string) error {
 }
 
 // projectLifecycle is `brig stop --target` and `brig rm --target`.
-func projectLifecycle(verb string, opts options, dryRun bool) error {
+func projectLifecycle(verb string, opts options, dryRun, forget bool) error {
 	switch {
 	case opts.target == "":
 		return usagef("--target needs a target name")
@@ -150,6 +150,15 @@ func projectLifecycle(verb string, opts options, dryRun bool) error {
 	if verb == "stop" {
 		return cfg.Stop()
 	}
+	if forget {
+		return forgetSession(cfg, ref.String(), ref.command("rm"), dryRun, func() error {
+			_, err := wrap.ForgetProject(cfg.VMName)
+			if err == nil {
+				_, _ = wrap.Revoke(cfg.VMName)
+			}
+			return err
+		})
+	}
 	return removeProject(cfg, ref, dryRun)
 }
 
@@ -172,6 +181,10 @@ func projectSandboxPresent(rt runtime.Runtime, name string) (bool, error) {
 // the home and the entry. When the runtime reports no such sandbox, rm
 // forgets the session and keeps the home, as `brig rm <ref>` does.
 func removeProject(cfg *wrap.Config, ref projectRef, dryRun bool) error {
+	// Before the runtime is asked, as removeSandbox does.
+	if err := cfg.RuntimeRefusal(); err != nil {
+		return err
+	}
 	present, err := projectSandboxPresent(cfg.Runtime, cfg.VMName)
 	if err != nil {
 		return err

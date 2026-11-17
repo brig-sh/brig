@@ -257,6 +257,20 @@ its approval. It does not read the Brigfile. The cases in the table above
 apply to it too.
 `brig rm --all` removes the sandboxes of targets with the rest.
 
+```bash
+brig rm --forget claude [--dry-run]
+brig rm --forget --target dev [--session <name>] [-f <path>] [--dry-run]
+```
+
+A session stays on the runtime that booted it, and `rm` under another
+runtime refuses it (see
+[How Brig finds the runtime](runtimes.md#how-brig-finds-the-runtime)). If
+that runtime is gone, `--forget` forgets the session: it revokes its session
+tokens and drops its published ports and records, touches no sandbox, and
+keeps its guest home, which the next run of the ref deletes. `--forget`
+refuses a session of the runtime that Brig finds, which `rm` removes, and
+does not go with `--all`.
+
 `rm` and `stop` each take a single ref.
 
 ### `brig ls`
@@ -275,6 +289,13 @@ brig ls -q
 
 `-q` prints refs only, one per line, and skips a row with no derivable ref.
 Every line it prints works as a ref for another verb.
+
+A session that another runtime booted is listed too, with `on <runtime>`,
+such as `on nerdctl`, in place of its state: the runtime that Brig finds
+cannot list its sandbox. Brig refuses its ref under this runtime, so `-q`
+leaves it out. In `brig --json ls` its `state` is `other-runtime`, and
+`recordedRuntime` names the runtime. If that runtime is gone,
+`brig rm --forget <ref>` forgets the session.
 
 The sessions of [Brigfile targets](brigfile.md#what-brig-ls-shows) follow
 in a second table, with the columns `TARGET`, `SESSION`, `SANDBOX`, `STATE`

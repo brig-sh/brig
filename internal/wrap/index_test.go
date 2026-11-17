@@ -89,6 +89,9 @@ type removingRuntime struct {
 	stopped []string
 }
 
+// Kind is asked when a session is recorded, which names the runtime it is on.
+func (r *removingRuntime) Kind() string { return "hull" }
+
 func (r *removingRuntime) Stop(name string) error {
 	r.stopped = append(r.stopped, name)
 	return nil

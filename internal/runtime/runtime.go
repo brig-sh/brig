@@ -612,6 +612,20 @@ func DetectFor(pref Preference) (Runtime, error) {
 	return rt, nil
 }
 
+// OnPath reports whether the binary brig looks the runtime of kind up under
+// is on PATH. It is not whether the runtime is installed: BRIG_RUNTIME_BIN and
+// a profile's runtimeBin reach a binary PATH does not hold. brig words a
+// refusal by it and acts on nothing it says. A kind brig does not know reads
+// as on PATH.
+func OnPath(kind string) bool {
+	switch kind {
+	case "hull", "nerdctl", "docker":
+		_, err := exec.LookPath(kind)
+		return err == nil
+	}
+	return true
+}
+
 // runtimeBinFromProfile resolves the path a profile named.
 //
 // A leading ~ is expanded, because this field is written by hand in a config

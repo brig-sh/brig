@@ -405,7 +405,7 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	// What the runtime lists: the stopped sandbox brig still has, and one
 	// container of somebody else's, which is why the prune is handed the whole
 	// list rather than brig's own share of it.
-	pruneSessionIndex([]runtime.Instance{
+	pruneSessionIndex("hull", []runtime.Instance{
 		{Name: "brig-claude-code-kept", State: "stopped"},
 		{Name: "some-other-container", State: "running"},
 	})
@@ -429,7 +429,7 @@ func TestListingForAReportPrunesNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pruneUnlessKept(nil)
+	pruneUnlessKept(nil, nil)
 	if got := wrap.WorkspaceOfSandbox("brig-claude-code-stuck"); got != "/ws/stuck" {
 		t.Errorf("the listing for a report pruned the stuck session: %q", got)
 	}

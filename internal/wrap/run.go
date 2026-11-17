@@ -118,6 +118,11 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 //
 // Read-only, because Plan calls it: every answer was settled in Load.
 func (c *Config) sessionRefusal() error {
+	// First: every check below asks this runtime about a sandbox it cannot
+	// see. See runtimeRefusal.
+	if err := c.runtimeRefusal(); err != nil {
+		return err
+	}
 	if err := c.routeRefusal(); err != nil {
 		return err
 	}
@@ -904,6 +909,11 @@ func (c *Config) projectShareStale() string {
 // "gone anyway" puts the swallow back: the user is told a VM holding a
 // forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
+	// Before the tokens go: this runtime cannot stop a sandbox of another, and
+	// would revoke the tokens of one still running there. See runtimeRefusal.
+	if err := c.runtimeRefusal(); err != nil {
+		return err
+	}
 	// First, so a sandbox that will not stop holds no token that still works.
 	c.forgetRoutes()
 	err := c.Runtime.Stop(c.VMName)
@@ -941,6 +951,11 @@ func (c *Config) Stop() error {
 // the sandbox is gone, and the next run of the session deletes what is left
 // before it boots. See reapOrphanHome.
 func (c *Config) Remove() error {
+	// As Stop, and because the home and the session belong to the sandbox on
+	// the other runtime. See runtimeRefusal.
+	if err := c.runtimeRefusal(); err != nil {
+		return err
+	}
 	c.forgetRoutes()
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)

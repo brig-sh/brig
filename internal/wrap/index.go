@@ -113,6 +113,15 @@ const (
 // it keeps its home, which covers every session recorded by an older release.
 // See DropEphemeralHome.
 //
+// Runtime is the kind of runtime that booted the sandbox: hull, nerdctl or
+// docker. Every runtime brig drives reads this one file, and none sees the
+// others' sandboxes, so without it a session booted under nerdctl looked
+// absent to hull: hull booted a second VM of the same name on the same home,
+// its `brig ls` pruned the entry, and its next run or `brig rm` deleted the
+// home under the VM still running on it. See runtimeRefusal. An entry without
+// it, from an older release or rewritten by one, belongs to whichever runtime
+// reads it, which is how every entry was read before.
+//
 // The network posture is not here, although it is the same kind of fact. An
 // older release rewrites this file with the fields it knows, so a posture kept
 // here is lost the first time one runs. See rememberedNetwork.
@@ -121,6 +130,7 @@ type sessionEntry struct {
 	Sandbox   string `json:"sandbox"`
 	Project   string `json:"project,omitempty"`
 	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Runtime   string `json:"runtime,omitempty"`
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -409,6 +419,127 @@ func dropSessionEntries(vmName string) (bool, error) {
 	return true, writeSessionIndex(index)
 }
 
+// runtimeKind is rt's kind, or "" when there is no runtime to name.
+func runtimeKind(rt runtime.Runtime) string {
+	if rt == nil {
+		return ""
+	}
+	return rt.Kind()
+}
+
+// recordedRuntime is the runtime the session index records for the sandbox
+// vmName, or "" when no entry names one.
+func recordedRuntime(vmName string) string {
+	for _, entry := range readSessionIndex() {
+		if entry.Sandbox == vmName && entry.Runtime != "" {
+			return entry.Runtime
+		}
+	}
+	return ""
+}
+
+// OtherRuntimeError is the refusal of a command on a sandbox that the session
+// index records on another runtime than the one the command would drive.
+//
+// OnPath is whether that runtime's binary is on PATH. It only words the
+// refusal: a runtime brig reaches through BRIG_RUNTIME_BIN or a profile's
+// runtimeBin is not on PATH, so it cannot say the runtime is gone. When it is
+// not on PATH the refusal also names brig rm --forget, the one way past for a
+// session whose runtime is gone, which the reader asks for.
+type OtherRuntimeError struct {
+	Sandbox, Recorded, Current string
+	OnPath                     bool
+}
+
+func (e *OtherRuntimeError) Error() string {
+	msg := fmt.Sprintf("the sandbox %s runs on %s, not %s: set %s to use it or to remove it",
+		e.Sandbox, e.Recorded, e.Current, runtimeSetting(e.Recorded))
+	if !e.OnPath {
+		msg += fmt.Sprintf(". brig finds no %s on PATH; if it is gone, brig rm --forget forgets the "+
+			"session, touches no sandbox and keeps its guest home", e.Recorded)
+	}
+	return msg
+}
+
+// runtimeSetting is the setting that selects the runtime of kind. docker is
+// not a value of BRIG_RUNTIME: it is the nerdctl runtime driving docker,
+// which BRIG_RUNTIME_BIN selects.
+func runtimeSetting(kind string) string {
+	if kind == "docker" {
+		return "BRIG_RUNTIME_BIN=docker"
+	}
+	return "BRIG_RUNTIME=" + kind
+}
+
+// RuntimeRefusal is runtimeRefusal for `brig rm`, which asks it before the
+// runtime is asked whether the sandbox is there.
+func (c *Config) RuntimeRefusal() error { return c.runtimeRefusal() }
+
+// runtimeRefusal refuses a command on this session's sandbox when the session
+// index records it on another runtime.
+//
+// The runtimes do not see each other's sandboxes, so to this one the sandbox
+// is not there. A run would boot a second VM of the same name on the same
+// guest home, and an rm would forget a session that is still running, so the
+// next run of this runtime deletes its home as one no session owns. The
+// refusal names the runtime that has it, which is the setting that reaches it.
+//
+// No runtime, as under brig plan with none installed, and no recorded runtime
+// refuse nothing.
+func (c *Config) runtimeRefusal() error {
+	recorded := recordedRuntime(c.VMName)
+	if recorded == "" {
+		return nil
+	}
+	current := runtimeKind(c.Runtime)
+	if current == "" || recorded == current {
+		return nil
+	}
+	return &OtherRuntimeError{Sandbox: c.VMName, Recorded: recorded, Current: current,
+		OnPath: runtime.OnPath(recorded)}
+}
+
+// SandboxesOfOtherRuntimes names every sandbox the session index records on a
+// runtime other than kind.
+//
+// `brig ls` counts them as present when it prunes. Its runtime cannot list
+// them, and a prune would drop the entry of a session still running elsewhere,
+// after which a run of it here deletes its home as one no session owns.
+func SandboxesOfOtherRuntimes(kind string) []string {
+	var out []string
+	for _, s := range OtherRuntimeSessions(kind) {
+		out = append(out, s.Sandbox)
+	}
+	return out
+}
+
+// OtherRuntimeSession is a session the index records on another runtime: its
+// ref, "" for a session of a Brigfile target, whose key is no ref; its
+// sandbox; its guest home; and the runtime it is recorded on.
+type OtherRuntimeSession struct {
+	Ref, Sandbox, Home, Runtime string
+}
+
+// OtherRuntimeSessions lists the sessions the index records on a runtime other
+// than kind, in sandbox order. `brig ls` shows them: its runtime cannot list
+// their sandboxes, and without a row a session whose runtime is gone is one
+// the reader cannot find to forget.
+func OtherRuntimeSessions(kind string) []OtherRuntimeSession {
+	var out []OtherRuntimeSession
+	for key, entry := range readSessionIndex() {
+		if entry.Runtime == "" || entry.Runtime == kind {
+			continue
+		}
+		ref := key
+		if strings.HasPrefix(key, projectKeyPrefix) {
+			ref = ""
+		}
+		out = append(out, OtherRuntimeSession{Ref: ref, Sandbox: entry.Sandbox, Home: entry.Home, Runtime: entry.Runtime})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Sandbox < out[j].Sandbox })
+	return out
+}
+
 // PruneSessions drops every entry whose sandbox is not in the list of what the
 // runtime has.
 //
@@ -471,6 +602,7 @@ func (c *Config) rememberSession() {
 		Sandbox:   c.VMName,
 		Project:   c.Project,
 		Ephemeral: c.EphemeralHome,
+		Runtime:   runtimeKind(c.Runtime),
 	}
 	index := readSessionIndex()
 	if index[key] == entry {
