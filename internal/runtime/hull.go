@@ -133,7 +133,26 @@ func builtFor(version string) string {
 func (h *hull) BootsLinuxBundle() bool { return h.linux }
 
 func (h *hull) Kind() string { return "hull" }
-func (h *hull) Bin() string  { return h.bin }
+
+// Fallback says that BRIG_CONTAINERD_RUNTIME is set and hull does not read
+// it. The variable picks nerdctl's containerd shim. hull on Linux boots every
+// sandbox through urunc whatever it names, and hull on macOS has no shim, so
+// the value was ignored without a word, runc included. That is not a weaker
+// boundary, since the guest keeps a kernel of its own, but it is not the run
+// the reader set up.
+func (h *hull) Fallback() string {
+	v := os.Getenv("BRIG_CONTAINERD_RUNTIME")
+	if v == "" {
+		return ""
+	}
+	if h.linux {
+		return fmt.Sprintf("BRIG_CONTAINERD_RUNTIME=%s is not read by hull, which boots every sandbox "+
+			"through %s. It applies to the nerdctl runtime", v, uruncShim)
+	}
+	return fmt.Sprintf("BRIG_CONTAINERD_RUNTIME=%s is not read by hull. It applies to the nerdctl "+
+		"runtime on Linux", v)
+}
+func (h *hull) Bin() string { return h.bin }
 
 // Isolation is a microVM on every hull backend: vz, hvi and qemu are all
 // hypervisors, so the guest has a kernel of its own whichever one boots it.
