@@ -581,19 +581,20 @@ func DetectFor(pref Preference) (Runtime, error) {
 		kind = defaultKind()
 	}
 	bin := os.Getenv("BRIG_RUNTIME_BIN")
+	setting := ""
 	switch {
 	case bin != "":
 		resolved, err := runtimeBinFromEnv(bin)
 		if err != nil {
 			return nil, err
 		}
-		bin = resolved
+		bin, setting = resolved, "BRIG_RUNTIME_BIN"
 	case pref.Bin != "":
 		resolved, err := runtimeBinFromProfile(pref.Bin)
 		if err != nil {
 			return nil, err
 		}
-		bin = resolved
+		bin, setting = resolved, "this profile's runtimeBin"
 	}
 	var rt Runtime
 	var err error
@@ -607,6 +608,12 @@ func DetectFor(pref Preference) (Runtime, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if setting != "" {
+		if other := otherRuntimeBin(kind, rt); other != "" {
+			return nil, fmt.Errorf("%w: brig drives %s here, and %s is %s, which is %s. "+
+				"Point %s at %s, or unset it", ErrBadRuntime, kind, setting, bin, other, setting, kind)
+		}
 	}
 	telemetry.SetRuntime(rt.Kind())
 	return rt, nil
@@ -624,6 +631,47 @@ func OnPath(kind string) bool {
 		return err == nil
 	}
 	return true
+}
+
+// otherRuntimeBin names the runtime that a binary named by a setting is,
+// when that is not the runtime brig drives it as, and is "" otherwise.
+//
+// The runtime and its binary are two settings, and nothing tied them: a shell
+// that sourced the bundle's environment for nerdctl and then exported
+// BRIG_RUNTIME=hull drove nerdctl as hull. brig doctor printed nerdctl's
+// version as hull's, and a run failed on nerdctl's answer to a hull command.
+//
+// A binary is known by its name, and a hull of another name by the first
+// word of its --version too: a wrapper of another name is still caught when it
+// runs nerdctl or docker. A binary named hull is taken by its name. Reading
+// its --version is a process that brig on macOS otherwise does not start on a
+// verb such as info or env, and a binary of that name is the build the
+// setting means. A binary that names neither runtime passes, since a build or
+// wrapper may print anything. The nerdctl adapter drives docker as well, so
+// docker is the other runtime only to hull.
+func otherRuntimeBin(kind string, rt Runtime) string {
+	base := filepath.Base(rt.Bin())
+	switch kind {
+	case "hull":
+		if base == "nerdctl" || base == "docker" {
+			return base
+		}
+		h, ok := rt.(*hull)
+		if !ok || base == "hull" {
+			return ""
+		}
+		if f := strings.Fields(h.version()); len(f) > 0 {
+			switch word := strings.ToLower(f[0]); word {
+			case "nerdctl", "docker":
+				return word
+			}
+		}
+	case "nerdctl":
+		if base == "hull" {
+			return "hull"
+		}
+	}
+	return ""
 }
 
 // runtimeBinFromProfile resolves the path a profile named.

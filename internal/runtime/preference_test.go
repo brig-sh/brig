@@ -235,6 +235,72 @@ func TestHypervisorComesFromTheSpec(t *testing.T) {
 	}
 }
 
+// printingFile is an executable that prints line, whatever it is asked.
+func printingFile(t *testing.T, dir, name, line string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho '"+line+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Negative: a binary named by a setting that is the other runtime is refused,
+// with both settings named. The bundle's environment, sourced for nerdctl and
+// followed by export BRIG_RUNTIME=hull, used to drive nerdctl as hull.
+func TestDetectForRefusesTheOtherRuntimesBinary(t *testing.T) {
+	for _, tt := range []struct{ name, kind, file, line, other string }{
+		{"nerdctl as hull", "hull", "nerdctl", "nerdctl version 2.3.5", "nerdctl"},
+		{"docker as hull", "hull", "docker", "Docker version 27.3.1, build ce12230", "docker"},
+		{"a wrapper of nerdctl as hull", "hull", "rt", "nerdctl version 2.3.5", "nerdctl"},
+		{"hull as nerdctl", "nerdctl", "hull", "hull v0.1.0-rc30 (abc1234, 2026-10-01, go1.26.5, linux/amd64)", "hull"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := printingFile(t, t.TempDir(), tt.file, tt.line)
+			t.Setenv("BRIG_RUNTIME", tt.kind)
+			for _, from := range []string{"env", "profile"} {
+				var pref Preference
+				if from == "env" {
+					t.Setenv("BRIG_RUNTIME_BIN", bin)
+				} else {
+					t.Setenv("BRIG_RUNTIME_BIN", "")
+					pref.Bin = bin
+				}
+				rt, err := DetectFor(pref)
+				if !errors.Is(err, ErrBadRuntime) {
+					t.Fatalf("%s: drove %s as %s: %v, %v", from, tt.other, tt.kind, rt, err)
+				}
+				for _, want := range []string{tt.kind, tt.other, bin} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s: %q does not name %s", from, err, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A binary that names neither runtime passes, since a build or a wrapper may
+// print anything, and docker is a binary of the nerdctl runtime.
+func TestDetectForTakesABinaryThatNamesNoOtherRuntime(t *testing.T) {
+	for _, tt := range []struct{ name, kind, file, line string }{
+		{"hull", "hull", "hull", "hull v0.1.0-rc30 (abc1234, 2026-10-01, go1.26.5, linux/amd64)"},
+		{"a wrapper that prints nothing known", "hull", "my-hull", "built from main"},
+		{"nerdctl", "nerdctl", "nerdctl", "nerdctl version 2.3.5"},
+		{"docker", "nerdctl", "docker", "Docker version 27.3.1, build ce12230"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := printingFile(t, t.TempDir(), tt.file, tt.line)
+			t.Setenv("BRIG_RUNTIME", tt.kind)
+			t.Setenv("BRIG_RUNTIME_BIN", bin)
+			rt, err := DetectFor(Preference{})
+			if err != nil || rt.Bin() != bin {
+				t.Fatalf("DetectFor = %v, %v; want %s", rt, err, bin)
+			}
+		})
+	}
+}
+
 // OnPath looks the binary of a runtime up on PATH, and nowhere else. A kind
 // brig does not know reads as on PATH, so its refusal names no --forget.
 func TestOnPathLooksTheRuntimeUp(t *testing.T) {
@@ -245,5 +311,30 @@ func TestOnPathLooksTheRuntimeUp(t *testing.T) {
 		if got := OnPath(kind); got != want {
 			t.Errorf("OnPath(%q) = %v, want %v", kind, got, want)
 		}
+	}
+}
+
+// A binary named hull is taken by its name, and its --version is not run for
+// the check: on macOS that was a process on every verb that names a binary,
+// info and env included, where none ran before. A hull of another name is
+// still asked, which is what catches a wrapper of nerdctl.
+func TestOtherRuntimeBinAsksNoBinaryNamedHull(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "asked")
+	script := "#!/bin/sh\necho asked >> '" + log + "'\necho 'nerdctl version 2.3.5'\n"
+	for _, name := range []string{"hull", "my-hull"} {
+		bin := filepath.Join(dir, name)
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if other := otherRuntimeBin("hull", &hull{bin: filepath.Join(dir, "hull")}); other != "" {
+		t.Errorf("a binary named hull read as %s", other)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("the check ran --version of a binary named hull")
+	}
+	if other := otherRuntimeBin("hull", &hull{bin: filepath.Join(dir, "my-hull")}); other != "nerdctl" {
+		t.Errorf("a wrapper of nerdctl named my-hull read as %q", other)
 	}
 }

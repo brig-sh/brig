@@ -1279,7 +1279,7 @@ on success, and the usual error line on stderr. See
 | `1` | a general failure |
 | `2` | a usage error: an unknown flag, a stray argument, or a value in the wrong place, as reported by the verb's own parser |
 | `3` | no such thing: an unknown agent, a sandbox that is not there, no Brigfile, or a target the Brigfile does not have |
-| `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
+| `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing or at the other runtime. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |
 | `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
