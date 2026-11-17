@@ -576,6 +576,10 @@ var groups = map[string][]sub{
 			flags:    []string{"--json", "--force", "-f"},
 			operands: []operand{opAgent, opFile},
 		},
+		// A file is the case the verb is for: an author checking one they have
+		// just written. An agent's name is typed by hand, because a slot offers
+		// files or names and not both.
+		{name: "validate", flags: []string{"--json"}, operands: []operand{opFile}},
 	},
 	"policy": {
 		{name: "ls"},
