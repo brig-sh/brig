@@ -1416,6 +1416,7 @@ default. On nerdctl, Brig's table does.
 | [Egress policy on Linux](manual-tests/egress-policy-linux.md) | a urunc guest on rootless nerdctl | the cases of the network conformance suite under both defaults, including a `deny` glob inside an `allow` glob and a `deny` cidr inside an `allow` cidr | |
 | [Egress policy on hull on Linux](manual-tests/egress-policy-hull-linux.md) | a urunc guest on hull on Linux, on hvi | a `default: deny` policy with `host` allows. The allowed names reach and the others fail to resolve | the run drove hull directly, not `brig run` |
 | [Egress conformance on nerdctl, bundle v0.1.0-rc17, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
+| [Egress conformance on nerdctl, bundle v0.1.0-rc21, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc21-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox.
