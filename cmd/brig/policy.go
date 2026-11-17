@@ -753,10 +753,51 @@ func printRoutes(p policy.Policy) {
 			}
 			fmt.Fprintln(os.Stderr, row)
 		}
+		printAllow("    ", r.Request)
+		for _, svc := range r.Services {
+			printAllow("    service "+svc.Name+"  ", svc.Request)
+		}
 		for _, rec := range runtime.ModeRecords(mode) {
 			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
 		}
 	}
+}
+
+// printAllow prints the rows of a request.allow, so check shows the rules a
+// run enforces. It prints nothing for a route or service without rules. A GraphQL list that is left out allows nothing, so its row
+// says (none) rather than leave the list out.
+func printAllow(indent string, req *v1alpha1.RequestPolicy) {
+	if req == nil || req.Allow == nil {
+		return
+	}
+	a := req.Allow
+	row := ""
+	for _, l := range []struct {
+		name string
+		v    []string
+	}{{"methods", a.Methods}, {"paths", a.Paths}, {"repos", a.Repos}} {
+		if len(l.v) > 0 {
+			row += "  " + l.name + " " + strings.Join(l.v, ",")
+		}
+	}
+	if row != "" {
+		fmt.Fprintf(os.Stderr, "%sallow%s\n", indent, row)
+	}
+	if g := a.GraphQL; g != nil {
+		row := "  queries " + listOrNone(g.Queries) + "  mutations " + listOrNone(g.Mutations)
+		if len(g.Repos) > 0 {
+			row += "  repos " + strings.Join(g.Repos, ",")
+		}
+		fmt.Fprintf(os.Stderr, "%sallow graphql%s\n", indent, row)
+	}
+}
+
+// listOrNone joins l with commas, or returns (none) for an empty list.
+func listOrNone(l []string) string {
+	if len(l) == 0 {
+		return "(none)"
+	}
+	return strings.Join(l, ",")
 }
 
 // routeMode is the mode of r as a run serves it. A route that names a preset

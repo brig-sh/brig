@@ -253,6 +253,11 @@ onto metered API billing without a notice.
 
 `BRIG_ALLOW_DENIED=1` is the override for a user who wants metered billing.
 
+A profile can also deny a variable for another reason, such as `GH_TOKEN`
+when `gh` reaches GitHub through a route. Brig gives the billing reason only
+for a variable that a profile it ships denies. For any other, `brig info`
+says `on its deny list`, and the refusal names the deny list alone.
+
 Limits:
 
 - `deny` guards only the environment. Brig does not check a `files:` binding

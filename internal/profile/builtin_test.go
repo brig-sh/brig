@@ -75,3 +75,15 @@ func TestBuiltInReturnsAFreshCopy(t *testing.T) {
 		t.Error("an edit to one BuiltIn result reached the next")
 	}
 }
+
+// A variable is a billing variable when a profile brig ships denies it.
+func TestBillingVariables(t *testing.T) {
+	for name, want := range map[string]bool{
+		"ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true, "OPENAI_API_KEY": true,
+		"GH_TOKEN": false, "GITHUB_TOKEN": false, "": false,
+	} {
+		if got := Billing(name); got != want {
+			t.Errorf("Billing(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
