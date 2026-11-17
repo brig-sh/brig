@@ -313,7 +313,10 @@ Brig finds the runtime in this order (`internal/runtime/runtime.go`):
 2. `BRIG_RUNTIME_BIN` is the executable to run. Brig takes a path as it
    stands, and looks up a bare name on PATH. If the executable is missing or
    not executable, Brig reports that against the variable before anything
-   runs.
+   runs. Brig also refuses an executable that is the other runtime: under
+   `hull`, one named `nerdctl` or `docker`, or one of another name than
+   `hull` whose `--version` names one of them; under `nerdctl`, one named
+   `hull`.
 3. A `runtimeBin` in a profile does the same thing without a variable in each
    shell. `BRIG_RUNTIME_BIN` wins over it. Brig expands a leading `~`. If the
    path is missing or not executable, Brig reports that against the profile
