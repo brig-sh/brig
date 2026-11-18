@@ -1340,6 +1340,10 @@ is not `microVM`:
 - on docker, however a run came to drive it: `BRIG_RUNTIME_BIN`, a profile's
   `runtimeBin`, or the fallback taken when nerdctl is not on `PATH`
 - with no runtime to ask
+- when the run joins a sandbox that is already up and was created on a shim of
+  any of those kinds. Brig reads the shim off the runtime, so unsetting the
+  variable that chose it does not help: `brig rm` the sandbox, and the next run
+  boots a new one
 
 The refusal comes before the refusal for a shim that shares the host kernel,
 which exits `1` when the run does not name the flag.

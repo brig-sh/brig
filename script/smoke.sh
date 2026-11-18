@@ -2499,6 +2499,57 @@ STUB
   { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ISOLATION'; } \
     && ok "info without the flag still reports on a shim brig cannot place" \
     || bad "info without the flag on a shim brig cannot place -- got $rc: $out"
+
+  # A run that finds its sandbox already up boots nothing, so what a boot would
+  # get says nothing about the guest it uses: that guest stands on the shim it
+  # was created with, which the environment may no longer name. The stub below is
+  # a nerdctl whose sandbox is up, and inspect says which shim it was created
+  # with. The variable that chose a shim brig cannot place is unset, so only the
+  # sandbox itself can show the problem.
+  nrj="$WORK/nrj"
+  mkdir -p "$nrj/ws" "$nrj/state" "$nrj/gw"
+  cat > "$nrj/nerdctl" <<'STUB'
+#!/bin/sh
+{ printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$NRJ_LOG"
+case "$1" in
+ps)
+  case "$*" in
+  *" -a "*) printf 'brig-claude-code\tUp 5 minutes\n' ;;
+  *) echo brig-claude-code ;;
+  esac ;;
+inspect) case "$*" in *HostConfig.Runtime*) echo "$NRJ_SHIM" ;; esac ;;
+esac
+exit 0
+STUB
+  chmod +x "$nrj/nerdctl"
+  nrj_brig() {
+    NRJ_LOG="$nrj/argv.log" NRJ_SHIM="$1" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrj/nerdctl" \
+      BRIG_WORKSPACE="$nrj/ws" BRIG_STATE_DIR="$nrj/state" BRIG_GATEWAY_DIR="$nrj/gw" \
+      BRIG_CONTAINERD_RUNTIME="" "$WORK/brig" run --isolation microvm claude -p hi
+  }
+  for shim in io.containerd.kata.v2 io.containerd.runc.v2; do
+    : > "$nrj/argv.log"
+    nrj_brig "$shim" > /dev/null 2> "$nrj/join.err"; rc=$?
+    { [ "$rc" = 7 ] && grep -q 'already up' "$nrj/join.err" && grep -q 'brig rm' "$nrj/join.err"; } \
+      && ok "--isolation microvm over a running sandbox on $shim exits 7 and says to remove it" \
+      || bad "--isolation microvm over a running sandbox on $shim -- got $rc: $(cat "$nrj/join.err")"
+    if grep -E '^argv: (run|create|start|exec) ' "$nrj/argv.log" > "$nrj/started.log"; then
+      bad "--isolation microvm over a running sandbox on $shim reached the runtime -- got: $(cat "$nrj/started.log")"
+    else
+      ok "--isolation microvm over a running sandbox on $shim joins nothing"
+    fi
+  done
+  # Over a microVM the run is not refused for its isolation, and the runtime was
+  # asked what the sandbox stands on. The stub answers nothing a joined run asks
+  # about its network, so what happens after that is not this test's business.
+  : > "$nrj/argv.log"
+  nrj_brig io.containerd.urunc.v2 > /dev/null 2> "$nrj/join.err"
+  grep -q 'this run would stand on' "$nrj/join.err" \
+    && bad "--isolation microvm over a running microVM was refused for its isolation: $(cat "$nrj/join.err")" \
+    || ok "--isolation microvm over a running microVM is not refused for its isolation"
+  grep -q '^argv: inspect --format {{.HostConfig.Runtime}} brig-claude-code' "$nrj/argv.log" \
+    && ok "the runtime was asked what the running sandbox stands on" \
+    || bad "the runtime was asked what the running sandbox stands on -- got: $(cat "$nrj/argv.log")"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi

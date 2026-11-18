@@ -88,8 +88,11 @@ boundary Brig provides.
 is not `microVM`, with exit `7`. That includes a shim that Brig cannot place,
 and docker: Brig tells docker to use the shim and cannot see whether docker
 has it, so docker reads `unknown`. The flag is the only way to state the
-requirement. No variable sets it, so none can weaken it. A profile cannot
-name it yet, because the profile format has no schema version to name it in.
+requirement. No variable sets it, so none can weaken it. A run that joins a
+sandbox that is already up is checked against the shim that sandbox was created
+with, read off the runtime, and not only against what a new boot would get. A
+profile cannot name it yet, because the profile format has no schema version to
+name it in.
 
 The `ISOLATION` row of the execution envelope names the boundary this run
 resolved. `brig info` prints it and boots nothing. `brig --verbose run`
