@@ -809,6 +809,7 @@ brig agent edit <name>
 brig agent rm <name> [-y]
 brig agent import <file>
 brig agent export <agent> [name] [--json] [--force]
+brig agent validate <file|agent> [--json]
 ```
 
 Copy a built-in agent under your own name. Then edit the copy:
@@ -839,6 +840,61 @@ Add a file that you wrote or received. `-` reads the file from stdin:
 brig agent import mine.yaml
 ```
 
+Check a file before you import it or send it to someone. `validate` asks what
+`import` asks and stops before the write, so it cannot call a file valid that
+`import` then refuses. `-` reads the file from stdin, and an agent's name
+checks an agent that Brig already has:
+
+```bash
+brig agent validate mine.yaml
+brig agent validate claude-code
+```
+
+A word with a `/` in it, or one that ends in `.yaml`, `.yml` or `.json`, is a
+file. Any other word is an agent name, whatever files are lying about, so a
+file in this directory called `mine` is `./mine`.
+
+`validate` checks the file and not the machine. Whether the image exists or
+the runtime is installed is a question for [`brig doctor`](#brig-doctor), and
+leaving it out is what lets a repository of profiles run `validate` in CI with
+no runtime. Like the code that loads a profile, it stops at the first error.
+
+```
+$ brig agent validate mine.yaml
+mine.yaml: valid: agent mine, schemaVersion 1 (the file names none)
+```
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Brig would take the file |
+| `1` | Brig refuses the file. The error names the file and says why |
+| `2` | a mistyped command line: no file, a second one, or a flag that does not exist |
+| `3` | no such file, or no agent of that name |
+
+With `--json` the report goes to stdout for a good file and for a bad one, and
+the exit status says which. A script reads the report from the same stream
+either way. A usage mistake or a missing file has no report, so `--json`
+changes nothing about those.
+
+```json
+{
+  "apiVersion": "brig.sh/v1alpha1",
+  "kind": "AgentValidation",
+  "data": {
+    "source": "mine.yaml",
+    "valid": false,
+    "errors": [
+      "schemaVersion 2 is not supported: this brig reads schemaVersion 1, so the file was written for a newer brig"
+    ]
+  }
+}
+```
+
+`errors` is an array that is empty for a good file and holds one entry for a
+bad one. A good file's report also has `name`, `kind` and `schemaVersion`,
+which is the schema Brig read the file by. No field repeats a value from the
+file, so a report can go in a CI log.
+
 Delete an agent that has its own file. `rm` asks first, and `-y` answers in
 advance:
 
@@ -854,7 +910,8 @@ Brig cannot reach the agent's runtime, for example with an unknown
 `--force` (or `-f`) with `new` or `export` overwrites an existing
 destination file. Without it, Brig refuses and names the file. `--json`
 with `show`, `new` or `export` prints the document as JSON instead of YAML,
-with no envelope. See [`--json` output](#--json-output).
+with no envelope. With `validate` it prints the report, in an envelope. See
+[`--json` output](#--json-output).
 [Profiles](profiles.md) is the reference for the file format.
 
 ### `brig policy`
@@ -1204,6 +1261,7 @@ Which verbs accept `--json` depends on its position.
 | `network ls`, `network publish`, `network unpublish` | global, or local after the ref | envelope, `kind: Ports` |
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
+| `agent validate` | global, or local after the subcommand | envelope, `kind: AgentValidation` |
 | `secret ls` | global, or local after `ls` | envelope |
 | `target ls` | global, or local after `ls` | envelope, `kind: TargetList` |
 | `config` | global, or local after `config` | envelope, `kind: Config` |
@@ -1223,8 +1281,8 @@ refuses them:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, plan, agent ls, secret ls, target ls, config, doctor, version and the
-network verbs, and for run and sh
+info, plan, agent ls, agent validate, secret ls, target ls, config, doctor,
+version and the network verbs, and for run and sh
 ```
 
 Put the flag after the subcommand instead.

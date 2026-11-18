@@ -155,6 +155,9 @@ brig agent export x | brig agent import -
   `brig agent show --json`.
 - Import stores your bytes as written, so your comments and your ordering
   survive. It reads YAML and JSON.
+- `brig agent validate mine.yaml` asks what import asks and writes nothing.
+  Run it on a file before you send it to someone, or in CI in a repository of
+  profiles.
 
 Limits on the destination:
 
@@ -365,12 +368,9 @@ its version and not for the first field of it that this Brig has never heard
 of:
 
 ```
-$ brig agent import newer.yaml
-brig: schemaVersion 2 is not supported: this brig reads schemaVersion 1, so the file was written for a newer brig
+$ brig agent validate newer.yaml
+brig: newer.yaml: schemaVersion 2 is not supported: this brig reads schemaVersion 1, so the file was written for a newer brig
 ```
-
-A file of that kind in the profile directory is named in a warning and skipped,
-as any file Brig cannot use is.
 
 Nothing writes the key for you yet: `brig agent export`, `brig agent new` and
 the profiles Brig ships carry none. Add it by hand when you want the file to
@@ -383,6 +383,10 @@ adds keys. It removes a key only through the deprecation rule in
 [Stability](stability.md#retired-spellings): in a minor release, at least one
 release after a notice, and a removed key is refused with the error naming what
 replaced it. A change that cannot be made that way raises `schemaVersion`.
+
+To check a file against all of this before you send it,
+[`brig agent validate`](cli.md#brig-agent) asks what `brig agent import` asks
+and writes nothing.
 
 ## `secrets` and `env`, for a credential Brig resolves itself
 

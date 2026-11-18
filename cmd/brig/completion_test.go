@@ -211,7 +211,7 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a noun command offers its subcommands",
 		words:     []string{"agent", ""},
 		directive: dirNames,
-		exactly:   []string{"edit", "export", "import", "ls", "new", "rm", "show"},
+		exactly:   []string{"edit", "export", "import", "ls", "new", "rm", "show", "validate"},
 		// list, save and load still work and are in no help text.
 	}, {
 		name:      "a subcommand that opens a file offers only agents that have one",
@@ -232,6 +232,17 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a subcommand taking a file hands the slot to the shell",
 		words:     []string{"agent", "import", ""},
 		directive: dirFiles,
+	}, {
+		// The file is what validate is for. A name is typed by hand: a slot
+		// offers files or agent names, not both.
+		name:      "validate hands its slot to the shell, for the file just written",
+		words:     []string{"agent", "validate", ""},
+		directive: dirFiles,
+	}, {
+		name:      "and offers --json, the one flag it has",
+		words:     []string{"agent", "validate", "--"},
+		directive: dirNames,
+		exactly:   []string{"--json"},
 	}, {
 		name:      "policies are completed where a policy goes",
 		words:     []string{"policy", "attach", ""},

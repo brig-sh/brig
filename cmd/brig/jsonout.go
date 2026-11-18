@@ -36,9 +36,10 @@ const jsonAPIVersion = policy.APIVersion
 // Two JSON shapes, and the rule that decides which a verb prints:
 //
 //   - A LIST or REPORT verb prints the envelope: jsonDocument wraps the payload
-//     under data, so `ls`, `info`, `agent ls`, `secret ls` and `doctor` all read
-//     the same {apiVersion, kind, data} whatever they list. A list goes straight
-//     under data (there is no items wrapper); a report puts its own object there.
+//     under data, so `ls`, `info`, `agent ls`, `agent validate`, `secret ls` and
+//     `doctor` all read the same {apiVersion, kind, data} whatever they list. A
+//     list goes straight under data (there is no items wrapper); a report puts
+//     its own object there.
 //   - A DOCUMENT verb prints the payload bare, no envelope: `agent show`,
 //     `agent export`, `agent new` and `policy show` each render one profile or
 //     policy meant to be saved to a file and read back by brig, so wrapping it

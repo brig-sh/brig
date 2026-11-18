@@ -76,6 +76,7 @@ usage:
   brig network publish   <ref> PORT...           open a guest port on the host
   brig network unpublish <ref> PORT...|--all     close one again
   brig agent ls|show|new|edit|rm|import|export   the agents you can run
+  brig agent validate <file|agent>               check one before you share it
   brig policy ls|create|edit|show|rm             manage policies
   brig policy attach|detach <policy> <profile>   bind or unbind a policy,
                                                  [-n NAME] for one session
@@ -112,9 +113,10 @@ global flags (left of the command, as in: brig -q run claude):
                          line. A verification that did not hold is printed
                          even here
       --json             machine-readable output, for the read verbs: ls, info,
-                         plan, agent ls, secret ls, target ls, config, doctor,
-                         version and the network verbs. Also accepted after
-                         the verb (brig ls --json). Every other verb refuses it
+                         plan, agent ls, agent validate, secret ls, target ls,
+                         config, doctor, version and the network verbs. Also
+                         accepted after the verb (brig ls --json). Every other
+                         verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status, so a script can tell
                          "brig refused" from "the agent failed"
@@ -1053,11 +1055,12 @@ var brigFlags = []struct {
 	// -q is global. It was on the run line too, until v0.5.0; see
 	// removedFlags for what that spelling gets now.
 	{long: "quiet", short: "q", position: posGlobal},
-	// --json asks the read verbs -- ls, info, agent ls, secret ls, doctor -- for
-	// machine-readable output rather than aligned text. Global, because which
-	// form the whole invocation prints is a fact about the invocation, and left
-	// of the verb is the one position that never collides with an agent's own
-	// --json. No short form: -j is nobody's convention worth taking.
+	// --json asks the read verbs -- ls, info, agent ls, agent validate, secret
+	// ls, doctor -- for machine-readable output rather than aligned text.
+	// Global, because which form the whole invocation prints is a fact about
+	// the invocation, and left of the verb is the one position that never
+	// collides with an agent's own --json. No short form: -j is nobody's
+	// convention worth taking.
 	//
 	// Also on the run line, and not retiring there: `brig info claude --json` is
 	// what people type, and -q already works in both places, so the local
@@ -3212,10 +3215,12 @@ usage:
   brig agent rm <name> [-y]              delete yours, after asking
   brig agent import <file>               add one of your own (- reads stdin)
   brig agent export <agent> [name]       print one, or save it as <name>
+  brig agent validate <file|agent>       check one without importing it
 
 flags:
       --from AGENT  with new: the agent to copy
-      --json        with show, export and new: JSON rather than YAML
+      --json        with show, export and new: JSON rather than YAML;
+                    with validate: the report as JSON
   -f, --force       with new and export: replace a file that is already there
   -y, --yes         with rm: the answer, given in advance
 
@@ -3248,7 +3253,7 @@ an image for one is documented at
 // review, and it changes nothing anyone types.
 func agentCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("agent needs a subcommand: ls, show, new, edit, rm, import or export")
+		return errors.New("agent needs a subcommand: ls, show, new, edit, rm, import, export or validate")
 	}
 	var err error
 	switch args[0] {
@@ -3273,6 +3278,8 @@ func agentCmd(args []string) error {
 		err = editProfile(args[1:])
 	case "rm":
 		err = removeProfile(args[1:])
+	case "validate":
+		err = validateAgent(args[1:])
 	// The undocumented second spellings, removed in v0.5.0 after a release
 	// of notices. Refused by name, so a script that still has one is told
 	// the word to type instead.
@@ -3284,7 +3291,7 @@ func agentCmd(args []string) error {
 		return removedf("brig agent load", "brig agent import")
 	default:
 		return fmt.Errorf("unknown agent subcommand %q "+
-			"(ls, show, new, edit, rm, import, export)", args[0])
+			"(ls, show, new, edit, rm, import, export, validate)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
 	// flag package says it. Asking for help is not a mistake, so it is answered
@@ -4025,7 +4032,9 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
 	case "ls", "info", "plan", "doctor", "version", "--version", "run", "sh", "config":
 		return true
-	case "agent", "secret", "target":
+	case "agent":
+		return len(rest) > 0 && (rest[0] == "ls" || rest[0] == "validate")
+	case "secret", "target":
 		return len(rest) > 0 && rest[0] == "ls"
 	case "network":
 		return len(rest) > 0 && onPortLine("network "+rest[0])
@@ -4038,7 +4047,7 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // moves the flag rather than guessing which command it belongs on.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, plan, agent ls, secret ls, target ls, config, doctor, version and the "+
+		"ls, info, plan, agent ls, agent validate, secret ls, target ls, config, doctor, version and the "+
 		"network verbs, and for run and sh", verb)
 }
 

@@ -3001,6 +3001,108 @@ for line in "agent ls" "agent show codex" "policy ls"; do
     || ok "brig $line printed no deprecation notice"
 done
 
+echo "== agent validate =="
+# validate answers "would import take this file" and writes nothing. A CI job in
+# a profile repository branches on the exit status, so each is pinned: 0 good,
+# 1 a file brig refuses, 2 a mistyped line, 3 a file or agent that is not there.
+vdir="$WORK/validate"
+mkdir -p "$vdir"
+vbody='name: vcheck
+image: example.com/x:1
+guestHome: /home/vcheck
+binary: vcheck
+mem: 512
+cpus: 1
+'
+printf '%s' "$vbody" > "$vdir/good.yaml"
+printf 'schemaVersion: 1\n%s' "$vbody" > "$vdir/versioned.yaml"
+printf 'schemaVersion: 2\nfuture: true\n%s' "$vbody" > "$vdir/newer.yaml"
+printf '%sbogus: true\n' "$vbody" > "$vdir/typo.yaml"
+before="$(ls -A "$BRIG_PROFILE_DIR" | tr '\n' ' ')"
+
+vcheck() { # name want-exit want-text args... -- runs validate, checks exit and a word
+  local name="$1" want_rc="$2" want_text="$3"
+  shift 3
+  local out rc
+  out="$("$WORK/brig" agent validate "$@" 2>&1 < /dev/null)"; rc=$?
+  if [ "$rc" = "$want_rc" ] && printf '%s' "$out" | grep -qF -- "$want_text"; then
+    ok "$name"
+  else
+    bad "$name -- got $rc: $out"
+  fi
+}
+vcheck "validate: a good file exits 0 and says which schema it was read by" 0 "schemaVersion 1 (the file names none)" "$vdir/good.yaml"
+vcheck "validate: a file that names schemaVersion 1 is read as 1" 0 "schemaVersion 1" "$vdir/versioned.yaml"
+vcheck "validate: a file with a field brig lacks exits 1" 1 'unknown field "bogus"' "$vdir/typo.yaml"
+vcheck "validate: a file for a newer brig names the version, not its new field" 1 "schemaVersion 2 is not supported" "$vdir/newer.yaml"
+out="$("$WORK/brig" agent validate "$vdir/newer.yaml" 2>&1 < /dev/null)"
+case "$out" in
+  *"unknown field"*) bad "validate: the newer file was refused for a field and not the version -- $out" ;;
+  *) ok "validate: the version is what a newer file is refused for" ;;
+esac
+vcheck "validate: a file that is not there exits 3" 3 "no file" "$vdir/nope.yaml"
+vcheck "validate: an agent that is not there exits 3" 3 "no agent named" no-such-agent
+vcheck "validate: nothing to check exits 2" 2 "validate needs a file or an agent"
+vcheck "validate: two things to check exits 2" 2 "unexpected argument" claude-code codex
+vcheck "validate: a flag that does not exist exits 2" 2 "unknown flag" --bogus claude-code
+vcheck "validate: a shipped agent by name is valid" 0 "valid: agent claude-code" claude-code
+vcheck "validate: an alias resolves as it does for show" 0 "valid: agent claude-code" claude
+
+printf '%s' "$vbody" | "$WORK/brig" agent validate - > "$WORK/v.out" 2>&1
+grep -q '<stdin>: valid' "$WORK/v.out" \
+  && ok "validate: - reads stdin" || bad "validate: - reads stdin -- $(cat "$WORK/v.out")"
+printf '%sbogus: true\n' "$vbody" | "$WORK/brig" agent validate - > "$WORK/v.out" 2>&1
+rc=$?
+{ [ "$rc" = 1 ] && grep -q '<stdin>: ' "$WORK/v.out"; } \
+  && ok "validate: a bad file on stdin exits 1 and is named <stdin>" \
+  || bad "validate: a bad file on stdin -- got $rc: $(cat "$WORK/v.out")"
+
+# --json: the report is the answer, on stdout for a good file and a bad one, with
+# the exit status as the verdict. python3 is already this script's JSON reader.
+"$WORK/brig" agent validate --json "$vdir/good.yaml" > "$WORK/v.json" 2> /dev/null
+rc=$?
+python3 - "$WORK/v.json" <<'PY' && [ "$rc" = 0 ] \
+  && ok "validate --json: a good file is one AgentValidation document, valid, with an empty errors array" \
+  || bad "validate --json: a good file -- exit $rc: $(cat "$WORK/v.json")"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["kind"] == "AgentValidation" and d["apiVersion"], d
+x = d["data"]
+assert x["valid"] is True and x["name"] == "vcheck" and x["schemaVersion"] == 1 and x["errors"] == [], x
+PY
+"$WORK/brig" agent validate --json "$vdir/typo.yaml" > "$WORK/v.json" 2> /dev/null
+rc=$?
+python3 - "$WORK/v.json" <<'PY' && [ "$rc" = 1 ] \
+  && ok "validate --json: a bad file is reported on stdout, not valid, and exits 1" \
+  || bad "validate --json: a bad file -- exit $rc: $(cat "$WORK/v.json")"
+import json, sys
+x = json.load(open(sys.argv[1]))["data"]
+assert x["valid"] is False and len(x["errors"]) == 1 and "bogus" in x["errors"][0], x
+PY
+"$WORK/brig" --json agent validate "$vdir/good.yaml" > "$WORK/v.json" 2> /dev/null \
+  && grep -q '"kind": "AgentValidation"' "$WORK/v.json" \
+  && ok "validate: --json to the left of the verb is read too" \
+  || bad "validate: --json to the left of the verb"
+"$WORK/brig" --json agent rm vcheck > /dev/null 2>&1
+[ "$?" = 2 ] && ok "validate: --json is still refused on the other agent subcommands" \
+  || bad "validate: --json is still refused on the other agent subcommands"
+
+# The promise: no credential value in the report. A literal in env: value: is the
+# one place a pasted secret can sit in a profile, and a refused file must not
+# echo it, on stderr or in the JSON.
+printf '%senv: [{name: TOKEN, value: sk-planted-7f3a9c, ref: env.TOKEN}]\n' "$vbody" > "$vdir/leak.yaml"
+"$WORK/brig" agent validate --json "$vdir/leak.yaml" > "$WORK/v.json" 2> "$WORK/v.err"
+rc=$?
+{ [ "$rc" = 1 ] && ! grep -q 'sk-planted' "$WORK/v.json" "$WORK/v.err"; } \
+  && ok "validate: a planted env literal is not echoed on stdout or stderr" \
+  || bad "validate: a planted env literal -- exit $rc: $(cat "$WORK/v.json" "$WORK/v.err")"
+
+# And it writes nothing: import is the verb that does.
+after="$(ls -A "$BRIG_PROFILE_DIR" | tr '\n' ' ')"
+[ "$before" = "$after" ] \
+  && ok "validate writes nothing to the profile directory" \
+  || bad "validate changed the profile directory: [$before] -> [$after]"
+
 echo "== image verification =="
 # A stub cosign, so the decision table is exercised without a network.
 mkdir -p "$WORK/bin"
