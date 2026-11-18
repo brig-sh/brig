@@ -1344,6 +1344,11 @@ is not `microVM`:
 The refusal comes before the refusal for a shim that shares the host kernel,
 which exits `1` when the run does not name the flag.
 
+`brig info --isolation microvm` refuses on the same ground, with the same error
+and exit `7`, and prints no report, so a script can use it as the check that
+comes before a run. `brig plan --isolation microvm` shows the refusal as a
+`REFUSED` row and exits `0`.
+
 A [route](broker.md#route-modes) is refused with `7` too, where the run
 cannot serve it: on `vz` or `qemu`, on docker, with no network, and on an
 `hvi` runtime too old to serve routes. So is a route in a mode this build of

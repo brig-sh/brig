@@ -192,6 +192,13 @@ func (c *Config) requireMicroVM(hypervisor string) error {
 	return runtime.RequireMicroVM(got)
 }
 
+// IsolationRefusal is what this line's requirement for a microVM refuses, or nil
+// when it required none. It is the check a run makes first, asked of a verb that
+// boots nothing, so `brig info` can answer the question a script puts to it.
+func (c *Config) IsolationRefusal() error {
+	return c.requireMicroVM(c.hypervisor())
+}
+
 // checkBackend refuses a run this backend cannot honour, before anything is
 // started -- and, unlike the check inside Run, on the path that finds the
 // sandbox already up and boots nothing.

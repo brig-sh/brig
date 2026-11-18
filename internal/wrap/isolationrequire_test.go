@@ -240,3 +240,30 @@ func TestLoadRefusesAnIsolationRequirementItDoesNotKnow(t *testing.T) {
 		}
 	}
 }
+
+// The check a verb that boots nothing can ask for is the check a run makes:
+// brig info answers a script's question with this, so it has to refuse on the
+// same ground, with the same error, and say nothing when nothing was required.
+func TestIsolationRefusalIsTheCheckARunMakes(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
+	bin, _ := logStub(t, t.TempDir(), "nerdctl")
+
+	c := loadRequiring(t, bin, "microvm")
+	var refusal *runtime.IsolationError
+	err := c.IsolationRefusal()
+	if !errors.As(err, &refusal) {
+		t.Fatalf("IsolationRefusal = %v, want the isolation refusal", err)
+	}
+	if run := c.checkBackend(c.hypervisor()); run == nil || run.Error() != err.Error() {
+		t.Errorf("a run says %v, and the check for info says %v: they must be the same", run, err)
+	}
+
+	if err := loadRequiring(t, bin, "").IsolationRefusal(); err != nil {
+		t.Errorf("a line that required nothing was refused: %v", err)
+	}
+
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	if err := loadRequiring(t, bin, "microvm").IsolationRefusal(); err != nil {
+		t.Errorf("a microVM was refused: %v", err)
+	}
+}
