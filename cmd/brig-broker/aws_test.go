@@ -182,6 +182,38 @@ func TestRegisterReportsSessionPolicies(t *testing.T) {
 	}
 }
 
+// Status names the role and session policies of each registered sandbox, so
+// brig info can show them without decrypting the pointer. A sandbox that is
+// removed is no longer named.
+func TestStatusNamesTheRoleOfEachRegisteredSandbox(t *testing.T) {
+	const policy = "arn:aws:iam::111122223333:policy/brig-read"
+	pointer := `{"kind":"aws","awsProfile":"dev","mode":"role",` +
+		`"roleArn":"arn:aws:iam::111122223333:role/brig-sandbox","policyArns":["` + policy + `"]}`
+	r, _ := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, pointer)
+	if _, err := r.client.Add(awsSandbox("brig-a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.client.Add(injector.Sandbox{ID: "brig-b", Profile: "p",
+		Routes: []injector.Route{githubRoute()}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := r.client.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]injector.VendInfo{"brig-a": {"aws": {Mode: "role", AWSProfile: "dev",
+		RoleARN: "arn:aws:iam::111122223333:role/brig-sandbox", PolicyARNs: []string{policy}}}}
+	if !reflect.DeepEqual(st.Vends, want) {
+		t.Errorf("status vends = %+v, want %+v", st.Vends, want)
+	}
+	if _, err := r.client.RemoveSandbox("brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := r.client.Status(); st.Vends != nil {
+		t.Errorf("status vends = %+v after brig-a was removed", st.Vends)
+	}
+}
+
 func TestRegisterReturnsRegion(t *testing.T) {
 	r, _ := startAWSBroker(t, serverConfig{logTo: io.Discard})
 	added, err := r.client.Add(awsSandbox("brig-a"))

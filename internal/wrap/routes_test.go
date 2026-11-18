@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -359,6 +360,53 @@ func TestAnExecWithNoRouteLeftForgetsTheSandbox(t *testing.T) {
 	}
 	if !slices.Equal(broker.forgotten, []string{c.VMName}) {
 		t.Errorf("forgotten %v, want [%s]", broker.forgotten, c.VMName)
+	}
+}
+
+// The BROKER row and info --json name the AWS role and session policies of
+// this sandbox's running routes, as the run line does. Another sandbox's role
+// is not this run's to report, and a sandbox the broker does not serve shows
+// none.
+func TestTheBrokerRowNamesThisSandboxsAWSRole(t *testing.T) {
+	c := routedConfig(t, claudeAndGitHub, nil)
+	const role, policy = "arn:aws:iam::111122223333:role/brig-sandbox", "arn:aws:iam::111122223333:policy/brig-read"
+	other := map[string]injector.VendInfo{"aws": {Mode: "role", AWSProfile: "prod",
+		RoleARN: "arn:aws:iam::444455556666:role/other"}}
+	fb := &fakeBroker{running: true, extra: injector.Status{Vends: map[string]map[string]injector.VendInfo{
+		c.VMName: {
+			"aws":  {Mode: "role", AWSProfile: "dev", RoleARN: role, PolicyARNs: []string{policy}},
+			"mine": {Mode: "self", AWSProfile: "dev"},
+		},
+		"brig-other": other,
+	}}}
+	c.broker = fb
+	line := c.brokerLine()
+	for _, want := range []string{
+		"route aws: AWS role " + role + " with session policies " + policy + ", assumed from your profile dev",
+		"route mine: AWS as your own identity (profile dev)",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the BROKER row %q does not carry %q", line, want)
+		}
+	}
+	if strings.Contains(line, "444455556666") || strings.Contains(line, "prod") {
+		t.Errorf("the BROKER row %q names another sandbox's role", line)
+	}
+	d := c.InfoData(creds.Set{})
+	if d.Broker == nil || !reflect.DeepEqual(d.Broker.Vends, fb.extra.Vends[c.VMName]) {
+		t.Errorf("info --json broker = %+v", d.Broker)
+	}
+
+	fb.extra = injector.Status{Vends: map[string]map[string]injector.VendInfo{"brig-other": other}}
+	if line := c.brokerLine(); strings.Contains(line, "AWS") {
+		t.Errorf("the BROKER row of a sandbox with no running AWS route is %q", line)
+	}
+	blob, err := json.Marshal(c.InfoData(creds.Set{}).Broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "vends") || strings.Contains(string(blob), "444455556666") {
+		t.Errorf("info --json broker of a sandbox with no running AWS route is %s", blob)
 	}
 }
 

@@ -362,6 +362,16 @@ func (c *Config) serveRoutes(set creds.Set) error {
 // the user sees whose power it gets before the agent runs. Sorted, so the
 // lines do not move between runs.
 func (c *Config) sayVends(vends map[string]injector.VendInfo) {
+	for _, line := range vendLines(vends) {
+		c.warnf("%s", line)
+	}
+}
+
+// vendLines describe each route that vends, sorted by route: whose
+// credentials the sandbox gets. The run line and the BROKER row share them,
+// so the two never disagree on what the sandbox can do.
+func vendLines(vends map[string]injector.VendInfo) []string {
+	var out []string
 	for _, name := range slices.Sorted(maps.Keys(vends)) {
 		v := vends[name]
 		if v.RoleARN != "" {
@@ -369,12 +379,14 @@ func (c *Config) sayVends(vends map[string]injector.VendInfo) {
 			if len(v.PolicyARNs) > 0 {
 				role += " with session policies " + strings.Join(v.PolicyARNs, ", ")
 			}
-			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, role, v.AWSProfile)
+			out = append(out, fmt.Sprintf("route %s: AWS role %s, assumed from your profile %s", name, role,
+				v.AWSProfile))
 			continue
 		}
-		c.warnf("route %s: AWS as your own identity (profile %s); the sandbox can do what you can", name,
-			v.AWSProfile)
+		out = append(out, fmt.Sprintf("route %s: AWS as your own identity (profile %s); "+
+			"the sandbox can do what you can", name, v.AWSProfile))
 	}
+	return out
 }
 
 // forgetRoutes revokes this sandbox's session tokens: the broker stops
