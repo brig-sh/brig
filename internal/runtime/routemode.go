@@ -83,8 +83,8 @@ const runcBackend = "runc"
 // modeRecords is the one table of route mode answers. The endpoint rows say
 // where a guest reaches the broker: a guest behind a gateway brig owns at
 // brig.internal, which hull on vz and qemu and docker do not have. brig boots
-// no runc guest at all. The hvi and urunc rows hold only when
-// CheckBrigInternal does.
+// no runc guest at all. The rows of hull on hvi, hull on Linux and nerdctl on
+// urunc hold only when CheckBrigInternal does.
 var modeRecords = []ModeRecord{
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"hull", "hvi"}, State: Enforced, Why: EndpointHviWhy,
 		Transport: transportBrigInternal, Remedy: endpointVmnetRemedy},
@@ -92,8 +92,8 @@ var modeRecords = []ModeRecord{
 		Why: fmt.Sprintf(endpointVmnetWhy, "vz"), Remedy: endpointVmnetRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"hull", "qemu"}, State: CannotEnforce,
 		Why: fmt.Sprintf(endpointVmnetWhy, "qemu"), Remedy: endpointVmnetRemedy},
-	{Mode: v1alpha1.ModeEndpoint, Path: linuxHullPath, State: CannotEnforce,
-		Why: linuxHullNoRouteWhy, Remedy: linuxHullRemedy},
+	{Mode: v1alpha1.ModeEndpoint, Path: linuxHullPath, State: Enforced, Why: endpointLinuxHullWhy,
+		Transport: transportBrigInternal, Remedy: endpointGuestRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", uruncShim}, State: Enforced, Why: EndpointNerdctlWhy,
 		Transport: transportBrigInternal, Remedy: endpointGuestRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", runcBackend}, State: CannotEnforce,

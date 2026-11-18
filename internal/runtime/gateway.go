@@ -277,8 +277,9 @@ func ensureGateway(bin string) (string, func(), error) { return ensureSharedGate
 // argv names the socket. On hull on Linux it does not: urunc binds the socket
 // into hvi's root and hvi names it there, at a path every gateway guest
 // shares. With no way to tell an unused gateway from one with guests, an old
-// one is reused rather than stopped. It cannot publish a port, and hull on
-// Linux publishes none.
+// one is reused rather than stopped. An old one reused there may serve no
+// /forwards API, and a run that publishes through it is refused by
+// unpublishable, which names the upgrade.
 func ensureSharedGateway(bin string, membersSeen bool) (string, func(), error) {
 	sock, err := gatewaySocket()
 	if err != nil {
@@ -531,12 +532,12 @@ func ensureIsolatedGateway(bin string, path RunPath, name string, index int, pol
 		}
 	}
 	if policy.Divert.Requested() {
-		if err := gatewayDiverts(bin); err != nil {
+		if err := gatewayDivertsOn(bin, path); err != nil {
 			return "", err
 		}
 	}
 	if policy.Divert.linkLocal() {
-		if err := probeLinkLocal(bin); err != nil {
+		if err := probeLinkLocalOn(bin, path); err != nil {
 			return "", err
 		}
 	}
@@ -776,28 +777,37 @@ func gatewayDivert(r DivertRoute, socket string) string {
 	return r.arg() + "=" + socket
 }
 
-// gatewayDiverts checks that this runtime's gateway takes --divert, which
+// gatewayDivertsOn checks that this runtime's gateway takes --divert, which
 // brig.internal needs. A hull that lacks it refuses the flag at start, so the
 // run is refused before the gateway is asked. A probe that fails refuses too,
-// for the reason gatewayEnforces gives.
-func gatewayDiverts(bin string) error {
+// for the reason gatewayEnforces gives. path is the run path a refusal names:
+// hull on macOS and hull on Linux start the same gateway, and a user is told
+// the path they are on.
+func gatewayDivertsOn(bin string, path RunPath) error {
 	if r, ok := gatewayReportOf(bin); ok {
 		if r.Divert {
 			return nil
 		}
-		return helpLacks(bin, "--divert", "network-gateway")
+		return helpLacksOn(bin, path, "--divert", "network-gateway")
 	}
-	return helpLists(bin, "--divert", "network-gateway")
+	return helpListsOn(bin, path, "--divert", "network-gateway")
+}
+
+// gatewayDiverts is gatewayDivertsOn for the macOS hull.
+func gatewayDiverts(bin string) error {
+	return gatewayDivertsOn(bin, macGatewayPath)
 }
 
 // linkLocalProbes holds the answer of gatewayDivertsLinkLocal per hull
-// binary. The run's refusal check and the gateway's start both ask.
+// binary. The run's refusal check and the gateway's start both ask. It is
+// keyed by the binary alone: one binary runs on one OS, so on one run path.
 var linkLocalProbes sync.Map
 
-// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary for a yes
-// or a no. An unknown answer, such as a probe that timed out under load, is
-// not kept, so the next run asks again.
-func probeLinkLocal(bin string) error {
+// probeLinkLocalOn is gatewayDivertsLinkLocalOn, asked once per binary for a
+// yes or a no. An unknown answer, such as a probe that timed out under load,
+// is not kept, so the next run asks again. path is the run path a refusal
+// names.
+func probeLinkLocalOn(bin string, path RunPath) error {
 	if err, ok := linkLocalProbes.Load(bin); ok {
 		err, _ := err.(error)
 		return err
@@ -806,9 +816,9 @@ func probeLinkLocal(bin string) error {
 		if r.DivertLinkLocal {
 			return nil
 		}
-		return noLinkLocalDivert(bin)
+		return noLinkLocalDivertOn(bin, path)
 	}
-	err := gatewayDivertsLinkLocal(bin)
+	err := gatewayDivertsLinkLocalOn(bin, path)
 	var ce *CapabilityError
 	if err == nil || errors.As(err, &ce) && ce.State == CannotEnforce {
 		linkLocalProbes.Store(bin, err)
@@ -816,7 +826,10 @@ func probeLinkLocal(bin string) error {
 	return err
 }
 
-// gatewayDivertsLinkLocal checks that this runtime's gateway takes a --divert
+// probeLinkLocal is probeLinkLocalOn for the macOS hull.
+func probeLinkLocal(bin string) error { return probeLinkLocalOn(bin, macGatewayPath) }
+
+// gatewayDivertsLinkLocalOn checks that this runtime's gateway takes a --divert
 // of LinkLocalDivert. An older hull has --divert and refuses a link-local
 // address while it parses its flags, so its help cannot tell, and the run
 // would be refused only when the sandbox's gateway starts.
@@ -827,12 +840,11 @@ func probeLinkLocal(bin string) error {
 // its flags, before it opens a socket. A hull that got past them would serve
 // on the probe's own directory, which is removed after it, and never the
 // gateway directory. Any other answer, exit 0 among them, confirms nothing,
-// and refuses the run as unknown.
-func gatewayDivertsLinkLocal(bin string) error {
-	hvi := RunPath{"hull", "hvi"}
+// and refuses the run as unknown. path is the run path a refusal names.
+func gatewayDivertsLinkLocalOn(bin string, path RunPath) error {
 	dir, err := os.MkdirTemp("", "brig-probe")
 	if err != nil {
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 			Why:    "brig could not make a directory for the probe of a link-local divert",
 			Remedy: "Fix the runtime, or detach the policy", Err: err}
 	}
@@ -855,30 +867,39 @@ func gatewayDivertsLinkLocal(bin string) error {
 	case errors.As(err, &exit) && strings.Contains(string(out), "diverted twice"):
 		return nil
 	case errors.As(err, &exit) && strings.Contains(string(out), "link-local"):
-		return noLinkLocalDivert(bin)
+		return noLinkLocalDivertOn(bin, path)
 	case err == nil:
 		err = errors.New("the gateway took two identical diverts")
 	default:
 		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 		Why:    fmt.Sprintf("the probe `%s` failed", probe),
 		Remedy: "Fix the runtime, or detach the policy", Err: err}
 }
 
-// noLinkLocalDivert is the refusal of a gateway that cannot divert a
-// link-local address, whether the probe or the report said so.
-func noLinkLocalDivert(bin string) error {
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+// gatewayDivertsLinkLocal is gatewayDivertsLinkLocalOn for the macOS hull.
+func gatewayDivertsLinkLocal(bin string) error {
+	return gatewayDivertsLinkLocalOn(bin, macGatewayPath)
+}
+
+// noLinkLocalDivertOn is the refusal of a gateway that cannot divert a
+// link-local address, whether the probe or the report said so. path is the
+// run path it names.
+func noLinkLocalDivertOn(bin string, path RunPath) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path,
 		State: CannotEnforce,
 		Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
 			"refuses it", LinkLocalDivert.Host, bin),
 		Remedy: "Upgrade hull, or detach the policy"}
 }
 
-// helpLists runs `bin <cmd...> --help` and refuses, as a capability of the
-// endpoint mode on hvi, a binary whose help does not list flag.
-func helpLists(bin, flag string, cmd ...string) error {
+// noLinkLocalDivert is noLinkLocalDivertOn for the macOS hull.
+func noLinkLocalDivert(bin string) error { return noLinkLocalDivertOn(bin, macGatewayPath) }
+
+// helpListsOn runs `bin <cmd...> --help` and refuses, as a capability of the
+// endpoint mode on path, a binary whose help does not list flag.
+func helpListsOn(bin string, path RunPath, flag string, cmd ...string) error {
 	args := append(append([]string(nil), cmd...), "--help")
 	probe := bin + " " + strings.Join(args, " ")
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
@@ -891,25 +912,34 @@ func helpLists(bin, flag string, cmd ...string) error {
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
 	}
-	hvi := RunPath{"hull", "hvi"}
 	if err != nil {
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 			Why:    fmt.Sprintf("the probe `%s` failed", probe),
 			Remedy: "Fix the runtime, or detach the policy", Err: err}
 	}
 	if listsFlag(string(out), flag) {
 		return nil
 	}
-	return helpLacks(bin, flag, cmd...)
+	return helpLacksOn(bin, path, flag, cmd...)
 }
 
-// helpLacks is the refusal of a hull whose cmd has no flag, as a capability
-// of the endpoint mode on hvi.
-func helpLacks(bin, flag string, cmd ...string) error {
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+// helpLists is helpListsOn for the macOS hull.
+func helpLists(bin, flag string, cmd ...string) error {
+	return helpListsOn(bin, macGatewayPath, flag, cmd...)
+}
+
+// helpLacksOn is the refusal of a hull whose cmd has no flag, as a
+// capability of the endpoint mode on path.
+func helpLacksOn(bin string, path RunPath, flag string, cmd ...string) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path,
 		State:  CannotEnforce,
 		Why:    fmt.Sprintf("`%s` of %s has no %s", strings.Join(cmd, " "), bin, flag),
 		Remedy: "Upgrade hull, or detach the policy"}
+}
+
+// helpLacks is helpLacksOn for the macOS hull.
+func helpLacks(bin, flag string, cmd ...string) error {
+	return helpLacksOn(bin, macGatewayPath, flag, cmd...)
 }
 
 // listsFlag returns whether help lists flag as an option: the first word of
