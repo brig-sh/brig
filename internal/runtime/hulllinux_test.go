@@ -68,8 +68,10 @@ func TestLinuxHullRefusesWhatItCannotRunYet(t *testing.T) {
 		spec RunSpec
 		want string
 	}{
-		"gui":              {RunSpec{GUI: true}, "cannot display on Linux"},
-		"isolated":         {RunSpec{Net: "isolated"}, "--network isolated"},
+		"gui": {RunSpec{GUI: true}, "cannot display on Linux"},
+		"isolated, on cloud-hypervisor": {RunSpec{Net: "isolated", GenericBoot: true, Hypervisor: "cloud-hypervisor"},
+			"a network only on hvi"},
+		"shared, on qemu":  {RunSpec{Net: "shared", GenericBoot: true, Hypervisor: "qemu"}, "a network only on hvi"},
 		"publish":          {RunSpec{Net: "shared", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "cannot publish a port yet"},
 		"offline publish":  {RunSpec{Net: "none", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "--network offline"},
 		"unknown monitor":  {RunSpec{GenericBoot: true, Hypervisor: "xen"}, "not one urunc runs on Linux"},
@@ -107,7 +109,7 @@ func TestHullOnLinuxBootsTheRootfsModeDoctorReports(t *testing.T) {
 		if row := h.Isolation(spec).Detail; !strings.Contains(row, "rootfs "+RootfsModeOverlayBlock) {
 			t.Errorf("%q: the ISOLATION row is %q, want the overlay root", asked, row)
 		}
-		args, _, err := linuxRunArgs(spec, nil)
+		args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 		if err != nil {
 			t.Errorf("%q: the boot refused what doctor reports available: %v", asked, err)
 			continue
@@ -194,16 +196,21 @@ func TestMacOSHullNamesTheHypervisorAsked(t *testing.T) {
 	}
 }
 
-// What hull on Linux can run, it runs: no policy, on the shared bridge or
-// offline, a monitor urunc runs or none.
+// What hull on Linux can run, it runs: no policy, on the shared gateway, on
+// one of its own or offline, on hvi, which vz and no setting at all boot on.
+// Offline, it runs on another monitor urunc runs too.
 func TestLinuxHullAcceptsAPlainRun(t *testing.T) {
-	for _, net := range []string{"", "shared", "none"} {
-		for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor"} {
+	for _, net := range []string{"", "shared", "isolated", "none"} {
+		for _, hv := range []string{"", "vz", "hvi"} {
 			spec := RunSpec{Name: "brig-s", Image: "img", Net: net, Hypervisor: hv, GenericBoot: true}
 			if err := linuxHull().CanRun(spec); err != nil {
 				t.Errorf("net %q, hypervisor %q: %v", net, hv, err)
 			}
 		}
+	}
+	if err := linuxHull().CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "none",
+		Hypervisor: "cloud-hypervisor", GenericBoot: true}); err != nil {
+		t.Errorf("offline on cloud-hypervisor: %v", err)
 	}
 	// Offline satisfies every rule set, here as on every other path.
 	if err := linuxHull().CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "none",
@@ -274,6 +281,12 @@ func TestDoctorAsksHullOnLinuxTheUruncMonitor(t *testing.T) {
 	}
 }
 
+// The gateway the run line tests hand linuxRunArgs, as runLinux would.
+const (
+	testGatewaySock = "/gw/sandbox-brig-s.sock"
+	testGatewayCIDR = "10.45.0.6/30"
+)
+
 // linuxBootSpec is a generic boot as wrap hands it to hull on Linux, with its
 // boot assets already resolved, a writable home, a read-only share, a value
 // the runtime reads for itself and a stored secret.
@@ -297,7 +310,7 @@ func linuxBootSpec() RunSpec {
 // value in the environment only; the read-only share keeps its :ro.
 func TestLinuxHullRunArgs(t *testing.T) {
 	overlayHost(t)
-	args, env, err := linuxRunArgs(linuxBootSpec(), nil)
+	args, env, err := linuxRunArgs(linuxBootSpec(), testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +320,7 @@ func TestLinuxHullRunArgs(t *testing.T) {
 		"--annotation", annotationBootKernel + "=/assets/vmlinux",
 		"--annotation", annotationBootInitrd + "=/assets/initrd",
 		"--annotation", annotationRootfsMode + "=" + RootfsModeOverlayBlock,
+		"--gateway-sock", testGatewaySock, "--gateway-cidr", testGatewayCIDR,
 		"--snapshotter", "overlayfs",
 		"--shared-dir", "/host/home:/home/agent",
 		"--shared-dir", "/host/ref:/ref:ro",
@@ -323,19 +337,19 @@ func TestLinuxHullRunArgs(t *testing.T) {
 	}
 }
 
-// Nothing of the macOS command line reaches the Linux hull: it has no gateway,
-// no rootfs type, no window and no HULL_ROOTFS_MODE. vz, a macOS backend, boots
+// Nothing of the macOS command line but the gateway reaches the Linux hull: no
+// rootfs type, no window and no HULL_ROOTFS_MODE. vz, a macOS backend, boots
 // on the bundle's hvi.
 func TestLinuxHullRunArgsLeaveOutTheMacOSFlags(t *testing.T) {
 	overlayHost(t)
 	spec := linuxBootSpec()
 	spec.Hypervisor, spec.RootfsType, spec.GUI, spec.GUITitle = "vz", "virtiofs", true, "title"
-	args, env, err := linuxRunArgs(spec, nil)
+	args, env, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := strings.Join(args, " ")
-	for _, flag := range []string{"--gateway-sock", "--gateway-cidr", "--rootfs-type", "--gui", "--gui-title"} {
+	for _, flag := range []string{"--rootfs-type", "--gui", "--gui-title"} {
 		if slices.Contains(args, flag) {
 			t.Errorf("the Linux run line carries %s: %s", flag, line)
 		}
@@ -355,7 +369,7 @@ func TestLinuxHullRunArgsLeaveOutTheMacOSFlags(t *testing.T) {
 func TestLinuxHullRunArgsOfAnImageWithItsOwnKernel(t *testing.T) {
 	spec := linuxBootSpec()
 	spec.GenericBoot = false
-	args, _, err := linuxRunArgs(spec, nil)
+	args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,25 +382,46 @@ func TestLinuxHullRunArgsOfAnImageWithItsOwnKernel(t *testing.T) {
 	}
 }
 
-// Offline is --net none. An isolated run never becomes a shared one on the
-// command line, even for a caller that skipped CanRun.
+// Offline is --net none, with no gateway. A networked run is --net shared on
+// the gateway it was given, which is how hull takes an isolated one too. With
+// no gateway, no networked run reaches the command line, even for a caller
+// that skipped runLinux: hull's --net shared alone is its CNI bridge, which
+// every sandbox shares.
 func TestLinuxHullRunArgsNetwork(t *testing.T) {
 	spec := linuxBootSpec()
 	spec.Net = "none"
-	args, _, err := linuxRunArgs(spec, nil)
+	args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil || !strings.Contains(strings.Join(args, " "), "--net none ") {
 		t.Errorf("offline: %v: %s", err, strings.Join(args, " "))
 	}
-	spec.Net = "isolated"
-	if args, _, err := linuxRunArgs(spec, nil); err == nil {
-		t.Errorf("an isolated run reached the command line: %s", strings.Join(args, " "))
+	if slices.Contains(args, "--gateway-sock") || slices.Contains(args, "--gateway-cidr") {
+		t.Errorf("an offline run joins a gateway: %s", strings.Join(args, " "))
+	}
+	for _, net := range []string{"", "shared", "isolated"} {
+		spec.Net = net
+		args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
+		line := strings.Join(args, " ")
+		if err != nil || !strings.Contains(line, "--net shared ") ||
+			!strings.Contains(line, "--gateway-sock "+testGatewaySock+" --gateway-cidr "+testGatewayCIDR+" ") {
+			t.Errorf("%q: %v: %s", net, err, line)
+		}
+		for _, gw := range [][2]string{{"", ""}, {testGatewaySock, ""}, {"", testGatewayCIDR}} {
+			if args, _, err := linuxRunArgs(spec, gw[0], gw[1], nil); err == nil {
+				t.Errorf("%q with gateway %q reached the command line: %s", net, gw, strings.Join(args, " "))
+			}
+		}
 	}
 }
 
 // Run on hull on Linux runs one command, `hull run` with the Linux command
-// line. It starts no network gateway, which the Linux hull does not have.
+// line, on the shared gateway that is already up.
 func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
 	overlayHost(t)
+	sharedGatewayAt(t, "brig-s", 5)
+	sock, err := gatewaySocket()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	log := filepath.Join(dir, "argv.log")
 	bin := filepath.Join(dir, "hull")
@@ -405,7 +440,13 @@ func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("hull was run %d times, want once: %q", len(calls), calls)
 	}
+	// The address the shared network gave brig-s, which it keeps.
+	cidr, err := gatewayCIDR("brig-s")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasPrefix(calls[0], "run --detach --name brig-s --net shared ") ||
+		!strings.Contains(calls[0], " --gateway-sock "+sock+" --gateway-cidr "+cidr+" ") ||
 		!strings.HasSuffix(calls[0], " sleep infinity") {
 		t.Errorf("hull was run as: %s", calls[0])
 	}
@@ -470,7 +511,7 @@ func TestLinuxHullSandboxNetworkReadsTheNetworkLabel(t *testing.T) {
 // back to hvi. So is the same run without a share, which is the spec brig
 // plan and the early check hold: refused on the shares alone, plan accepted
 // a run that Run then refused. A share on each monitor that takes one goes
-// through.
+// through, offline: off hvi there is no gateway to give it a network on.
 func TestLinuxHullRefusesAShareOnAMonitorWithoutOne(t *testing.T) {
 	share := []Share{{Host: "/host/work", Guest: "/work"}}
 	spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: "firecracker", Shares: share}
@@ -483,7 +524,7 @@ func TestLinuxHullRefusesAShareOnAMonitorWithoutOne(t *testing.T) {
 		t.Errorf("firecracker as brig plan asks: %v, want the refusal Run gives", err)
 	}
 	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor", "qemu"} {
-		spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: hv, Shares: share}
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "none", GenericBoot: true, Hypervisor: hv, Shares: share}
 		if err := linuxHull().CanRun(spec); err != nil {
 			t.Errorf("a share on %q: %v", hv, err)
 		}

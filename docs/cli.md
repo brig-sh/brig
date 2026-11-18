@@ -651,7 +651,9 @@ bundle without its launcher. See
 
 On Linux with nerdctl or hull, or with no runtime yet, `doctor` adds what a
 run needs from the host: `subids`, `userns` and `uidmap` for a user other than
-root, and `devices` (`/dev/vhost-vsock`) and `cni` for every user. These
+root, `devices` (`/dev/vhost-vsock`) for every user, and `cni` for every user
+of nerdctl or of no runtime yet. hull on Linux has no `cni` line: Brig puts
+its sandboxes on a hull network gateway, never on hull's CNI bridge. These
 lines do not change the exit status.
 
 - For a user other than root, `devices` and `virtual` read `!!` when the
@@ -665,8 +667,6 @@ lines do not change the exit status.
   and `oras` when the boot assets are missing. For such a `nerdctl`, the
   `runtime` line ends with `(not the runtime bundle; see install.sh)`.
   `doctor` cannot tell whether that runtime boots a sandbox.
-- With hull, `cni` looks where hull does: `CNI_PATH`, then the runtime
-  bundle's plugins, then `/opt/cni/bin`.
 
 Doctor checks the image against the trust policy a run of that agent uses,
 with the `BRIG_VERIFY_*` variables applied, per-agent spelling first. The

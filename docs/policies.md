@@ -102,17 +102,18 @@ brig: BRIG_NETWORK "bogus" is not a posture: use shared, isolated or offline
 
 ### Posture by backend and profile
 
-On macOS, `isolated` needs the `hvi` backend. On Linux it needs nerdctl: hull on Linux cannot give a sandbox its own network yet.
+On macOS, `isolated` needs the `hvi` backend. On Linux, nerdctl and hull both provide it. hull gives the sandbox a network gateway of its own, as `hvi` does, and needs the `hvi` monitor for it.
 
 | Case | Posture |
 | --- | --- |
-| A new sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
+| A new sandbox on `hvi`, or on Linux with nerdctl or hull | `isolated` |
 | The seven built-in `hvi` profiles | `isolated`. Each profile names that posture |
 | `claude-desktop` | `shared`. The profile names that posture, because its GUI requires `vz`, where Brig cannot give a sandbox its own network |
-| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl and `hvi`, and the `shared` fallback on `vz`, `qemu` and hull on Linux |
-| A custom profile with no `network:` field, on `vz`, `qemu` or hull on Linux | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
-| An explicit `isolated`, such as `--network isolated`, on `vz`, `qemu` or hull on Linux | Refused |
-| A built-in `hvi` profile overridden to `vz` or `qemu`, or run on hull on Linux | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl, `hvi` and hull on Linux, and the `shared` fallback on `vz` and `qemu` |
+| A custom profile with no `network:` field, on `vz` or `qemu` | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
+| An explicit `isolated`, such as `--network isolated`, on `vz` or `qemu` | Refused |
+| A built-in `hvi` profile overridden to `vz` or `qemu` | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| A networked run on hull on Linux on a monitor other than `hvi` | Refused. Only `hvi` joins a network gateway. Unset `BRIG_HYPERVISOR`, or run it with `--network offline` |
 
 On `hvi`, the network of each isolated sandbox used about 28.7 MB of memory
 in the measurement recorded in
@@ -1253,7 +1254,7 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
-| hull on Linux, on any monitor | `cannot enforce` | hull on Linux gives a sandbox no network of its own yet. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
+| hull on Linux, on any monitor | `cannot enforce` | Brig hands the rules to the sandbox's network gateway, but has not yet proven on a real hull on Linux that the gateway enforces them. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 

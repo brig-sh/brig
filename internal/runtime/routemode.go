@@ -93,7 +93,7 @@ var modeRecords = []ModeRecord{
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"hull", "qemu"}, State: CannotEnforce,
 		Why: fmt.Sprintf(endpointVmnetWhy, "qemu"), Remedy: endpointVmnetRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: linuxHullPath, State: CannotEnforce,
-		Why: linuxHullNoNetworkWhy + ", where brig routes brig.internal", Remedy: linuxHullRemedy},
+		Why: linuxHullNoRouteWhy, Remedy: linuxHullRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", uruncShim}, State: Enforced, Why: EndpointNerdctlWhy,
 		Transport: transportBrigInternal, Remedy: endpointGuestRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", runcBackend}, State: CannotEnforce,

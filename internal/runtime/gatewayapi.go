@@ -116,6 +116,28 @@ func gatewayForwards(sock string) ([]gatewayForward, error) {
 	return out, nil
 }
 
+// gatewayMembers is how many guests the gateway on sock serves. known is
+// false when the gateway cannot say: its API does not answer, it predates
+// /members and answers 404, or the answer is not a list. A caller deciding
+// whether to stop the gateway reads that as a guest that may be on it.
+//
+// Each entry also names how the guest joined and when, and only the count
+// is read. A guest is listed from when the gateway takes its connection, so
+// a boot whose VMM has not connected yet is not. See hull.PruneSharedNetwork.
+func gatewayMembers(sock string) (n int, known bool) {
+	body, status, err := gatewayAPI(gatewayAPISocket(sock), http.MethodGet, "/members", nil)
+	if err != nil || status != http.StatusOK {
+		return 0, false
+	}
+	// null decodes to a nil list with no error. The gateway answers [] when
+	// no guest is on it, never null, so a null is not taken for empty.
+	var members []json.RawMessage
+	if err := json.Unmarshal(body, &members); err != nil || members == nil {
+		return 0, false
+	}
+	return len(members), true
+}
+
 // exposeForward publishes one port on a gateway, and unexposeForward takes it
 // away.
 //

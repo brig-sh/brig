@@ -411,14 +411,14 @@ func TestAPolicyRefusalOutranksTheProfileIsolationRefusal(t *testing.T) {
 
 var _ runtime.Runtime = (*networkDefaultRuntime)(nil)
 
-// hull on Linux puts every sandbox on one network, whatever the hypervisor.
-// Most shipped profiles set network: isolated, so a plain `brig run claude`
-// there was refused with the --network isolated refusal, naming a flag the
-// user never typed. With BRIG_HYPERVISOR=vz it said to run on hvi, which
-// cannot run isolated on Linux either. The profile's refusal now names hull
-// on Linux and nerdctl, an unset posture falls back to shared as on vz, and
-// an explicit --network isolated keeps the flag refusal.
-func TestProfileIsolationOnLinuxHullNamesNerdctlNotHvi(t *testing.T) {
+// hull on Linux gives a sandbox a network gateway of its own, as hvi does on
+// macOS, whatever the hypervisor: vz, a macOS backend, boots on hvi there.
+// It used to put every sandbox on one bridge, so a shipped profile's network:
+// isolated was refused, and an unset posture fell back to shared as on vz, on
+// a bridge where one sandbox reached another. Now the profile's isolated
+// network runs, an unset posture is isolated, and no row says hull on Linux
+// cannot isolate.
+func TestProfileIsolationRunsOnLinuxHull(t *testing.T) {
 	if goruntime.GOOS != "linux" {
 		t.Skip("brig marks a hull as the Linux one only on a Linux host")
 	}
@@ -442,44 +442,28 @@ func TestProfileIsolationOnLinuxHullNamesNerdctlNotHvi(t *testing.T) {
 				t.Fatal("the stub was not taken for hull on Linux")
 			}
 
-			c, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir()}, rt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = c.checkBackend(c.hypervisor())
-			if err == nil {
-				t.Fatal("hull on Linux accepted the profile's isolated network")
-			}
-			got := err.Error()
-			for _, want := range []string{"the x profile sets network: isolated", "hull on Linux", "--network shared", "BRIG_RUNTIME=nerdctl"} {
-				if !strings.Contains(got, want) {
-					t.Errorf("refusal missing %q:\n%s", want, got)
+			for name, c := range map[string]struct {
+				profile string
+				opts    Options
+			}{
+				"the profile's isolated network": {"network: isolated\n", Options{}},
+				"an unset posture":               {"", Options{}},
+				"--network isolated":             {"", Options{Network: "isolated"}},
+			} {
+				c.opts.Workspace = t.TempDir()
+				cfg, err := Load(testProfile(t, c.profile), c.opts, rt)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			for _, wrong := range []string{"--network isolated gives", "run it on hvi", "vz backend"} {
-				if strings.Contains(got, wrong) {
-					t.Errorf("refusal says %q:\n%s", wrong, got)
+				if cfg.Network != NetIsolated {
+					t.Errorf("%s: the posture is %s, want isolated", name, cfg.Network)
 				}
-			}
-
-			unset, err := Load(testProfile(t, ""), Options{Workspace: t.TempDir()}, rt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if unset.Network != NetShared {
-				t.Errorf("an unset posture is %s, want shared", unset.Network)
-			}
-			if err := unset.checkBackend(unset.hypervisor()); err != nil {
-				t.Errorf("an unset posture was refused: %v", err)
-			}
-
-			explicit, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir(), Network: "isolated"}, rt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = explicit.checkBackend(explicit.hypervisor())
-			if err == nil || !strings.Contains(err.Error(), "--network isolated gives") {
-				t.Errorf("an explicit --network isolated lost the flag refusal: %v", err)
+				if err := cfg.checkBackend(cfg.hypervisor()); err != nil {
+					t.Errorf("%s was refused: %v", name, err)
+				}
+				if line := cfg.networkLine(); strings.Contains(line, "does not support isolated networking") {
+					t.Errorf("%s: the NETWORK row says %q", name, line)
+				}
 			}
 		})
 	}

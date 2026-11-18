@@ -2417,14 +2417,16 @@ fi
 
 echo "== hull on Linux: refusals and run line =="
 # A hull built for Linux ends its --version with linux/<arch>, and brig drives
-# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. That
-# hull has no network gateway yet, so a policy and --network isolated are
-# refused before the runtime is asked to boot. So is a policy with
-# BRIG_HYPERVISOR=hvi: the hvi row is the macOS gateway's, and reading it here
-# called the policy enforced. The unit tests hold each refusal; this holds that
-# the binary reaches them from the version string alone, and a control run
-# shows the log would show a boot if brig made one. brig asks the binary only
-# on Linux, so on a Mac the stub is the macOS hull and the section is skipped.
+# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. A
+# networked sandbox there joins a hull network gateway, its own when it is
+# isolated, and never hull's CNI bridge, which every sandbox shares. brig does
+# not hand that gateway a policy yet, so a policy is refused before the
+# runtime is asked to boot. So is a policy with BRIG_HYPERVISOR=hvi: the hvi
+# row is the macOS gateway's, and reading it here called the policy enforced.
+# The unit tests hold each case; this holds that the binary reaches them from
+# the version string alone, and a control run shows the log would show a boot
+# if brig made one. brig asks the binary only on Linux, so on a Mac the stub is
+# the macOS hull and the section is skipped.
 if [ "$(uname -s)" = Linux ]; then
   lh="$WORK/lh"
   mkdir -p "$lh/ws" "$lh/state" "$lh/gw" "$lh/policies"
@@ -2434,14 +2436,26 @@ if [ "$(uname -s)" = Linux ]; then
       BRIG_POLICY_DIR="$lh/policies" "$WORK/brig" "$@"
   }
 
+  # lh_gateway prints the gateway socket the last `hull run` named.
+  lh_gateway() {
+    grep '^words:\[run\]' "$lh/argv.log" | tail -1 | grep -o '\[--gateway-sock\]\[[^]]*\]' |
+      sed 's/^\[--gateway-sock\]\[//; s/\]$//'
+  }
+  lh_shared="$lh/gw/gateway-"
+
+  # --network isolated boots on a gateway of the sandbox's own, which is
+  # never the shared one. On hull's CNI bridge, which every sandbox shares,
+  # one sandbox reached another's listener.
   : > "$lh/argv.log"
   lh_brig run claude --network isolated -d > "$lh/iso.out" 2>&1; rc=$?
-  [ "$rc" != 0 ] && grep -q 'hull on Linux cannot do yet' "$lh/iso.out" \
-    && ok "hull on Linux refuses --network isolated" \
-    || bad "hull on Linux refuses --network isolated -- got $rc: $(cat "$lh/iso.out")"
-  grep -q '^argv: run ' "$lh/argv.log" \
-    && bad "hull on Linux was asked to boot --network isolated" \
-    || ok "nothing reached hull on Linux for --network isolated"
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots --network isolated" \
+    || bad "hull on Linux boots --network isolated -- got $rc: $(cat "$lh/iso.out")"
+  case "$(lh_gateway)" in
+    "$lh/gw/sandbox-"*.sock) ok "an isolated sandbox on hull on Linux joins a gateway of its own" ;;
+    *) bad "an isolated sandbox on hull on Linux joins a gateway of its own -- got: $(lh_gateway)" ;;
+  esac
+  lh_brig rm --all -y > /dev/null 2>&1
 
   cat > "$lh/policies/lh-deny.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
@@ -2466,18 +2480,18 @@ YAML
   lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
 
   # The shipped profile sets network: isolated, which this section otherwise
-  # never reads, since BRIG_NETWORK=shared is set for the whole run. The
-  # refusal names the profile and nerdctl, not a flag nobody typed or hvi.
+  # never reads, since BRIG_NETWORK=shared is set for the whole run. It used
+  # to be refused here. It boots on the sandbox's own gateway, as on hvi.
   : > "$lh/argv.log"
   BRIG_NETWORK= lh_brig run claude -d > "$lh/prof.out" 2>&1; rc=$?
-  [ "$rc" != 0 ] && grep -q 'profile sets network: isolated, and hull on Linux' "$lh/prof.out" \
-    && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/prof.out" \
-    && ! grep -q -e '--network isolated gives' -e 'run it on hvi' "$lh/prof.out" \
-    && ok "hull on Linux refuses the profile's isolated network, naming the profile and nerdctl" \
-    || bad "hull on Linux refuses the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
-  grep -q '^argv: run ' "$lh/argv.log" \
-    && bad "hull on Linux was asked to boot the profile's isolated network" \
-    || ok "nothing reached hull on Linux for the profile's isolated network"
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots the profile's isolated network" \
+    || bad "hull on Linux boots the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
+  case "$(lh_gateway)" in
+    "$lh/gw/sandbox-"*.sock) ok "the profile's isolated sandbox joins a gateway of its own" ;;
+    *) bad "the profile's isolated sandbox joins a gateway of its own -- got: $(lh_gateway)" ;;
+  esac
+  lh_brig rm --all -y > /dev/null 2>&1
 
   # firecracker has no shared filesystem, and every run shares its workspace,
   # so brig plan refuses it as the run does, and nothing reaches `hull run`.
@@ -2501,15 +2515,16 @@ YAML
     || bad "a plain run on hull on Linux reaches run -- got: $(cat "$lh/plain.out")"
 
   # The command line of that run, as hull on Linux takes it: the network
-  # is named, vz (a macOS backend) boots on the bundle's hvi, the kernel and
-  # initrd go as urunc annotations, the workspace is a share, and the guest
-  # stays up on sleep infinity. Nothing of the macOS line reaches it: no
-  # gateway, rootfs type or window. A forwarded credential goes by name, and
-  # its value only through the environment, which is the second promise.
-  # Read from the words: line, so each argument is matched whole.
+  # is named and is the shared gateway, vz (a macOS backend) boots on the
+  # bundle's hvi, the kernel and initrd go as urunc annotations, the workspace
+  # is a share, and the guest stays up on sleep infinity. Nothing else of the
+  # macOS line reaches it: no rootfs type or window. A forwarded credential
+  # goes by name, and its value only through the environment, which is the
+  # second promise. Read from the words: line, so each argument is matched
+  # whole.
   words="$(grep '^words:\[run\]' "$lh/argv.log" | tail -1)"
-  for want in '[--net][shared]' '[--hypervisor][hvi]' '[--snapshotter][' \
-      "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
+  for want in '[--net][shared]' "[--gateway-sock][$lh_shared" '[--gateway-cidr][' \
+      '[--hypervisor][hvi]' '[--snapshotter][' "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
     case "$words" in
       *"$want"*) ok "hull on Linux's run line carries $want" ;;
       *) bad "hull on Linux's run line carries $want -- got: $words" ;;
@@ -2523,7 +2538,7 @@ YAML
     *) bad "hull on Linux's run line ends on sleep infinity -- got: $words" ;;
   esac
   case "$words" in
-    *'[--gateway'*|*'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
+    *'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
       bad "hull on Linux's run line carries a macOS flag -- got: $words" ;;
     *) ok "hull on Linux's run line carries no macOS flag" ;;
   esac
@@ -2534,6 +2549,9 @@ YAML
     && ok "the forwarded value reaches hull on Linux through its environment" \
     || bad "the forwarded value reaches hull on Linux through its environment -- got: $(grep '^env-gh:' "$lh/argv.log")"
   lh_brig rm --all -y > /dev/null 2>&1
+  # brig never stops the shared gateway on hull on Linux, which cannot see
+  # the guests on it, so the stub's outlives the rm.
+  pkill -f "$lh/gw/" > /dev/null 2>&1
 else
   echo "  --   not Linux, skipping hull on Linux"
 fi
