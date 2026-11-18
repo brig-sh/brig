@@ -746,6 +746,16 @@ func dispatch(args []string) error {
 
 	switch verb {
 	case "info":
+		// info boots nothing, so a requirement it was given used to pass
+		// unseen: `info --isolation microvm` printed the row and exited 0 on a
+		// host where run exits 7, and a script that used info as its no-boot
+		// check read that as a go-ahead. It refuses on the ground run does, with
+		// the same error and the same code, before it prints. Only this
+		// requirement: info does not start refusing for the other reasons run
+		// has, so the flag this line added is the only thing made to bite.
+		if err := cfg.IsolationRefusal(); err != nil {
+			return err
+		}
 		if wantJSON {
 			// The Info kind of the shared envelope, built from the same Config the
 			// text report reads -- see (*Config).InfoData. Written to Out, which is

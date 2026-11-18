@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -224,5 +226,56 @@ func TestParseDoesNotReadPastDashDashOrIntoAnExecCommand(t *testing.T) {
 		if _, _, _, err := parse("run", args); err == nil {
 			t.Errorf("run %v: the requirement was handed to the agent", args)
 		}
+	}
+}
+
+// brig info boots nothing, and a script uses it as the check that comes before a
+// run. With the requirement it must refuse on the ground run does, with run's
+// code and before it prints anything, in text and in JSON: exit 0 on a host
+// where run exits 7 is a go-ahead the host did not give. Without the flag it
+// reports as it always did.
+func TestInfoRefusesWhatARunWouldRefuseForItsIsolation(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nerdctl")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	t.Setenv("BRIG_RUNTIME_BIN", stub)
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(dir, "ws"))
+	t.Setenv("BRIG_STATE_DIR", filepath.Join(dir, "state"))
+
+	for _, tc := range []struct {
+		name string
+		shim string
+		args []string
+		code int // 0 is a report
+	}{
+		{"a shim brig cannot place", "io.containerd.kata.v2", []string{"info", "--isolation", "microvm", "claude-code"}, 7},
+		{"a shim that shares the host kernel", "runc", []string{"info", "--isolation", "microvm", "claude-code"}, 7},
+		{"the same in JSON", "io.containerd.kata.v2", []string{"--json", "info", "--isolation", "microvm", "claude-code"}, 7},
+		{"a microVM", "io.containerd.urunc.v2", []string{"info", "--isolation", "microvm", "claude-code"}, 0},
+		{"no requirement on a shim brig cannot place", "io.containerd.kata.v2", []string{"info", "claude-code"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", tc.shim)
+			out, err := captureStdout(t, func() error { return run(tc.args) })
+			if got := exitCode(err); got != tc.code {
+				t.Fatalf("brig %s: exit %d, want %d: %v", strings.Join(tc.args, " "), got, tc.code, err)
+			}
+			if tc.code == 7 {
+				if out != "" {
+					t.Errorf("a refused info printed a report:\n%s", out)
+				}
+				if !strings.Contains(err.Error(), "--isolation microvm: this run would stand on") {
+					t.Errorf("the refusal is not run's: %v", err)
+				}
+				return
+			}
+			if !strings.Contains(out, "ISOLATION") {
+				t.Errorf("info printed no ISOLATION row:\n%s", out)
+			}
+		})
 	}
 }

@@ -2476,6 +2476,29 @@ STUB
   grep -q "stands here in the agent's arguments" "$nrc/tail.err" \
     && bad "--isolation in an exec command was refused: $(cat "$nrc/tail.err")" \
     || ok "--isolation in an exec command is the guest's and is not refused"
+
+  # brig info boots nothing, and a script uses it as the check before a run, so
+  # with the requirement it refuses on the ground run does: the same exit 7, and
+  # no report printed. Without the flag it reports as before.
+  nrc_info() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME="$1" "$WORK/brig" info "${@:2}"
+  }
+  for shim in io.containerd.kata.v2 runc; do
+    out="$(nrc_info "$shim" --isolation microvm claude 2> "$nrc/info.err")"; rc=$?
+    { [ "$rc" = 7 ] && [ -z "$out" ] && grep -q 'BRIG_CONTAINERD_RUNTIME' "$nrc/info.err"; } \
+      && ok "info --isolation microvm on $shim exits 7, names the setting and prints no report" \
+      || bad "info --isolation microvm on $shim -- got $rc: $out $(cat "$nrc/info.err")"
+  done
+  out="$(nrc_info io.containerd.urunc.v2 --isolation microvm claude 2> /dev/null)"; rc=$?
+  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ISOLATION'; } \
+    && ok "info --isolation microvm on the urunc shim reports" \
+    || bad "info --isolation microvm on the urunc shim -- got $rc: $out"
+  out="$(nrc_info io.containerd.kata.v2 claude 2> /dev/null)"; rc=$?
+  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ISOLATION'; } \
+    && ok "info without the flag still reports on a shim brig cannot place" \
+    || bad "info without the flag on a shim brig cannot place -- got $rc: $out"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
