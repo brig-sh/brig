@@ -942,7 +942,9 @@ what Brig can and cannot tell.
 The flag stands before the profile, or before the first word that is the
 agent's. A line such as `brig run claude -p hi --isolation microvm` exits `2`
 and says where to put it, because Brig would otherwise leave the flag to the
-agent and boot without the requirement.
+agent and boot without the requirement. After `--`, and in the command of
+`brig sh`, the flag is the agent's or the guest's own, and Brig does not read
+it.
 
 ## Sandbox restarted on `brig sh`
 

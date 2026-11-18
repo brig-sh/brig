@@ -2444,6 +2444,38 @@ STUB
   grep -q '^argv: run ' "$nrc/argv.log" \
     && ok "--isolation microvm on the urunc shim reaches run" \
     || bad "--isolation microvm on the urunc shim reaches run -- got $rc: $(cat "$nrc/argv.log")"
+
+  # The flag is refused where it would be handed to the agent, and the run boot
+  # without the requirement, and only there. After -- it is the agent's, and in
+  # the command of exec it is the guest's: both went through before the flag
+  # existed, and the advice to put it before the profile is wrong for them.
+  nrc_tail() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME=io.containerd.urunc.v2 "$WORK/brig" "$@"
+  }
+  : > "$nrc/argv.log"
+  nrc_tail run claude -p hi --isolation microvm > /dev/null 2> "$nrc/tail.err"; rc=$?
+  { [ "$rc" = 2 ] && grep -q 'before the profile' "$nrc/tail.err"; } \
+    && ok "--isolation in the agent's arguments exits 2 and says where it goes" \
+    || bad "--isolation in the agent's arguments exits 2 -- got $rc: $(cat "$nrc/tail.err")"
+  if grep -E '^argv: (run|create|start|pull) ' "$nrc/argv.log" > /dev/null; then
+    bad "--isolation in the agent's arguments reached the runtime"
+  else
+    ok "--isolation in the agent's arguments boots nothing"
+  fi
+  : > "$nrc/argv.log"
+  nrc_tail run claude --resume -- --isolation x > /dev/null 2> "$nrc/tail.err"
+  grep -q "stands here in the agent's arguments" "$nrc/tail.err" \
+    && bad "--isolation after -- was refused: $(cat "$nrc/tail.err")" \
+    || ok "--isolation after -- is the agent's and is not refused"
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "the line with --isolation after -- boots" \
+    || bad "the line with --isolation after -- boots -- got: $(cat "$nrc/argv.log")"
+  nrc_tail exec claude mytool --isolation strict > /dev/null 2> "$nrc/tail.err"
+  grep -q "stands here in the agent's arguments" "$nrc/tail.err" \
+    && bad "--isolation in an exec command was refused: $(cat "$nrc/tail.err")" \
+    || ok "--isolation in an exec command is the guest's and is not refused"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
