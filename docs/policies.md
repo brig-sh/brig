@@ -989,7 +989,7 @@ brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no a
 3. Can the routes of the bound policies apply together? See
    [Several policies with routes](#several-policies-with-routes).
 4. Can a run of the profile on this host enforce the egress rules? Where it
-   cannot, on `vz`, `qemu`, docker or hull on Linux, `check` refuses them
+   cannot, on `vz`, `qemu` or docker, `check` refuses them
    with exit status `7`, as the run does. An offline run passes, and with no
    runtime on the host this check is skipped.
 
@@ -1263,7 +1263,7 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
-| hull on Linux, on any monitor | `cannot enforce` | Brig hands the rules to the sandbox's network gateway, but has not yet proven on a real hull on Linux that the gateway enforces them. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
+| hull on Linux, on any monitor | `enforced` | the rules apply at the network gateway of the sandbox, its only way out. A run on 2026-11-18 refused `github.com` and `one.one.one.one` and served `example.com` and `www.example.com` ([measured](manual-tests/egress-policy-hull-linux.md)) | a hull whose gateway passes the same probe as on `hvi` |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
@@ -1275,7 +1275,7 @@ What Brig does with a run:
 | Run | Result |
 | --- | --- |
 | A policy, on an `enforced` run path | Brig boots the sandbox |
-| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu`, docker and hull on Linux also name the backend that does enforce |
+| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu` and docker also name the backend that does enforce |
 | A policy, with `--network offline`, on any run path | Brig does not refuse the run. A sandbox with no route out reaches no network, so it satisfies every rule set |
 | No policy | Brig asks nothing of the run path |
 
@@ -1413,6 +1413,7 @@ default. On nerdctl, Brig's table does.
 | --- | --- | --- | --- |
 | [Egress policy on `hvi`](manual-tests/egress-policy.md) | a real guest on `hvi` | a `default: deny` policy with one `host` allow. The allowed name reaches, a denied name fails to resolve, and an address dialed directly fails to connect | a `deny` rule that overrides an `allow` rule, and a `default: allow` policy |
 | [Egress policy on Linux](manual-tests/egress-policy-linux.md) | a urunc guest on rootless nerdctl | the cases of the network conformance suite under both defaults, including a `deny` glob inside an `allow` glob and a `deny` cidr inside an `allow` cidr | |
+| [Egress policy on hull on Linux](manual-tests/egress-policy-hull-linux.md) | a urunc guest on hull on Linux, on hvi | a `default: deny` policy with `host` allows. The allowed names reach and the others fail to resolve | the run drove hull directly, not `brig run` |
 
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox.

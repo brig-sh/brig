@@ -73,7 +73,7 @@ func TestReplacingAGatewayThatCannotBeStoppedIsRefused(t *testing.T) {
 	// for the gateway that stayed up, and not the probe's. A bare "hull" here
 	// failed the probe wherever hull is not installed.
 	bin := fakeHull(t, "OPTIONS:\n   --egress-default string   verdict\n")
-	_, err := ensureIsolatedGateway(bin, name, 0, Egress{Default: "deny"})
+	_, err := ensureIsolatedGateway(bin, macGatewayPath, name, 0, Egress{Default: "deny"})
 	if err == nil {
 		t.Fatal("a gateway that could not be replaced was reported ready")
 	}
@@ -98,7 +98,7 @@ func TestAnIsolatedGatewayThatIsSlowToExitIsStillReplaced(t *testing.T) {
 	writeGatewayRecord(sock, old, gatewaySpec(0, Egress{Default: "deny"}))
 	bin, _ := fakeRuntime(t)
 
-	if _, err := ensureIsolatedGateway(bin, name, 0, Egress{}); err != nil {
+	if _, err := ensureIsolatedGateway(bin, macGatewayPath, name, 0, Egress{}); err != nil {
 		t.Fatalf("replacing a gateway that was exiting failed: %v", err)
 	}
 	if got, want := recordedSpec(sock), gatewaySpec(0, Egress{}); got != want {

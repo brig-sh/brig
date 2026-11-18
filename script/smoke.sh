@@ -2419,10 +2419,10 @@ echo "== hull on Linux: refusals and run line =="
 # A hull built for Linux ends its --version with linux/<arch>, and brig drives
 # that one as the Linux hull. The stub says so through STUB_HULL_VERSION. A
 # networked sandbox there joins a hull network gateway, its own when it is
-# isolated, and never hull's CNI bridge, which every sandbox shares. brig does
-# not hand that gateway a policy yet, so a policy is refused before the
-# runtime is asked to boot. So is a policy with BRIG_HYPERVISOR=hvi: the hvi
-# row is the macOS gateway's, and reading it here called the policy enforced.
+# isolated, and never hull's CNI bridge, which every sandbox shares. A policy
+# boots on that gateway with its rules, once the gateway has been probed for
+# them, whatever BRIG_HYPERVISOR says. A routed policy (brig.internal) is
+# still refused before the runtime is asked to boot.
 # The unit tests hold each case; this holds that the binary reaches them from
 # the version string alone, and a control run shows the log would show a boot
 # if brig made one. brig asks the binary only on Linux, so on a Mac the stub is
@@ -2469,15 +2469,47 @@ YAML
   for hv in hvi vz; do
     : > "$lh/argv.log"
     BRIG_HYPERVISOR=$hv lh_brig run claude -d > "$lh/pol.out" 2>&1; rc=$?
-    [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/pol.out" \
-      && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/pol.out" \
-      && ok "hull on Linux refuses a policy on $hv with exit 7, naming its path and nerdctl" \
-      || bad "hull on Linux refuses a policy on $hv with exit 7 -- got $rc: $(cat "$lh/pol.out")"
-    grep -q '^argv: run ' "$lh/argv.log" \
-      && bad "hull on Linux was asked to boot a policy on $hv it cannot enforce" \
-      || ok "nothing reached hull on Linux for a policy on $hv"
+    [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+      && ok "hull on Linux boots a policy on $hv" \
+      || bad "hull on Linux boots a policy on $hv -- got $rc: $(cat "$lh/pol.out")"
+    grep -q '^argv: network-gateway --help' "$lh/argv.log" \
+      && ok "the gateway was probed for the rules on $hv before the boot" \
+      || bad "the gateway was not probed on $hv: $(grep '^argv: network-gateway' "$lh/argv.log")"
+    grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--egress-default deny.*api.anthropic.com' \
+      && ok "the rules are on the gateway line on $hv" \
+      || bad "the rules are not on the gateway line on $hv: $(grep '^argv: network-gateway' "$lh/argv.log")"
+    case "$(lh_gateway)" in
+      "$lh/gw/sandbox-"*.sock) ok "the policy's sandbox on $hv joins a gateway of its own" ;;
+      *) bad "the policy's sandbox on $hv joins a gateway of its own -- got: $(lh_gateway)" ;;
+    esac
+    lh_brig rm --all -y > /dev/null 2>&1
   done
   lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
+
+  # A routed policy is still refused: nothing has shown the gateway routes
+  # brig.internal on hull on Linux. It exits 7 and nothing reaches hull.
+  cat > "$lh/policies/lh-route.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: lh-route
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+  lh_brig policy attach lh-route claude-code > /dev/null 2>&1
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=hvi BRIG_TEST_SECRETS=claude-credentials lh_brig run claude -d > "$lh/route.out" 2>&1; rc=$?
+  [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/route.out" \
+    && ok "hull on Linux refuses a routed policy with exit 7, naming its path" \
+    || bad "hull on Linux refuses a routed policy with exit 7 -- got $rc: $(cat "$lh/route.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot a routed policy" \
+    || ok "nothing reached hull on Linux for a routed policy"
+  lh_brig policy detach lh-route claude-code > /dev/null 2>&1
 
   # The shipped profile sets network: isolated, which this section otherwise
   # never reads, since BRIG_NETWORK=shared is set for the whole run. It used

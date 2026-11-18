@@ -688,7 +688,7 @@ func (h *hull) joinGateway(name, net string, policy Egress) (sock, cidr string, 
 		if err != nil {
 			return "", "", false, nil, err
 		}
-		sock, err := ensureIsolatedGateway(h.bin, name, index, policy)
+		sock, err := ensureIsolatedGateway(h.bin, h.gatewayPath(), name, index, policy)
 		if err != nil {
 			return "", "", false, nil, err
 		}
@@ -844,6 +844,21 @@ func (h *hull) CanRun(spec RunSpec) error {
 // does, and never reads a row of hull's macOS backends.
 var linuxHullPath = RunPath{"hull", uruncShim}
 
+// macGatewayPath is the run path of the macOS hull's gateway. hvi is the only
+// macOS backend that boots on a gateway brig owns.
+var macGatewayPath = RunPath{"hull", "hvi"}
+
+// gatewayPath returns the run path the gateway probes name in a refusal. A
+// hull on Linux with a gateway too old for the rules is told its own path,
+// hull on io.containerd.urunc.v2, with the probe's own remedy: upgrade the
+// runtime, or detach the policy. BRIG_HYPERVISOR=hvi means nothing there.
+func (h *hull) gatewayPath() RunPath {
+	if h.linux {
+		return linuxHullPath
+	}
+	return macGatewayPath
+}
+
 // IsLinuxHull reports whether rt is hull on Linux. wrap asks so that a hull
 // on Linux never takes the macOS hull's vz fallback to shared: BRIG_HYPERVISOR
 // names a macOS backend there, and the sandbox boots on hvi and its gateway
@@ -853,15 +868,12 @@ func IsLinuxHull(rt Runtime) bool {
 	return ok && h.linux
 }
 
-// The reasons and the remedy of the rows of linuxHullPath in the capability
-// and route mode tables. The sandbox is on a gateway of its own there, as on
-// hvi, and joinGateway hands that gateway the rules and the diverts as it
-// does on macOS. No run on a real hull on Linux has shown that they hold for
-// a urunc guest, so the rows refuse until one has, rather than answer
-// enforced on the macOS gateway's word.
+// The reason and the remedy of the route mode row of linuxHullPath. The
+// sandbox is on a gateway of its own there, as on hvi. A run on 2026-11-18
+// showed that gateway enforcing egress rules for a urunc guest, so a policy
+// is enforced. Nothing has shown it routes brig.internal or applies a
+// divert, so those rows refuse until a run does.
 const (
-	linuxHullNoPolicyWhy = "brig has not yet proven on a real hull on Linux that the network gateway " +
-		"of a sandbox there enforces a policy's rules"
 	linuxHullNoRouteWhy = "brig has not yet proven on a real hull on Linux that the network gateway " +
 		"of a sandbox there routes brig.internal"
 	linuxHullRemedy = "Use nerdctl (BRIG_RUNTIME=nerdctl), or detach the policy"
@@ -869,17 +881,15 @@ const (
 
 // linuxSupports is supports for hull on Linux. hull there is a containerd
 // client: urunc boots the guest and the monitor is urunc's. A networked
-// sandbox joins a hull network gateway, as on hvi, but brig does not yet put
-// a policy, a divert or a published port on it, so it refuses all three. It
+// sandbox joins a hull network gateway, as on hvi, and brig hands it the
+// policy's egress rules. brig does not yet put a divert or a published port
+// on it, so it refuses both. It
 // cannot read macOS's hvi rows: a policy on hull with BRIG_HYPERVISOR=hvi
 // would otherwise read as enforced on a host where nothing enforces it.
 func linuxSupports(spec RunSpec) error {
 	if spec.GUI {
 		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
 			"run it on macOS, where hull's vz backend can show it")
-	}
-	if err := requireEgress(spec, linuxHullPath); err != nil {
-		return err
 	}
 	if err := requireDiverts(spec, linuxHullPath); err != nil {
 		return err

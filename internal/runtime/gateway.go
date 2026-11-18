@@ -505,13 +505,16 @@ func listensOn(pid int, sock string) bool {
 // ensureIsolatedGateway returns the control socket of the gateway serving this
 // sandbox alone, starting one if nothing answers on it.
 //
+// path is the run path a refusal names. hull on macOS and hull on Linux start
+// the same gateway, but a user is told the remedy of the path they are on.
+//
 // A gateway already running to serve something else is replaced rather than
 // reused. Its network and its rules are both read once, when it starts, so a
 // running one cannot be told a new rule or moved to another subnet -- and
 // reusing it would enforce the policy as it stood when the sandbox last
 // booted, or route guests on a network the process on the other end does not
 // serve. Restarting is safe here because this runs before the guest attaches.
-func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, error) {
+func ensureIsolatedGateway(bin string, path RunPath, name string, index int, policy Egress) (string, error) {
 	sock, err := isolatedSocket(name)
 	if err != nil {
 		return "", err
@@ -523,7 +526,7 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	// Below the reuse check, so the common path -- the same sandbox restarted
 	// under the same policy -- does not pay for a probe process on every boot.
 	if policy.Filtered() {
-		if err := gatewayEnforces(bin); err != nil {
+		if err := gatewayEnforcesOn(bin, path); err != nil {
 			return "", err
 		}
 	}
@@ -561,7 +564,7 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	// refusal of the route, with exit 7.
 	if err != nil && policy.Divert.Requested() {
 		prop, without := policy.Divert.refusal()
-		return "", &CapabilityError{Property: prop, Path: RunPath{"hull", "hvi"},
+		return "", &CapabilityError{Property: prop, Path: path,
 			State: Unknown, Why: "the network gateway that diverts the route's connections did not start",
 			Remedy: "Read the gateway log, or " + without, Err: err}
 	}
@@ -650,7 +653,7 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 		sock, gatewayReadyTimeout, logPath)
 }
 
-// gatewayProbeTimeout bounds the probe gatewayEnforces runs. Printing help
+// gatewayProbeTimeout bounds the probe gatewayEnforcesOn runs. Printing help
 // takes milliseconds, but the first run of a new binary on macOS can wait on
 // the system's security scan: a fresh script took 10.7s on its first run and
 // 8ms on its second. The probe refuses on a timeout, so a tight bound refuses
@@ -659,8 +662,9 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 // them with it.
 var gatewayProbeTimeout = 30 * time.Second
 
-// gatewayEnforces checks that this runtime's gateway takes egress rules at
-// all, and is called only when a policy was asked for.
+// gatewayEnforcesOn checks that this runtime's gateway takes egress rules at
+// all, and is called only when a policy was asked for. path is the run path a
+// refusal names.
 //
 // The flags arrived after hull 0.1.0-rc21, so a brig new enough to enforce a
 // policy can meet a hull that cannot. Without the check the rules reach a
@@ -676,14 +680,14 @@ var gatewayProbeTimeout = 30 * time.Second
 // brig is about to hand the rules to. Letting the boot continue was the old
 // behaviour, and it booted a sandbox under a policy nothing had confirmed
 // (#171).
-func gatewayEnforces(bin string) error {
+func gatewayEnforcesOn(bin string, path RunPath) error {
 	// A hull that reports what its gateway can do is asked that, and no
 	// probe runs. See gatewayReportOf.
 	if r, ok := gatewayReportOf(bin); ok {
 		if r.EgressDefault {
 			return nil
 		}
-		return noEgressDefault(bin)
+		return noEgressDefault(bin, path)
 	}
 	probe := bin + " network-gateway --help"
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
@@ -698,13 +702,12 @@ func gatewayEnforces(bin string) error {
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
 	}
-	// The table answers enforced for hvi, and this is where that answer
-	// meets the binary that starts the gateway. A probe that failed confirms
-	// neither answer, so it is unknown. A gateway that runs and lacks the
-	// flag is known not to enforce.
-	hvi := RunPath{"hull", "hvi"}
+	// The table answers enforced for hvi and for hull on Linux. This is
+	// where that answer meets the binary that starts the gateway on both. A
+	// probe that failed confirms neither answer, so it is unknown. A gateway
+	// that runs and lacks the flag is known not to enforce.
 	if err != nil {
-		return &CapabilityError{Property: EgressPolicy, Path: hvi, State: Unknown,
+		return &CapabilityError{Property: EgressPolicy, Path: path, State: Unknown,
 			Why:    fmt.Sprintf("the probe `%s` failed", probe),
 			Remedy: "Fix the runtime, or detach the policy",
 			Err:    err}
@@ -712,13 +715,19 @@ func gatewayEnforces(bin string) error {
 	if strings.Contains(string(out), "--egress-default") {
 		return nil
 	}
-	return noEgressDefault(bin)
+	return noEgressDefault(bin, path)
+}
+
+// gatewayEnforces is gatewayEnforcesOn for the macOS hull, whose gateway runs
+// on hvi.
+func gatewayEnforces(bin string) error {
+	return gatewayEnforcesOn(bin, macGatewayPath)
 }
 
 // noEgressDefault is the refusal of a gateway that takes no egress rules,
-// whether its help or its report said so.
-func noEgressDefault(bin string) error {
-	return &CapabilityError{Property: EgressPolicy, Path: RunPath{"hull", "hvi"}, State: CannotEnforce,
+// whether its help or its report said so. path is the run path it names.
+func noEgressDefault(bin string, path RunPath) error {
+	return &CapabilityError{Property: EgressPolicy, Path: path, State: CannotEnforce,
 		Why:    fmt.Sprintf("the network-gateway of %s has no --egress-default", bin),
 		Remedy: "Upgrade the runtime, or detach the policy"}
 }

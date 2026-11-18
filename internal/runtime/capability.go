@@ -76,12 +76,15 @@ var records = []Record{
 		"qemu takes its network from vmnet, which brig does not filter. brig enforces a policy " +
 			"at the user-mode network gateway that only the hvi backend uses",
 		"Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy"},
-	// hull on Linux boots its guest through urunc too, on a gateway of its
-	// own, which brig hands the rules, but no real run has shown it enforces
-	// them for a urunc guest. See linuxHullNoPolicyWhy. Named by
-	// the shim rather than the monitor, so BRIG_HYPERVISOR=hvi on Linux never
-	// reads the hvi row above, which is the macOS gateway's.
-	{EgressPolicy, linuxHullPath, CannotEnforce, linuxHullNoPolicyWhy, linuxHullRemedy},
+	// hull on Linux boots its guest through urunc on a network gateway of
+	// its own, the same binary as the macOS gateway. A run on 2026-11-18
+	// (hull 4bf76a6, urunc 5c6bc70, hvi 0.1.0-rc.3) refused github.com and
+	// one.one.one.one and served example.com. Named by the shim rather than
+	// the monitor, so BRIG_HYPERVISOR=hvi on Linux never reads the hvi row
+	// above. gatewayEnforces confirms the gateway at boot.
+	{EgressPolicy, linuxHullPath, Enforced,
+		"brig puts the rules on the hull network gateway that is this sandbox's only way out",
+		""},
 	{EgressPolicy, RunPath{"nerdctl", anyBackend}, Enforced,
 		"brig puts the rules in nftables on the bridge of the sandbox's own network, and answers its DNS",
 		""},
