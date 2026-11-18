@@ -2625,8 +2625,11 @@ YAML
   done
   lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
 
-  # A routed policy is still refused: nothing has shown the gateway routes
-  # brig.internal on hull on Linux. It exits 7 and nothing reaches hull.
+  # A routed policy boots: the gateway answers brig.internal with its own
+  # address and diverts port 443 of it to the broker, as on hvi. The run goes
+  # through brig-stored, whose store holds the route's secret, and the broker
+  # helper. Offline there is no gateway to route through, so the same policy
+  # is refused with exit 7, naming the path, and nothing reaches hull.
   cat > "$lh/policies/lh-route.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
 kind: Policy
@@ -2640,14 +2643,30 @@ spec:
         secretRef: { name: claude-credentials }
 YAML
   lh_brig policy attach lh-route claude-code > /dev/null 2>&1
+  lh_stored() {
+    STUB_HULL_VERSION='dev (go1.26.8, linux/amd64)' STUB_LOG="$lh/argv.log" STUB_STATE="$lh/sandbox" \
+      BRIG_WORKSPACE="$lh/ws" BRIG_STATE_DIR="$lh/state" BRIG_GATEWAY_DIR="$lh/gw" \
+      BRIG_POLICY_DIR="$lh/policies" BRIG_BROKER_BIN="$WORK/brig-broker-helper" \
+      BRIG_TEST_SECRETS=claude-credentials "$WORK/brig-stored" "$@"
+  }
   : > "$lh/argv.log"
-  BRIG_HYPERVISOR=hvi BRIG_TEST_SECRETS=claude-credentials lh_brig run claude -d > "$lh/route.out" 2>&1; rc=$?
-  [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/route.out" \
-    && ok "hull on Linux refuses a routed policy with exit 7, naming its path" \
-    || bad "hull on Linux refuses a routed policy with exit 7 -- got $rc: $(cat "$lh/route.out")"
+  BRIG_HYPERVISOR=hvi lh_stored run claude -d > "$lh/route.out" 2>&1; rc=$?
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots a routed policy" \
+    || bad "hull on Linux boots a routed policy -- got $rc: $(cat "$lh/route.out")"
+  grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--host brig.internal=' \
+    && grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--divert [0-9.]*:443=' \
+    && ok "the routed sandbox's gateway answers brig.internal and diverts its port 443" \
+    || bad "the routed sandbox's gateway has no brig.internal record or divert: $(grep '^argv: network-gateway --socket' "$lh/argv.log")"
+  lh_stored rm --all -y > /dev/null 2>&1
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=hvi lh_stored run claude --offline -d > "$lh/route-off.out" 2>&1; rc=$?
+  [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/route-off.out" \
+    && ok "hull on Linux refuses a routed policy offline with exit 7, naming its path" \
+    || bad "hull on Linux refuses a routed policy offline with exit 7 -- got $rc: $(cat "$lh/route-off.out")"
   grep -q '^argv: run ' "$lh/argv.log" \
-    && bad "hull on Linux was asked to boot a routed policy" \
-    || ok "nothing reached hull on Linux for a routed policy"
+    && bad "hull on Linux was asked to boot a routed policy offline" \
+    || ok "nothing reached hull on Linux for a routed policy offline"
   lh_brig policy detach lh-route claude-code > /dev/null 2>&1
 
   # The shipped profile sets network: isolated, which this section otherwise

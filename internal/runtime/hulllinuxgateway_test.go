@@ -193,8 +193,8 @@ func TestLinuxHullSandboxNetworkReadsTheGatewaySocket(t *testing.T) {
 
 // brig policy check asks through EgressServed, and answers as the run does:
 // an egress-only policy is served on hull on Linux on hvi, from its own row,
-// and refused as unenforced on any other monitor. A route mode is still
-// refused there, and the macOS rows answer as before.
+// and refused as unenforced on any other monitor. The macOS rows answer as
+// before.
 func TestEgressServedOnHullOnLinuxOnlyOnHvi(t *testing.T) {
 	spec := RunSpec{Net: "isolated", Egress: Egress{Default: "deny"}}
 	for _, hv := range []string{"", "hvi", "vz"} {
@@ -221,9 +221,9 @@ func TestEgressServedOnHullOnLinuxOnlyOnHvi(t *testing.T) {
 	if err := EgressServed(&hull{bin: "hull"}, "hvi", spec); err != nil {
 		t.Errorf("the macOS hull on hvi: %v", err)
 	}
-	// Route mode stays refused on hull on Linux.
-	if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); !errors.As(err, &refusal) {
-		t.Errorf("route mode on hull on Linux: %v, want a capability refusal", err)
+	// Route mode is served on hull on Linux.
+	if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); err != nil {
+		t.Errorf("route mode on hull on Linux: %v", err)
 	}
 }
 
