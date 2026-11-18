@@ -174,6 +174,24 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 	}
 }
 
+// requireMicroVM is the refusal for a run that required a microVM and would not
+// get one the ISOLATION row can establish, or nil when nothing was required.
+//
+// It reads what the row reads, so the row and the refusal cannot disagree. A
+// run with no runtime in hand establishes nothing, and is refused too: this
+// check is the one that must not be waved through on a missing answer.
+func (c *Config) requireMicroVM(hypervisor string) error {
+	if !c.needMicroVM {
+		return nil
+	}
+	got := runtime.Isolation{Boundary: runtime.BoundaryUnknown,
+		Detail: "no runtime, so brig cannot tell what a sandbox here would stand on"}
+	if c.Runtime != nil {
+		got = c.Runtime.Isolation(c.backendSpec(hypervisor))
+	}
+	return runtime.RequireMicroVM(got)
+}
+
 // checkBackend refuses a run this backend cannot honour, before anything is
 // started -- and, unlike the check inside Run, on the path that finds the
 // sandbox already up and boots nothing.
@@ -186,19 +204,9 @@ func (c *Config) checkBackend(hypervisor string) error {
 	// First, so a run that required a microVM gets this refusal and its code
 	// for everything short of one. CanRun refuses a shim brig knows shares the
 	// host kernel on its own, as exit 1, and a script that asked for a microVM
-	// reads 7 for every way of not getting one. It reads what the ISOLATION
-	// row reads, so the row and the refusal cannot disagree. A run with no
-	// runtime in hand establishes nothing, and is refused too: this check is
-	// the one that must not be waved through on a missing answer.
-	if c.needMicroVM {
-		got := runtime.Isolation{Boundary: runtime.BoundaryUnknown,
-			Detail: "no runtime, so brig cannot tell what a sandbox here would stand on"}
-		if c.Runtime != nil {
-			got = c.Runtime.Isolation(c.backendSpec(hypervisor))
-		}
-		if err := runtime.RequireMicroVM(got); err != nil {
-			return err
-		}
+	// reads 7 for every way of not getting one.
+	if err := c.requireMicroVM(hypervisor); err != nil {
+		return err
 	}
 	var err error
 	if checker, ok := c.Runtime.(runtime.RunChecker); ok {
