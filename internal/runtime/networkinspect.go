@@ -121,16 +121,20 @@ func (h *hull) SandboxNetwork(name string) (string, error) {
 // There is no VMM command line there: urunc boots the guest, and hull inspect
 // prints cmdLine empty. hull labels the container with the network its run
 // attached instead, and prints the label as network, for a stopped instance
-// too. none and shared are the postures of the same names: shared is the CNI
-// bridge every sandbox joins. gateway is a hull network gateway, which brig
-// does not boot on Linux yet and whose socket inspect does not name, so it
-// cannot say whether the gateway was the sandbox's own. A container with no
-// label, from another client or an older hull, is unknown, as is anything
-// else: neither is evidence of a shared network.
+// too, and the gateway's control socket as gatewaySocket.
+//
+// none is offline. gateway is a hull network gateway, read from its socket
+// as on macOS: the sandbox's own is isolated, any other shared. shared is
+// hull's CNI bridge, which brig no longer boots on but a sandbox started
+// before it moved to the gateway still has: every sandbox on it shares it. A
+// container with no label, from another client or an older hull, is unknown,
+// as is a gateway with no socket and anything else: neither is evidence of a
+// shared network.
 func linuxHullSandboxNetwork(name string, out []byte) (string, error) {
 	var state struct {
-		ID      string `json:"id"`
-		Network string `json:"network"`
+		ID            string `json:"id"`
+		Network       string `json:"network"`
+		GatewaySocket string `json:"gatewaySocket"`
 	}
 	if err := json.Unmarshal(out, &state); err != nil {
 		return "", fmt.Errorf("inspect network of %s: invalid hull response: %w", name, err)
@@ -141,6 +145,11 @@ func linuxHullSandboxNetwork(name string, out []byte) (string, error) {
 	switch state.Network {
 	case "none", "shared":
 		return state.Network, nil
+	case "gateway":
+		if state.GatewaySocket == "" {
+			return "", fmt.Errorf("inspect network of %s: hull names no socket for its gateway", name)
+		}
+		return inspectedGatewayControl(name, state.GatewaySocket)
 	case "":
 		return "", fmt.Errorf("inspect network of %s: hull recorded no network for it", name)
 	}

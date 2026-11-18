@@ -53,6 +53,7 @@ backend.
 | hull on `hvi` | Hypervisor.framework directly, through the `hvi` microVM monitor | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | yes. It is the only backend that runs a network gateway of its own |
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
 | nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux | refused | yes. Brig creates a network for each sandbox |
+| hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, when `BRIG_RUNTIME=hull` | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
 
 The nine shipped profiles divide as follows on macOS:
 
@@ -86,7 +87,7 @@ comes from one table, shown in
 | hull on `hvi`, with no report | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
-| hull on Linux, on any monitor | `cannot enforce` | no probe runs. hull on Linux gives a sandbox no network of its own yet |
+| hull on Linux, on any monitor | `cannot enforce` | no probe runs. Brig hands the rules to the sandbox's network gateway, but has not yet proven on a real hull on Linux that the gateway enforces them |
 | docker on any shim | `cannot enforce` | no probe runs |
 | hull on a backend that the policies table does not name | `unknown` | |
 
@@ -114,7 +115,7 @@ transport where the mode is served.
 | hull on `hvi` | `enforced` over `brig.internal`, when its gateway takes `--divert` and the run has a network |
 | hull on `vz` | `cannot enforce`: vz takes its network from vmnet, and Brig routes `brig.internal` at the gateway only `hvi` uses |
 | hull on `qemu` | `cannot enforce`, as on `vz` |
-| hull on Linux, on any monitor | `cannot enforce`: hull on Linux gives a sandbox no network of its own yet, where Brig routes `brig.internal` |
+| hull on Linux, on any monitor | `cannot enforce`: Brig has not yet proven on a real hull on Linux that the sandbox's network gateway routes `brig.internal` |
 | nerdctl on urunc | `enforced` over `brig.internal`, when `nft` is installed. A run with a route takes the `isolated` posture |
 | nerdctl on runc | `cannot enforce`: Brig boots no shim that gives the guest the host's own kernel |
 | docker | `cannot enforce`: docker manages its own bridges and firewall |
@@ -385,10 +386,22 @@ On an old build, Brig drops one feature at a time:
 - `exec -u root`. Brig uses it to mount a tmpfs inside a running sandbox.
   Container runtimes get their tmpfs at create time
   (`internal/wrap/secretfiles.go`).
-- `network-gateway`, for the `hvi` backend, which has no egress of its own.
-  Brig starts one gateway for each isolated sandbox and one shared gateway
-  for the sandboxes that request `shared`, and assigns the addresses on
-  those networks. Guests on one shared gateway can reach each other. See
+- `network-gateway`, for the `hvi` backend, which has no egress of its own,
+  and for every networked sandbox on hull on Linux, which urunc joins to the
+  gateway through `hvi`. Brig starts one gateway for each isolated sandbox
+  and one shared gateway for the sandboxes that request `shared`, and assigns
+  the addresses on those networks. Guests on one shared gateway can reach
+  each other. `brig rm --all` stops the shared gateway once no guest is on
+  it. On Linux the process table does not show the guests, so Brig asks the
+  gateway (`GET /members`) and checks that hull lists no instance on it. It
+  keeps a gateway from a hull too old to answer, and one it cannot check.
+  On Linux, hvi joins the gateway as the image's user, and only the user
+  who runs Brig may write to the gateway's socket. A guest whose image user
+  maps to another host user boots with no network. On a rootless install
+  that is any image with a non-root `USER`. hull warns and the boot goes on,
+  and Brig prints that warning. Letting the image's user join is hull's and
+  urunc's to change.
+  See
   [Things Brig does not claim](security.md#things-brig-does-not-claim) for the
   answer per backend.
 
@@ -430,7 +443,7 @@ guest that all of the sandbox's traffic crosses, and Brig owns it. The
 network belongs to the sandbox, and the user owns its namespace, rootless or
 not. The bridge covers any shim that attaches the sandbox to it. A filter
 inside the guest is one that the guest can remove, and the user-mode
-gateway of hull does not build on Linux.
+gateway of hull is not on nerdctl's path.
 
 **urunc** must read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the OCI spec of the container, and boot
@@ -441,6 +454,12 @@ that monitor and find its binary. An overlay root adds
 `com.urunc.unikernel.rootfsMode=overlay-block`, which needs the urunc of the
 `feat/linux-overlay-block` branch. See
 [The guest root of a generic boot](#the-guest-root-of-a-generic-boot).
+
+On hull on Linux, a networked sandbox joins its network gateway through
+`com.urunc.unikernel.netSocket`, `netAddress` and `netGateway`, which
+urunc reads from urunc-dev/urunc@5c6bc70 on. The runtime bundle
+v0.1.0-rc21 carries an older urunc, which ignores them. hull then refuses
+the start, so on that bundle no networked sandbox boots on hull.
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its

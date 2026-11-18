@@ -14,6 +14,12 @@ func inspectedGateway(name, socket string) (string, error) {
 	if !ok || control == "" {
 		return "", fmt.Errorf("inspect network of %s: unrecognised gateway socket", name)
 	}
+	return inspectedGatewayControl(name, control)
+}
+
+// inspectedGatewayControl is inspectedGateway from the gateway's control
+// socket, which hull on Linux prints where macOS has the VMM's argv.
+func inspectedGatewayControl(name, control string) (string, error) {
 	if sandboxSocketName(control) {
 		if recordedSpec(control) != "" {
 			return "isolated", nil

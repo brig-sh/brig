@@ -33,7 +33,9 @@ import (
 //   - shared: one gateway for the host, serving every sandbox that asked for
 //     the shared network. It is host-wide: every brig state dir and every
 //     session on this host uses the same socket, so whether anything is on it
-//     is read from the process table. See sharedGatewayProcs.
+//     is read from the process table on macOS (see sharedGatewayProcs), and
+//     from the gateway's guest list and hull's instances on hull on Linux
+//     (see hull.PruneSharedNetwork).
 //   - isolated: a gateway per sandbox, each on a /30 of its own out of the
 //     same space. No other sandbox is on that network, whatever the backend
 //     would have done with a shared one.
@@ -268,7 +270,16 @@ func gatewayLogPath(sock string) string  { return strings.TrimSuffix(sock, ".soc
 // This runs before `hull run`, so the sandbox being booted is not yet in the
 // process table. The lease stands in for it until the release. See
 // leaseSharedGateway.
-func ensureGateway(bin string) (string, func(), error) {
+func ensureGateway(bin string) (string, func(), error) { return ensureSharedGateway(bin, true) }
+
+// ensureSharedGateway is ensureGateway. membersSeen says whether the process
+// table shows the guests on the gateway, which it does on macOS, where hvi's
+// argv names the socket. On hull on Linux it does not: urunc binds the socket
+// into hvi's root and hvi names it there, at a path every gateway guest
+// shares. With no way to tell an unused gateway from one with guests, an old
+// one is reused rather than stopped. It cannot publish a port, and hull on
+// Linux publishes none.
+func ensureSharedGateway(bin string, membersSeen bool) (string, func(), error) {
 	sock, err := gatewaySocket()
 	if err != nil {
 		return "", nil, err
@@ -279,7 +290,7 @@ func ensureGateway(bin string) (string, func(), error) {
 	}
 	if gatewayReachable(sock) {
 		// The API answering is the common case, and it costs no ps.
-		if !apiMissing(sock) || !stopOldGateway(sock, lease) {
+		if !membersSeen || !apiMissing(sock) || !stopOldGateway(sock, lease) {
 			return sock, release, nil
 		}
 		// Something still answers: a stop that failed, or a gateway another
@@ -984,7 +995,7 @@ func recordedSpec(sock string) string {
 // depends on it, and there is no answer to "the kill failed" worth
 // interrupting a `brig rm` with. The shared gateway is never stopped here: it
 // serves sandboxes this one knows nothing about. PruneSharedNetwork stops it,
-// once the process table shows nothing on it.
+// once nothing is on it.
 func shutDownGateway(name string) {
 	sock, err := isolatedSocket(name)
 	if err != nil {

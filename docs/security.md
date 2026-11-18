@@ -53,10 +53,10 @@ use a delivered credential, as any holder can, for as long as it holds it.
 
 | Case | Posture |
 | --- | --- |
-| New sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
+| New sandbox on `hvi`, or on Linux with nerdctl or hull | `isolated` |
 | The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
-| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl and `hvi`. The backend fallback on `vz`, `qemu` or hull on Linux |
-| Custom profile without a network choice, on `vz`, `qemu` or hull on Linux | `shared`. `brig info` names that fallback |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl, `hvi` and hull on Linux. The backend fallback on `vz` or `qemu` |
+| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
 | Existing sandbox | Its recorded posture |
 | Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
 
@@ -1423,12 +1423,11 @@ reaches only the broker. See [Transports](broker.md#transports).
 ### Sandbox to sandbox
 
 If two agents must not reach each other, run both with `--network isolated`
-on `hvi` or on Linux with nerdctl. On `vz` and on `qemu`, where that posture
-is refused, run them on separate hosts. hull on Linux refuses it too: use
-nerdctl there.
+on `hvi`, or on Linux with nerdctl or hull. On `vz` and on `qemu`, where that
+posture is refused, run them on separate hosts.
 
-`isolated` is the guarantee. It is the default for new `hvi` and nerdctl
-sandboxes unless another posture is named (see
+`isolated` is the guarantee. It is the default for new `hvi`, nerdctl and
+hull on Linux sandboxes unless another posture is named (see
 [Network posture](#network-posture)). `--network isolated` also moves an
 existing shared sandbox onto it.
 
@@ -1436,10 +1435,20 @@ existing shared sandbox onto it.
 that network, whatever the backend does with a shared one. A sandbox that
 carries an egress policy is isolated whether or not it asked to be.
 
-`isolated` is **refused** on `vz`, on `qemu` and on hull on Linux, where Brig
-owns no network to give. A run that asks for it there is stopped and told which backend
+`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network
+to give. A run that asks for it there is stopped and told which backend
 implements it. It is never booted onto the shared network under a row that
 claims otherwise.
+
+hull on Linux gives each networked sandbox a hull network gateway, as `hvi`
+does on macOS: one of its own when it is isolated, and one shared gateway for
+every `shared` sandbox. Brig never puts a sandbox on hull's own CNI bridge,
+where every sandbox is on one L2 segment whatever its posture. A gateway
+needs `hvi`, so a networked run on another monitor is refused. hvi joins the
+gateway as the image's user, and only the user who runs Brig may write to
+its socket. So a guest whose image user maps to another host user has no
+network at all. On a rootless install that is any image with a non-root
+`USER`. Brig prints hull's warning when that happens.
 
 The guarantee is about reachability, not resources. An isolated sandbox
 costs one more network on the host. `brig rm --all`
@@ -1451,7 +1460,7 @@ network. A sandbox gets `shared` in these cases:
 - A flag, a setting or a profile chooses it.
 - An older sandbox keeps it, if it was recorded or recovered from the
   runtime.
-- `vz`, `qemu` and hull on Linux use it when no posture is named.
+- `vz` and `qemu` use it when no posture is named.
 
 Whether the shared network forwards traffic from one guest to another is the
 runtime's behaviour, not Brig's. The measurements are in
@@ -1462,6 +1471,7 @@ runtime's behaviour, not Brig's. The measurements are in
 | `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. An earlier hull release gave "no" on the shared network. What changed the answer is not known |
 | `vz` on macOS | not measured on a current hull |
 | `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
+| Linux, hull/urunc microVMs | **yes** on `shared`. Measured on 2026-11-16 with hull `28f4238`, urunc `5c6bc70` and the `hvi` of brig-standalone-linux v0.1.0-rc21: one microVM fetched the other's marker over the shared gateway. With each on a gateway of its own, the same request timed out while an outbound connection and the listener's self-check passed. Before Brig moved hull on Linux to the gateway, a sandbox was on hull's CNI bridge, where one sandbox reached another's listener whatever posture either had |
 | Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker. On separate isolated networks, the same request timed out while connection controls passed. The [ARM run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented console and runtime setup workarounds. The [amd64 run](manual-tests/sandbox-reachability.md#2026-10-02-linux-amd64-with-the-stock-runtime) on 2026-10-02 gave the same results with the shipped runtime, unmodified |
 
 So on Linux and on `hvi`, two agents on `shared` that you gave *different*
