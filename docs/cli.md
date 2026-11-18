@@ -1322,6 +1322,10 @@ retired spelling of `brig sh`, refuse a policy with `7`:
 - on Linux, when Brig cannot check that the host enforces it
 - on a macOS backend that Brig does not know
 
+`brig policy check` refuses the policy with `7` before a run is tried: on
+`vz` or `qemu`, on docker and on hull on Linux. It does not run the probes a
+run makes, so it passes the cases above that need one.
+
 The code is `7` whether a flag, `BRIG_NETWORK` or the profile's `network:`
 chose the posture.
 

@@ -42,7 +42,9 @@ brig policy check claude-code
 Fill it in as shown above. With a document on stdin, such as a heredoc, it
 checks and writes that document instead and opens no editor.
 `brig policy check` names each policy bound to the profile, and says where
-Brig can enforce it:
+Brig can enforce it. On a host where a run of the profile cannot enforce the
+egress rules, check refuses them with exit status `7`, as the run does. On
+Linux with nerdctl, or on macOS with `BRIG_HYPERVISOR=hvi`, it prints:
 
 ```
 locked-down
@@ -967,7 +969,8 @@ bindings.
 
 `check` lists every policy that applies to one profile or, with `-n`, to one
 of its sessions. It covers inline, profile-level and session-level bindings.
-It also runs the same refusal as `attach`:
+It also runs the same refusal as `attach`. On Linux with nerdctl, or on macOS
+with `BRIG_HYPERVISOR=hvi`:
 
 ```console
 $ brig policy check claude-code
@@ -978,19 +981,25 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-`check` does three checks:
+`check` does four checks:
 
 1. Is the profile `kind: shell` or `kind: gui`? Such a profile can never
    enforce a policy.
 2. Does every bound name still resolve to a policy that loaded?
 3. Can the routes of the bound policies apply together? See
    [Several policies with routes](#several-policies-with-routes).
+4. Can a run of the profile on this host enforce the egress rules? Where it
+   cannot, on `vz`, `qemu`, docker or hull on Linux, `check` refuses them
+   with exit status `7`, as the run does. An offline run passes, and with no
+   runtime on the host this check is skipped.
 
 For a policy with routes, `check` also prints the routes and the posture.
 See [What check prints for routes](#what-check-prints-for-routes).
 
-For a policy without routes, `check` does not look at the runtime, so it
-cannot tell you whether this host will boot the run or refuse it. See
+`check` reads which run paths enforce the rules, and not the probes a boot
+runs. So a run that `check` passes can still be refused: on `hvi`, when the
+runtime is too old to enforce the rules, and on Linux, when Brig cannot check
+that the host enforces them. See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 `--force` on `rm`, or on a rename, can leave a binding that points at a name

@@ -1274,8 +1274,10 @@ func checkPolicy(args []string) error {
 	// so before one is tried. A microVM or a container guest reaches an
 	// endpoint route at brig.internal on its own gateway. See routeRefusal in
 	// internal/wrap.
+	// Detected once for both checks below: each detection may run the
+	// runtime's binary.
+	rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
 	if modes, byMode := routeModes(loaded); len(modes) > 0 {
-		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
 		for _, m := range modes {
 			err := detectErr
 			if err != nil {
@@ -1287,6 +1289,15 @@ func checkPolicy(args []string) error {
 				return fmt.Errorf("policy %s declares a route in mode %s, and brig refuses the run "+
 					"before boot: %w", strings.Join(byMode[m], ", "), m, err)
 			}
+		}
+	}
+	// A boot refuses egress rules its run path does not enforce, with exit 7,
+	// so check refuses them too rather than print its note and exit 0. With
+	// no runtime here there is no run path to ask, and the note stands.
+	if detectErr == nil {
+		if err := wrap.EgressServed(p, rt, loaded); err != nil {
+			return fmt.Errorf("the egress rules bound to %s cannot be enforced, and brig refuses "+
+				"the run before boot: %w", p.Name, err)
 		}
 	}
 	// A route is served on the sandbox's own gateway address, so a run with
