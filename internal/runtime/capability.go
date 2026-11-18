@@ -161,6 +161,15 @@ func (e *CapabilityError) Error() string {
 
 func (e *CapabilityError) Unwrap() error { return e.Err }
 
+// EgressServed returns why a run of spec on rt, on the hypervisor named, would
+// be refused for its egress rules, or nil. The path is the one the run takes,
+// and the answer is the one its CanRun reads, so brig policy check refuses
+// what the run refuses. The boot's probes are not run: a path the table holds
+// as enforced can still fail at boot on a host whose gateway or nft cannot.
+func EgressServed(rt Runtime, hypervisor string, spec RunSpec) error {
+	return requireEgress(spec, RoutePath(rt, hypervisor))
+}
+
 // requireEgress refuses a run whose path does not enforce the policy it
 // carries. A run with no policy asks nothing. An offline run asks nothing
 // either: it reaches no network, so it satisfies every rule set. Refusing it

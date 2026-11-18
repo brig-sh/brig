@@ -1129,6 +1129,17 @@ func TestRemovePolicyFailsClosedOnAMalformedAttachmentsFile(t *testing.T) {
 	}
 }
 
+// egressEnforced pins brig policy check to a run path that enforces egress
+// rules, hull on hvi, for a test about something else. check asks the host's
+// runtime otherwise, and refuses the rules on one that cannot enforce them.
+func egressEnforced(t *testing.T) {
+	t.Helper()
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return doctorRuntime{bin: "hull"}, nil
+	})
+}
+
 // loadTestProfiles points the profile registry at a fresh, empty directory
 // and loads it, so a test sees only the built-ins (claude-code, ubuntu, ...)
 // with nothing left over from another test.
@@ -1748,6 +1759,7 @@ func TestAttachSaysWhereThePolicyIsEnforced(t *testing.T) {
 // the names and exits zero -- the one answer most likely to be read as a
 // verdict everywhere, so it carries the same note about where it holds.
 func TestCheckSaysWhereThePolicyIsEnforced(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1796,6 +1808,7 @@ func TestCheckOmitsTheNoteWhenThereIsNothingToMisread(t *testing.T) {
 }
 
 func TestCheckListsTheEffectivePolicies(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1817,6 +1830,7 @@ func TestCheckListsTheEffectivePolicies(t *testing.T) {
 // above must not leak into a check for a profile that never got it, and a
 // session-only attach must show up only with -n.
 func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1847,6 +1861,7 @@ func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
 // spelling of --name that starts session foo gets foo's answer here -- what
 // this command reports and what a boot applies are one thing.
 func TestCheckFollowsTheSlugTheRunUses(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -2063,6 +2078,7 @@ const noNetEnvelope = "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  
 // reported as retired. The notice goes to stderr, and stdout stays one name
 // per line.
 func TestCheckReportsTheFlatFormAsRetired(t *testing.T) {
+	egressEnforced(t)
 	for _, c := range []struct {
 		name, body string
 		retired    bool
@@ -2560,5 +2576,59 @@ func TestPolicyCheckPrintsRequestAllow(t *testing.T) {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr lacks\n%s\nin:\n%s", want, stderr)
 		}
+	}
+}
+
+// kindRuntime is a runtime of any kind, for a run path check reads by kind.
+type kindRuntime struct {
+	doctorRuntime
+	kind string
+}
+
+func (r kindRuntime) Kind() string { return r.kind }
+
+// Negative: check refuses an egress-only policy on a run path that cannot
+// enforce it, with the exit status the run refuses it with. It printed its
+// general note and exited 0, and brig run then exited 7. A path that enforces
+// the rules passes, and so does an offline run, which reaches no network.
+func TestCheckRefusesEgressTheRunCannotEnforce(t *testing.T) {
+	for _, c := range []struct {
+		name, kind, hv, network, want string
+	}{
+		{"hull on vz", "hull", "vz", "", "vz takes its network from vmnet"},
+		{"hull on qemu", "hull", "qemu", "", "qemu takes its network from vmnet"},
+		{"docker", "docker", "", "", "does not filter docker's"},
+		{"nerdctl", "nerdctl", "", "", ""},
+		{"hull on hvi", "hull", "hvi", "", ""},
+		{"offline on vz", "hull", "vz", "offline", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_NETWORK", c.network)
+			stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+				return kindRuntime{doctorRuntime{bin: c.kind}, c.kind}, nil
+			})
+			writePolicyFile(t, dir, "no-net", noNetBody)
+			loadTestProfiles(t)
+			if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			captureStderr(t, func() {
+				_, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+			})
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("check refused a path that enforces the rules: %v", err)
+				}
+				return
+			}
+			if exitCode(err) != exitCapability || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("check = %v (exit %d), want exit %d saying %q",
+					err, exitCode(err), exitCapability, c.want)
+			}
+		})
 	}
 }

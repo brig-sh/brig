@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,5 +186,21 @@ func TestLinuxHullSandboxNetworkReadsTheGatewaySocket(t *testing.T) {
 				t.Fatalf("SandboxNetwork = %q, %v; want %q", got, err, tt.want)
 			}
 		})
+	}
+}
+
+// Negative: hull on Linux is refused egress rules whatever hypervisor is
+// named, as its run is: it never reads the hvi row, which is the macOS
+// gateway's. brig policy check asks through EgressServed.
+func TestEgressServedRefusesHullOnLinuxOnEveryHypervisor(t *testing.T) {
+	spec := RunSpec{Net: "isolated", Egress: Egress{Default: "deny"}}
+	for _, hv := range []string{"", "hvi", "vz"} {
+		var refusal *CapabilityError
+		if err := EgressServed(linuxHull(), hv, spec); !errors.As(err, &refusal) {
+			t.Errorf("%q: %v, want a capability refusal", hv, err)
+		}
+	}
+	if err := EgressServed(&hull{bin: "hull"}, "hvi", spec); err != nil {
+		t.Errorf("the macOS hull on hvi: %v", err)
 	}
 }
