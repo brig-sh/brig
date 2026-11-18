@@ -1570,13 +1570,19 @@ func checkIsolation(v string) error {
 // without the thing it required and say so only where a script is not
 // looking. So the flag is refused, and the line says where it goes.
 //
-// The tail on sh is the guest's command from its first word, and a tail after
-// -- is the agent's by the typist's own word, so neither is read here.
+// The tail on sh and on exec is the guest's command from its first word, and a
+// tail after -- is the agent's by the typist's own word, so neither is read
+// here. The -- can come after words brig already handed on, as in `run claude
+// --resume -- --isolation`, so the scan stops at it and does not rely on the
+// caller having cut the tail there.
 func refuseRequirementInTail(verb string, tail []string) error {
-	if !forwardsTail(verb) || verb == "sh" {
+	if !forwardsTail(verb) || verb == "sh" || verb == "exec" {
 		return nil
 	}
 	for _, a := range tail {
+		if a == "--" {
+			return nil
+		}
 		if name, _, _ := strings.Cut(a, "="); name == "--isolation" {
 			return usagef("--isolation is brig's flag and stands here in the agent's arguments, "+
 				"where brig would not read it and the run would boot without the requirement. "+

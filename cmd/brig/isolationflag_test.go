@@ -183,3 +183,46 @@ func TestCompleteIsolation(t *testing.T) {
 		t.Errorf("run --is does not offer --isolation: %v", got)
 	}
 }
+
+// The tail that is refused is the one brig itself ended, and no more. A -- in
+// it is the typist saying the rest is the agent's, as it is when it comes
+// first, so a flag after it is not read; and on exec, as on sh, the tail is the
+// guest's command from its first word. Both lines forwarded before the flag
+// existed, so refusing them is a regression, and the advice to put the flag
+// before the profile is wrong for a line that never asked for the requirement.
+func TestParseDoesNotReadPastDashDashOrIntoAnExecCommand(t *testing.T) {
+	for name, tc := range map[string]struct {
+		verb string
+		args []string
+		tail string
+	}{
+		"a -- after an unknown flag":   {"run", []string{"claude", "--resume", "--", "--isolation", "microvm"}, "--resume -- --isolation microvm"},
+		"a -- after the agent's words": {"run", []string{"claude", "-p", "hi", "--", "--isolation=microvm"}, "-p hi -- --isolation=microvm"},
+		"a guest command on exec":      {"exec", []string{"claude", "mytool", "--isolation", "strict"}, "mytool --isolation strict"},
+		"a guest command after --":     {"exec", []string{"claude", "mytool", "--", "--isolation", "strict"}, "mytool -- --isolation strict"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, _, tail, err := parse(tc.verb, tc.args)
+			if err != nil {
+				t.Fatalf("parse = %v, want the line forwarded as it was", err)
+			}
+			if o.load.Isolation != "" {
+				t.Errorf("brig read the agent's --isolation: %q", o.load.Isolation)
+			}
+			if got := strings.Join(tail, " "); got != tc.tail {
+				t.Errorf("tail = %q, want %q", got, tc.tail)
+			}
+		})
+	}
+
+	// What stays refused: a flag that stands before the --, in the part brig
+	// ended itself, on a verb whose tail is the agent's.
+	for _, args := range [][]string{
+		{"claude", "--resume", "--isolation", "microvm", "--", "-p"},
+		{"claude", "-p", "hi", "--isolation=microvm", "--", "-p"},
+	} {
+		if _, _, _, err := parse("run", args); err == nil {
+			t.Errorf("run %v: the requirement was handed to the agent", args)
+		}
+	}
+}
