@@ -319,6 +319,20 @@ type hullDouble struct {
 
 func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 	t.Helper()
+	return hullDoubleWith(t, helpCase(help, exit), "0")
+}
+
+// helpCase is the shell case that answers `network-gateway --help` with help
+// and exits with exit.
+func helpCase(help, exit string) string {
+	return "  case \" $* \" in *\" --help \"*) cat <<'EOF'\n" + help + "EOF\n  exit " + exit + ";; esac\n"
+}
+
+// hullDoubleWith writes the double newHullDouble describes. gateway is shell
+// run first for a `network-gateway` call, before the double records the
+// --qemu-socket it was handed, and `run` exits runExit.
+func hullDoubleWith(t *testing.T, gateway, runExit string) *hullDouble {
+	t.Helper()
 	scratchIsolatedDir(t)
 	dir := t.TempDir()
 	d := &hullDouble{bin: filepath.Join(dir, "hull"), log: filepath.Join(dir, "calls")}
@@ -326,9 +340,10 @@ func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 	script := "#!/bin/sh\n" +
 		"echo \"$*\" >> '" + d.log + "'\n" +
 		"if [ \"$1\" = network-gateway ]; then\n" +
-		"  case \" $* \" in *\" --help \"*) cat <<'EOF'\n" + help + "EOF\n  exit " + exit + ";; esac\n" +
+		gateway +
 		"  prev=''; for a in \"$@\"; do [ \"$prev\" = --qemu-socket ] && echo \"$a\" > '" + ready + "'; prev=\"$a\"; done\n" +
 		"fi\n" +
+		"[ \"$1\" = run ] && exit " + runExit + "\n" +
 		"exit 0\n"
 	if err := os.WriteFile(d.bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -385,9 +400,59 @@ func newLinuxHullDouble(t *testing.T, help, exit string) (*hull, *hullDouble) {
 	return &hull{bin: d.bin, linux: true}, d
 }
 
+// routingHelp is the help of a gateway that takes both the rules and the
+// diverts.
+const routingHelp = egressHelp + "   --divert string   host:port=socket\n"
+
+// newRoutingHullDouble returns a hull, on Linux when linux is set, whose
+// gateway takes the rules and the diverts, so a run with brig.internal or a
+// route reaches its boot. The link-local probe hands the gateway two
+// identical diverts and no --qemu-socket, and this one answers "diverted
+// twice" as a hull that takes a link-local divert does. runExit is what
+// `hull run` exits with, so a test can fail the boot after the forwards were
+// installed and see them withdrawn.
+func newRoutingHullDouble(t *testing.T, linux bool, runExit string) (*hull, *hullDouble) {
+	t.Helper()
+	if linux {
+		overlayHost(t)
+	}
+	probe := "  case \" $* \" in *\" --qemu-socket \"*) ;; *\" --divert \"*) cat >&2 <<'EOF'\n" +
+		newHullAnswer + "\nEOF\n  exit 1;; esac\n"
+	d := hullDoubleWith(t, helpCase(routingHelp, "0")+probe, runExit)
+	return &hull{bin: d.bin, linux: linux}, d
+}
+
 func (d *hullDouble) calls() string {
 	blob, _ := os.ReadFile(d.log)
 	return string(blob)
 }
 
 func (d *hullDouble) called(s string) bool { return strings.Contains(d.calls(), s) }
+
+// The divert and link-local probes name the run path they are asked for, so a
+// hull on Linux with a gateway too old for a route is told its own path and
+// the macOS hull keeps hull on hvi. The routing double passes both probes on
+// either path.
+func TestTheDivertProbesNameThePathAsked(t *testing.T) {
+	for _, linux := range []bool{false, true} {
+		h, _ := newRoutingHullDouble(t, linux, "0")
+		if err := h.ProbeBrigInternal(); err != nil {
+			t.Errorf("linux=%v: ProbeBrigInternal = %v, want nil", linux, err)
+		}
+		if err := h.ProbeLinkLocal(); err != nil {
+			t.Errorf("linux=%v: ProbeLinkLocal = %v, want nil", linux, err)
+		}
+	}
+	for _, path := range []RunPath{linuxHullPath, macGatewayPath} {
+		d := newHullDouble(t, egressHelp, "0")
+		var ce *CapabilityError
+		if err := gatewayDivertsOn(d.bin, path); !errors.As(err, &ce) || ce.Path != path ||
+			ce.State != CannotEnforce {
+			t.Errorf("gatewayDivertsOn(%v) of a gateway with no --divert = %v, want CannotEnforce on that path",
+				path, err)
+		}
+		if err := noLinkLocalDivertOn(d.bin, path); !errors.As(err, &ce) || ce.Path != path {
+			t.Errorf("noLinkLocalDivertOn(%v) = %v, want that path", path, err)
+		}
+	}
+}

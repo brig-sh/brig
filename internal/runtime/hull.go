@@ -803,20 +803,21 @@ var brigInternalProbes sync.Map
 // ProbeBrigInternal reports whether this hull's network gateway takes
 // --divert, which brig.internal needs beside the --host record every hull
 // takes. A hull without it refuses the flag only when the sandbox's gateway
-// starts.
+// starts. A refusal names the run path of the hull asked.
 func (h *hull) ProbeBrigInternal() error {
 	if err, ok := brigInternalProbes.Load(h.bin); ok {
 		err, _ := err.(error)
 		return err
 	}
-	err := gatewayDiverts(h.bin)
+	err := gatewayDivertsOn(h.bin, h.gatewayPath())
 	brigInternalProbes.Store(h.bin, err)
 	return err
 }
 
 // ProbeLinkLocal reports whether this hull's network gateway takes a
-// --divert of LinkLocalDivert. See gatewayDivertsLinkLocal.
-func (h *hull) ProbeLinkLocal() error { return probeLinkLocal(h.bin) }
+// --divert of LinkLocalDivert. See gatewayDivertsLinkLocalOn. A refusal names
+// the run path of the hull asked.
+func (h *hull) ProbeLinkLocal() error { return probeLinkLocalOn(h.bin, h.gatewayPath()) }
 
 // BrigInternalAddr is the address of the sandbox's own gateway, which hull
 // answers brig.internal with. A sandbox that reaches brig.internal has a
@@ -848,10 +849,11 @@ var linuxHullPath = RunPath{"hull", uruncShim}
 // macOS backend that boots on a gateway brig owns.
 var macGatewayPath = RunPath{"hull", "hvi"}
 
-// gatewayPath returns the run path the gateway probes name in a refusal. A
-// hull on Linux with a gateway too old for the rules is told its own path,
-// hull on io.containerd.urunc.v2, with the probe's own remedy: upgrade the
-// runtime, or detach the policy. BRIG_HYPERVISOR=hvi means nothing there.
+// gatewayPath returns the run path the gateway probes name in a refusal: the
+// probe for the rules, the one for the diverts and the link-local one. A hull
+// on Linux with a gateway too old for any of them is told its own path, hull
+// on io.containerd.urunc.v2, with the probe's own remedy: upgrade the runtime,
+// or detach the policy. BRIG_HYPERVISOR=hvi means nothing there.
 func (h *hull) gatewayPath() RunPath {
 	if h.linux {
 		return linuxHullPath
@@ -868,16 +870,16 @@ func IsLinuxHull(rt Runtime) bool {
 	return ok && h.linux
 }
 
-// The reason and the remedy of the route mode row of linuxHullPath. The
-// sandbox is on a gateway of its own there, as on hvi. A run on 2026-11-18
-// showed that gateway enforcing egress rules for a urunc guest, so a policy
-// is enforced. Nothing has shown it routes brig.internal or applies a
-// divert, so those rows refuse until a run does.
-const (
-	linuxHullNoRouteWhy = "brig has not yet proven on a real hull on Linux that the network gateway " +
-		"of a sandbox there routes brig.internal"
-	linuxHullRemedy = "Use nerdctl (BRIG_RUNTIME=nerdctl), or detach the policy"
-)
+// endpointLinuxHullWhy is why hull on Linux serves a route in mode endpoint.
+// The sandbox is on a gateway of its own there, as on hvi, and brig starts it
+// with the same diverts and the same brig.internal record. A run on
+// 2026-11-18 showed it for a urunc guest: getent hosts brig.internal answered
+// the gateway's address, curl of brig.internal:443 and of 169.254.170.2 was
+// answered by the socket each was diverted to, and a gateway port with no
+// divert was refused. See docs/manual-tests/hull-linux-gateway-2026-11-18.md.
+const endpointLinuxHullWhy = "hull's gateway answers brig.internal with its own address and diverts port 443 " +
+	"of it to the broker, which serves it with TLS under the brig CA; the guest boots on urunc and reaches " +
+	"that gateway through hvi"
 
 // linuxSupports is supports for hull on Linux. hull there is a containerd
 // client: urunc boots the guest and the monitor is urunc's. A networked
