@@ -756,9 +756,9 @@ func (h *hull) boot(spec RunSpec, args, envVals []string) error {
 // sandbox on it shares one L2 segment, so one guest could reach, or answer
 // ARP for, any other, whatever posture either asked for.
 //
-// There is no publication to install: linuxSupports refuses a run that
-// publishes a port, and a policy, a divert and brig.internal, all of which
-// the macOS hull hangs on the gateway.
+// The published ports, the diverts and brig.internal ride the gateway as on
+// hvi: the diverts and the brig.internal record are on the command line brig
+// starts the gateway with, and the ports are installed on it before the boot.
 func (h *hull) runLinux(spec RunSpec) error {
 	if err := linuxSupports(spec); err != nil {
 		return err
@@ -774,6 +774,15 @@ func (h *hull) runLinux(spec RunSpec) error {
 			return err
 		}
 		defer release()
+		// Before the boot, so a port that cannot be published stops the run
+		// rather than leaving a sandbox up with an envelope naming a hole
+		// nothing is listening on. The gateway forwards to an address, and the
+		// guest need not be up yet for the listener to exist. See
+		// gatewayapi.go.
+		if err := reconcilePublications(gatewaySock, addrOf(gatewayCidr), spec.Publish); err != nil {
+			withdrawPublications(spec.Name)
+			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
+		}
 	}
 	// hull checks the kernel against the record beside it before it boots.
 	fillBootRecord(spec)
@@ -782,9 +791,15 @@ func (h *hull) runLinux(spec RunSpec) error {
 	// so this fetches only for a caller that resolved none.
 	args, envVals, err := linuxRunArgs(spec, gatewaySock, gatewayCidr, orasFetcher(spec))
 	if err != nil {
+		// No guest will boot behind the forwards installed above, and a
+		// sandbox that was never created gives stop and rm nothing to act on.
+		withdrawPublications(spec.Name)
 		return err
 	}
 	if err := h.boot(spec, args, envVals); err != nil {
+		// The forwards were installed for a guest that did not boot. On the
+		// shared gateway they would hold the host ports until it restarts.
+		withdrawPublications(spec.Name)
 		return err
 	}
 	// As on macOS: an isolated gateway still up under a sandbox that is not
@@ -884,10 +899,10 @@ const endpointLinuxHullWhy = "hull's gateway answers brig.internal with its own 
 // linuxSupports is supports for hull on Linux. hull there is a containerd
 // client: urunc boots the guest and the monitor is urunc's. A networked
 // sandbox joins a hull network gateway, as on hvi, and brig hands it the
-// policy's egress rules. brig does not yet put a divert or a published port
-// on it, so it refuses both. It
-// cannot read macOS's hvi rows: a policy on hull with BRIG_HYPERVISOR=hvi
-// would otherwise read as enforced on a host where nothing enforces it.
+// policy's egress rules, the diverts, the brig.internal record and the
+// published ports. The path never reads macOS's hvi rows: a policy on hull
+// with BRIG_HYPERVISOR=hvi would otherwise read as enforced on a host where
+// nothing enforces it.
 func linuxSupports(spec RunSpec) error {
 	if spec.GUI {
 		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
@@ -901,22 +916,24 @@ func linuxSupports(spec RunSpec) error {
 	if err := requireDiverts(spec, linuxHullPath); err != nil {
 		return err
 	}
+	// brig.internal is a record and a divert on the gateway too. wrap
+	// refuses the run first, with the route mode table; this is the same
+	// answer for a caller that did not ask it.
 	if spec.Egress.Divert.BrigInternal {
 		if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); err != nil {
 			return err
+		}
+		if spec.Net == "none" {
+			return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: linuxHullPath,
+				State: CannotEnforce, Why: endpointOfflineWhy, Remedy: "Run it with a network, or detach the policy"}
 		}
 	}
 	if err := checkSetup(spec, linuxHullPath); err != nil {
 		return err
 	}
-	if len(spec.Publish) > 0 {
-		if spec.Net == "none" {
-			return offlinePublishError(spec.Publish)
-		}
-		return fmt.Errorf("this sandbox publishes %s, and hull on Linux cannot publish a port yet; "+
-			"withdraw it with `brig network unpublish`, or use nerdctl (BRIG_RUNTIME=nerdctl). "+
-			"A publication outlives the run that made it, so this applies whether or not "+
-			"--publish is on this line", spec.Publish[0])
+	// Published on the gateway, as on hvi. An offline sandbox has none.
+	if len(spec.Publish) > 0 && spec.Net == "none" {
+		return offlinePublishError(spec.Publish)
 	}
 	if spec.GenericBoot {
 		monitor, err := linuxMonitor(spec.Hypervisor)

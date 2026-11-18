@@ -40,23 +40,27 @@ func TestLinuxHullServesAPolicyOnlyOnHvi(t *testing.T) {
 	}
 }
 
-// brig.internal, and any diverted destination, are refused the same way: a
-// connection the broker should take would be routed directly instead.
+// brig.internal and a diverted destination ride the gateway on a networked
+// run and are refused on an offline one, which has no gateway to carry them.
 func TestLinuxHullRefusesADivert(t *testing.T) {
 	for name, d := range map[string]Divert{
 		"brig.internal": {BrigInternal: true, Socket: "/tmp/divert.sock"},
 		"a route":       {Routes: []DivertRoute{{Host: "169.254.170.2", Port: 80, Mode: v1alpha1.ModeEndpoint}}, Socket: "/tmp/divert.sock"},
 	} {
 		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: "hvi", Egress: Egress{Divert: d}}
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("%s: refused on %s: %v", name, linuxHullPath, err)
+		}
+		spec.Net = "none"
 		var ce *CapabilityError
 		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath {
-			t.Errorf("%s: not refused on %s: %v", name, linuxHullPath, err)
+			t.Errorf("%s offline: not refused on %s: %v", name, linuxHullPath, err)
 		}
 	}
 }
 
 // The rest of what hull on Linux cannot do yet is refused rather than booted
-// without: a window, a network of the sandbox's own, a published port, and a
+// without: a window, a network of the sandbox's own, an offline publish, and a
 // monitor or a rootfs mode it would not boot.
 //
 // Each is checked for its own reason, so a case refused by an earlier check
@@ -74,7 +78,6 @@ func TestLinuxHullRefusesWhatItCannotRunYet(t *testing.T) {
 		"isolated, on cloud-hypervisor": {RunSpec{Net: "isolated", GenericBoot: true, Hypervisor: "cloud-hypervisor"},
 			"a network only on hvi"},
 		"shared, on qemu":  {RunSpec{Net: "shared", GenericBoot: true, Hypervisor: "qemu"}, "a network only on hvi"},
-		"publish":          {RunSpec{Net: "shared", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "cannot publish a port yet"},
 		"offline publish":  {RunSpec{Net: "none", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "--network offline"},
 		"unknown monitor":  {RunSpec{GenericBoot: true, Hypervisor: "xen"}, "not one urunc runs on Linux"},
 		"unknown rootfs":   {RunSpec{GenericBoot: true, RootfsMode: "tmpfs"}, "is not a rootfs mode"},
@@ -221,16 +224,16 @@ func TestLinuxHullAcceptsAPlainRun(t *testing.T) {
 	}
 }
 
-// The route mode table answers for hull on Linux under its own path, so a
-// route never reads as served there, whatever BRIG_HYPERVISOR says.
+// The route mode table answers for hull on Linux under its own path, so the
+// modes it serves never read from another row, whatever BRIG_HYPERVISOR says.
 func TestLinuxHullServesNoRouteMode(t *testing.T) {
 	for _, hv := range []string{"", "hvi"} {
 		path := RoutePath(linuxHull(), hv)
 		if path != linuxHullPath {
 			t.Errorf("hypervisor %q: route path %s, want %s", hv, path, linuxHullPath)
 		}
-		if modes := ServedModes(path); len(modes) != 0 {
-			t.Errorf("hypervisor %q: hull on Linux serves %v", hv, modes)
+		if modes := ServedModes(path); len(modes) == 0 {
+			t.Errorf("hypervisor %q: hull on Linux serves no route mode", hv)
 		}
 	}
 	// The macOS hull keeps its path.
