@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -523,5 +525,88 @@ func TestIsolationRefusalNamesNoSettingWhenThereIsNone(t *testing.T) {
 	msg := RequireMicroVM(Isolation{Boundary: BoundaryUnknown, Detail: "no runtime"}).Error()
 	if strings.Contains(msg, "Change") {
 		t.Errorf("the refusal names a setting it has none for:\n%s", msg)
+	}
+}
+
+// A sandbox that is up stands on the shim it was created with, read off the
+// runtime, and the answer is the one the ISOLATION row gives for that shim: a
+// microVM only for urunc, a container for the runc shim, and unknown for
+// anything brig cannot place. The names are what `nerdctl inspect` printed for
+// sandboxes created with each shim.
+func TestSandboxIsolationReadsWhatTheSandboxWasCreatedWith(t *testing.T) {
+	for _, tc := range []struct {
+		shim string
+		want Boundary
+		said []string
+	}{
+		{"io.containerd.urunc.v2", BoundaryVM, nil},
+		{"io.containerd.runc.v2", BoundaryContainer, []string{"the guest shares the host kernel", "brig rm"}},
+		{"io.containerd.kata.v2", BoundaryUnknown, []string{"cannot tell whether that shim boots a kernel of its own", "brig rm"}},
+	} {
+		t.Run(tc.shim, func(t *testing.T) {
+			n := &nerdctl{bin: stubBin(t, "#!/bin/sh\n[ \"$1\" = inspect ] && echo "+tc.shim+"\n")}
+			got, err := n.SandboxIsolation("brig-claude-code")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Boundary != tc.want {
+				t.Errorf("Boundary = %s, want %s: %s", got.Boundary, tc.want, got.Line())
+			}
+			for _, want := range append([]string{tc.shim, "already up"}, tc.said...) {
+				if !strings.Contains(got.Line()+" "+got.Setting, want) {
+					t.Errorf("the answer does not say %q: %s / %s", want, got.Line(), got.Setting)
+				}
+			}
+			if (got.Boundary == BoundaryVM) != (got.Setting == "") {
+				t.Errorf("Setting = %q on %s: it names what to change exactly when the boundary is short of a microVM", got.Setting, got.Boundary)
+			}
+		})
+	}
+}
+
+// docker on the VM shim is unknown for a sandbox that is up, as it is for a
+// boot: brig cannot see whether docker has the shim it was told to use.
+func TestSandboxIsolationOnDockerIsNotShownToBeAMicroVM(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho io.containerd.urunc.v2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (&nerdctl{bin: bin}).SandboxIsolation("brig-claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Boundary != BoundaryUnknown || !strings.Contains(got.Detail, "cannot tell whether docker has that shim") {
+		t.Errorf("docker on the VM shim = %s", got.Line())
+	}
+}
+
+// An inspect that fails, a sandbox that is not there and an answer with no
+// runtime in it are errors and never a boundary: the caller asks so that it
+// need not guess, and a guess here is toward the stronger one.
+func TestSandboxIsolationIsAnErrorWhenItCannotBeRead(t *testing.T) {
+	for name, script := range map[string]string{
+		"a runtime that fails":        "#!/bin/sh\necho 'cannot connect to the daemon' >&2\nexit 1\n",
+		"a sandbox that is not there": "#!/bin/sh\necho 'no such object brig-claude-code' >&2\nexit 1\n",
+		"an answer with no runtime":   "#!/bin/sh\necho\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := (&nerdctl{bin: stubBin(t, script)}).SandboxIsolation("brig-claude-code")
+			if err == nil {
+				t.Fatalf("a boundary %s was given without one being read", got.Line())
+			}
+		})
+	}
+	if _, err := (&nerdctl{bin: filepath.Join(t.TempDir(), "not-installed")}).SandboxIsolation("x"); err == nil {
+		t.Error("a missing binary was read as a sandbox")
+	}
+}
+
+// hull has no shim to read, and says nothing about a sandbox: every sandbox it
+// runs is a microVM, so the caller keeps what a boot would be.
+func TestHullDoesNotReadASandboxIsolation(t *testing.T) {
+	var rt Runtime = &hull{bin: "hull"}
+	if _, ok := rt.(SandboxIsolator); ok {
+		t.Error("hull claims to read what a sandbox stands on, which it has no shim to do")
 	}
 }
