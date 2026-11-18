@@ -278,6 +278,35 @@ func (n *nerdctl) Running(name string) (bool, error) {
 	return false, nil
 }
 
+// SandboxIsolation reads the shim a sandbox was created with, off the runtime
+// itself: `inspect` reports it as HostConfig.Runtime, the name the sandbox was
+// given at create. That is the shim that boots it whatever the environment says
+// now, which is what a run that joins the sandbox stands on. See
+// SandboxIsolator.
+//
+// A sandbox the runtime cannot find, an inspect that fails, and an answer with no
+// runtime in it are errors, none of them a guess: the caller is asking so that
+// it need not guess.
+func (n *nerdctl) SandboxIsolation(name string) (Isolation, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, n.bin, "inspect", "--format", "{{.HostConfig.Runtime}}", name)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		if said := strings.TrimSpace(errb.String()); said != "" {
+			return Isolation{}, fmt.Errorf("%s inspect %s: %w: %s", n.bin, name, err, firstLines(said, 3))
+		}
+		return Isolation{}, fmt.Errorf("%s inspect %s: %w", n.bin, name, err)
+	}
+	shim := strings.TrimSpace(out.String())
+	if shim == "" {
+		return Isolation{}, fmt.Errorf("%s inspect %s named no runtime", n.bin, name)
+	}
+	return existingIsolation(n.driver(), shim, name), nil
+}
+
 // Exists looks for the sandbox in List, which is `nerdctl ps -a` with no
 // fallback to running containers only, so a missing name is a removed one.
 func (n *nerdctl) Exists(name string) (bool, error) {

@@ -181,6 +181,50 @@ func containerdIsolation(driver, shim, named, monitor, rootfs string) Isolation 
 	}
 }
 
+// SandboxIsolator is a runtime that can say what a sandbox that already exists
+// stands on, which is not what Isolation says. Isolation answers for a boot the
+// run would make now, from the environment as it is now. A run that finds its
+// sandbox already up boots nothing, and that sandbox stands on whatever it was
+// created with, which the environment may no longer name: the variable that put
+// it on a shim brig cannot place may be unset since (#30).
+//
+// Optional and not on Runtime, unlike Isolation, because hull has no shim to
+// ask about. Every sandbox it runs is a microVM, so what it would boot now is
+// what is running, and a caller that finds this interface missing keeps
+// Isolation's answer.
+type SandboxIsolator interface {
+	// SandboxIsolation reads what the sandbox called name was created with. An
+	// error means it could not be read, and that is not an answer: a caller
+	// that needs the boundary must treat it as one it cannot establish.
+	SandboxIsolation(name string) (Isolation, error)
+}
+
+// existingIsolation is the boundary of a sandbox that is already up, from the
+// shim it was created with. It is containerdIsolation's reading of the shim
+// without what only a boot knows, the hypervisor and the rootfs, and with the
+// setting that names the sandbox itself, since an environment variable cannot
+// change a guest that is running.
+func existingIsolation(driver, shim, name string) Isolation {
+	base := fmt.Sprintf("%s over containerd, %s, in a sandbox that is already up", driver, shim)
+	remedy := fmt.Sprintf("the running sandbox %s (brig rm removes it, and the next run boots a new one)", name)
+	boundary := shimBoundary(shim)
+	// docker is told to use the shim and brig cannot see whether it has it, as
+	// in containerdIsolation, so a docker sandbox on a VM shim is not shown to
+	// be a VM either.
+	if driver == dockerDriver && boundary == BoundaryVM {
+		return Isolation{Boundary: BoundaryUnknown, Setting: remedy, Detail: base +
+			": brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own"}
+	}
+	switch boundary {
+	case BoundaryVM:
+		return Isolation{Boundary: BoundaryVM, Detail: base}
+	case BoundaryContainer:
+		return Isolation{Boundary: BoundaryContainer, Setting: remedy, Detail: base + ": the guest shares the host kernel"}
+	}
+	return Isolation{Boundary: BoundaryUnknown, Setting: remedy, Detail: base +
+		": brig cannot tell whether that shim boots a kernel of its own"}
+}
+
 // IsolationError refuses a run that required a microVM and would not get one
 // the row can establish. It carries the isolation the run resolved, so the
 // message names the same boundary and the same cause the ISOLATION row does,
