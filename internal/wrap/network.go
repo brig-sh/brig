@@ -189,6 +189,45 @@ func (c *Config) requireMicroVM(hypervisor string) error {
 	if c.Runtime != nil {
 		got = c.Runtime.Isolation(c.backendSpec(hypervisor))
 	}
+	if err := runtime.RequireMicroVM(got); err != nil {
+		return err
+	}
+	return c.requireJoinedMicroVM()
+}
+
+// requireJoinedMicroVM is the second half of the requirement, for a run that
+// finds its sandbox already up. Such a run boots nothing, so what a boot would
+// get says nothing about the guest it uses: that guest stands on the shim it was
+// created with, which the environment may no longer name, and joining it with
+// the variable unset used to pass (#30). It is read off the runtime.
+//
+// Both answers must be a microVM, not either. The sandbox can be recreated, and
+// then the environment as it is now is what boots, so a shim brig cannot place
+// refuses the run even over a microVM that is up.
+//
+// A sandbox that is not up is booted fresh, and the answer for a boot has
+// already decided. A runtime that cannot be asked whether it is up is left to
+// EnsureRunning, which refuses to boot over a sandbox it cannot see. A runtime
+// that cannot say what a sandbox stands on is not a guess here: hull has no
+// shim, so what it would boot is what is running, and any other that fails to
+// read it is refused as a boundary brig cannot establish.
+func (c *Config) requireJoinedMicroVM() error {
+	reader, ok := c.Runtime.(runtime.SandboxIsolator)
+	if !ok {
+		return nil
+	}
+	if up, err := c.Runtime.Running(c.VMName); err != nil || !up {
+		return nil
+	}
+	got, err := reader.SandboxIsolation(c.VMName)
+	if err != nil {
+		return runtime.RequireMicroVM(runtime.Isolation{
+			Boundary: runtime.BoundaryUnknown,
+			Detail:   fmt.Sprintf("the sandbox %s is already up and brig could not read what it stands on: %v", c.VMName, err),
+			Setting: fmt.Sprintf("the running sandbox %s (brig rm removes it, and the next run boots a new one)",
+				c.VMName),
+		})
+	}
 	return runtime.RequireMicroVM(got)
 }
 

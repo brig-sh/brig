@@ -924,8 +924,17 @@ whether docker has it. The last sentence of the refusal names the setting: the
 shim variable, or the docker binary in use (`BRIG_RUNTIME_BIN`, a profile's
 `runtimeBin`, or the fallback taken when nerdctl is not on `PATH`).
 
+A run that finds its sandbox already up checks that sandbox as well. Brig reads
+the shim the sandbox was created with from the runtime, so a sandbox booted
+earlier on a shim that is not a microVM is refused even after you unset the
+variable that chose it. The refusal says `already up` and names the sandbox
+instead of a setting. If Brig cannot read what the sandbox stands on, it refuses
+that too.
+
 **Fix:** Change the setting the refusal names. For the shim, unset the
-variable. For docker, install nerdctl, or point `BRIG_RUNTIME_BIN` at it.
+variable. For docker, install nerdctl, or point `BRIG_RUNTIME_BIN` at it. For a
+sandbox that is already up, remove it with `brig rm <ref>`, and the next run
+boots a new one on the shim you have now.
 
 ```bash
 unset BRIG_CONTAINERD_RUNTIME
