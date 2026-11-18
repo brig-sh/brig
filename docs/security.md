@@ -1367,9 +1367,9 @@ A sandbox with no policy has unrestricted egress, and that is what
 
 | Backend | Where a policy is enforced |
 | --- | --- |
-| `hvi` | At the network gateway Brig gives that sandbox |
+| `hvi`, hull on Linux | At the network gateway Brig gives that sandbox |
 | Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
-| `vz`, `qemu`, docker, hull on Linux | No policy is available. Outbound traffic is whatever the runtime allows |
+| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
 
 Both enforcement points are outside the guest's kernel.
 
@@ -1449,6 +1449,14 @@ gateway as the image's user, and only the user who runs Brig may write to
 its socket. So a guest whose image user maps to another host user has no
 network at all. On a rootless install that is any image with a non-root
 `USER`. Brig prints hull's warning when that happens.
+
+An egress policy is enforced on that gateway, as on `hvi`. A run on
+2026-11-18 on brig-standalone-linux v0.1.0-rc22 (hull `4bf76a6`, urunc
+`5c6bc70`, hvi 0.1.0-rc.3) served `example.com` and `www.example.com` and
+refused `github.com` and `one.one.one.one`, and the gateway logged the
+refused queries. See
+[the measurement](manual-tests/egress-policy-hull-linux.md). A divert,
+`brig.internal` and a published port are still refused there.
 
 The guarantee is about reachability, not resources. An isolated sandbox
 costs one more network on the host. `brig rm --all`

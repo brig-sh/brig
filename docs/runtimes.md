@@ -87,7 +87,7 @@ comes from one table, shown in
 | hull on `hvi`, with no report | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
-| hull on Linux, on any monitor | `cannot enforce` | no probe runs. Brig hands the rules to the sandbox's network gateway, but has not yet proven on a real hull on Linux that the gateway enforces them |
+| hull on Linux, on any monitor | `enforced` | the same probe as hull on `hvi`, for the same gateway: the capability report, or else `network-gateway --help` listing `--egress-default`. A gateway that fails it answers `cannot enforce` or `unknown`, and the refusal names `hull on io.containerd.urunc.v2`. Measured on 2026-11-18 (hull `4bf76a6`, urunc `5c6bc70`, hvi 0.1.0-rc.3): `example.com` and `www.example.com` answered 200, while `github.com` and `one.one.one.one` failed with curl rc 6 and the gateway logged the refused queries. See [the manual test](manual-tests/egress-policy-hull-linux.md) |
 | docker on any shim | `cannot enforce` | no probe runs |
 | hull on a backend that the policies table does not name | `unknown` | |
 
@@ -573,6 +573,20 @@ not by the tag:
   `HULL_BOOT_ASSETS_ALLOW_FOREIGN` is set. Brig does not set it.
 - With no verified digest and `BRIG_BOOT_ASSETS_REF` unset, Brig drops any
   `HULL_BOOT_ASSETS_REF` from the environment that it gives hull.
+
+## Limitations of hull on Linux
+
+Two limits come from hull and urunc, not from Brig. Until they are fixed
+there, run a root image.
+
+- hull refuses an image whose `USER` is a name. Its message says that hull on
+  Linux takes only a numeric uid and gid, or root, since resolving the name
+  would mean reading the image's files. The non-root tags of the community
+  images name their user, so they cannot run on hull on Linux, and the shipped
+  profiles pin the `:root` tags there.
+- A numeric non-root user joins the gateway as that user, and cannot write the
+  gateway's socket. The guest boots with no network. hull warns, and Brig
+  prints the warning after the boot.
 
 ## Swapping one out
 

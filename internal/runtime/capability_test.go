@@ -21,8 +21,8 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 		{RunPath{"hull", "hvi"}, Enforced},
 		{RunPath{"hull", "vz"}, CannotEnforce},
 		{RunPath{"hull", "qemu"}, CannotEnforce},
-		// hull on Linux, which has no network of a sandbox's own yet.
-		{RunPath{"hull", "io.containerd.urunc.v2"}, CannotEnforce},
+		// hull on Linux: the same gateway as hvi, shown to refuse on 2026-11-18.
+		{RunPath{"hull", "io.containerd.urunc.v2"}, Enforced},
 		{RunPath{"nerdctl", "io.containerd.urunc.v2"}, Enforced},
 		{RunPath{"nerdctl", "io.containerd.kata.v2"}, Enforced},
 		{RunPath{"docker", "io.containerd.urunc.v2"}, CannotEnforce},
@@ -373,6 +373,16 @@ func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 		}
 	}()
 	return d
+}
+
+// newLinuxHullDouble returns a hull on Linux that runs the double newHullDouble
+// writes. overlayHost lets the overlay root check pass, and linux makes Run
+// take runLinux, so a boot reaches joinGateway and `hull run` as on Linux.
+func newLinuxHullDouble(t *testing.T, help, exit string) (*hull, *hullDouble) {
+	t.Helper()
+	overlayHost(t)
+	d := newHullDouble(t, help, exit)
+	return &hull{bin: d.bin, linux: true}, d
 }
 
 func (d *hullDouble) calls() string {

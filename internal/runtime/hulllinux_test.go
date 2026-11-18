@@ -15,25 +15,17 @@ import (
 // linuxHull is the adapter as newHull builds it on a Linux host.
 func linuxHull() *hull { return &hull{bin: "hull", linux: true} }
 
-// A policy on hull on Linux is refused, and BRIG_HYPERVISOR=hvi does not get
-// it past: the hvi row is the macOS gateway's, and nothing on Linux puts the
-// rules anywhere yet. The refusal names the Linux path, so the remedy is the
-// one that works there.
+// The name is kept from when a policy was refused on hull on Linux, so the
+// history of the test holds. It now asserts the opposite: a policy is accepted
+// on every monitor, and the gateway probe at boot is what can still refuse it.
+// BRIG_HYPERVISOR=hvi does not change the path: the hvi row is the macOS
+// gateway's, and the Linux run reads its own.
 func TestLinuxHullRefusesAPolicyOnEveryMonitor(t *testing.T) {
 	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor"} {
 		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv,
 			Egress: Egress{Default: "deny"}}
-		err := linuxHull().CanRun(spec)
-		var ce *CapabilityError
-		if !errors.As(err, &ce) {
-			t.Fatalf("hypervisor %q: a policy was not refused with a CapabilityError: %v", hv, err)
-		}
-		if ce.Path != linuxHullPath || ce.State != CannotEnforce || ce.Property != EgressPolicy {
-			t.Errorf("hypervisor %q: refused as %s on %s (%s), want %s on %s (%s)", hv,
-				ce.Property, ce.Path, ce.State, EgressPolicy, linuxHullPath, CannotEnforce)
-		}
-		if strings.Contains(err.Error(), "BRIG_HYPERVISOR=hvi") {
-			t.Errorf("hypervisor %q: the refusal sends a Linux user to hvi: %v", hv, err)
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("hypervisor %q: a policy was refused on hull on Linux: %v", hv, err)
 		}
 	}
 }
@@ -580,5 +572,54 @@ func TestLinuxHullResolvesBootAssetsThroughOras(t *testing.T) {
 	}
 	if asked, err := os.ReadFile(hullLog); err == nil {
 		t.Errorf("hull was asked about the boot assets: %q", asked)
+	}
+}
+
+// Negative: a hull on Linux whose gateway cannot take the rules, or cannot be
+// asked, boots nothing under a policy. The refusal names hull on
+// io.containerd.urunc.v2 and never BRIG_HYPERVISOR=hvi, which would send a
+// Linux user to a macOS backend.
+func TestLinuxHullRefusesAPolicyItsGatewayCannotTake(t *testing.T) {
+	for _, tc := range []struct {
+		name, help, exit string
+		state            Capability
+	}{
+		{"no flag", "   --socket string\n", "0", CannotEnforce},
+		{"failed probe", egressHelp, "2", Unknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newLinuxHullDouble(t, tc.help, tc.exit)
+			spec := linuxBootSpec()
+			spec.Net, spec.Egress = "isolated", Egress{Default: "deny"}
+			err := h.Run(spec)
+			var ce *CapabilityError
+			if !errors.As(err, &ce) {
+				t.Fatalf("a policy on a gateway that cannot take it was not refused: %v", err)
+			}
+			if ce.Property != EgressPolicy || ce.State != tc.state || ce.Path != linuxHullPath {
+				t.Errorf("refused as %s on %s (%s), want %s on %s (%s)", ce.Property, ce.Path, ce.State,
+					EgressPolicy, linuxHullPath, tc.state)
+			}
+			switch tc.state {
+			case CannotEnforce:
+				if !strings.Contains(err.Error(), "--egress-default") {
+					t.Errorf("the refusal does not say what the gateway lacks: %v", err)
+				}
+			case Unknown:
+				if ce.Err == nil {
+					t.Errorf("the refusal of a failed probe carries no cause: %v", err)
+				}
+				assertProbeRefusal(t, err, d.bin)
+			}
+			if bootedOn(d) {
+				t.Errorf("hull booted a guest under a policy it was refused: %s", d.calls())
+			}
+			if strings.Contains(err.Error(), "BRIG_HYPERVISOR=hvi") {
+				t.Errorf("the refusal sends a Linux user to hvi: %v", err)
+			}
+			if !strings.Contains(err.Error(), "io.containerd.urunc.v2") {
+				t.Errorf("the refusal does not name the Linux run path: %v", err)
+			}
+		})
 	}
 }

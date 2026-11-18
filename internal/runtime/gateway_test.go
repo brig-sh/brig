@@ -501,7 +501,7 @@ func TestABootWithNoPolicyRunsNoProbe(t *testing.T) {
 			calls := filepath.Join(t.TempDir(), "calls")
 			bin := scriptHull(t, "echo \"$*\" >> '"+calls+"'\n"+
 				"echo '   --egress-default string   verdict'\n")
-			if _, err := ensureIsolatedGateway(bin, name, 0, tc.policy); err == nil {
+			if _, err := ensureIsolatedGateway(bin, macGatewayPath, name, 0, tc.policy); err == nil {
 				t.Fatal("a gateway that could not be replaced was reported ready")
 			}
 			blob, _ := os.ReadFile(calls)

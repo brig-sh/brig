@@ -139,7 +139,7 @@ func TestABootWithNoLinkLocalDivertRunsNoLinkLocalProbe(t *testing.T) {
 			bin := scriptHull(t, "echo \"$*\" >> '"+calls+"'\n"+
 				"case \"$*\" in *--help) echo '   --divert string [ --divert string ]   divert'; exit 0;; esac\n"+
 				"echo '"+newHullAnswer+"'\nexit 1\n")
-			if _, err := ensureIsolatedGateway(bin, name, 0, Egress{Divert: tc.divert}); err == nil {
+			if _, err := ensureIsolatedGateway(bin, macGatewayPath, name, 0, Egress{Divert: tc.divert}); err == nil {
 				t.Fatal("a gateway that could not be replaced was reported ready")
 			}
 			blob, _ := os.ReadFile(calls)

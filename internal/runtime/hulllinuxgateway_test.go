@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 )
 
 // argvLogHull is a hull on Linux that records each command line it is run
@@ -189,18 +191,86 @@ func TestLinuxHullSandboxNetworkReadsTheGatewaySocket(t *testing.T) {
 	}
 }
 
-// Negative: hull on Linux is refused egress rules whatever hypervisor is
-// named, as its run is: it never reads the hvi row, which is the macOS
-// gateway's. brig policy check asks through EgressServed.
+// The name is kept from when hull on Linux was refused egress rules. Now an
+// egress-only policy is served on every hypervisor, as on macOS hvi, while a
+// divert and a route mode are still refused and the macOS vz row still refuses.
+// brig policy check asks through EgressServed.
 func TestEgressServedRefusesHullOnLinuxOnEveryHypervisor(t *testing.T) {
 	spec := RunSpec{Net: "isolated", Egress: Egress{Default: "deny"}}
 	for _, hv := range []string{"", "hvi", "vz"} {
-		var refusal *CapabilityError
-		if err := EgressServed(linuxHull(), hv, spec); !errors.As(err, &refusal) {
-			t.Errorf("%q: %v, want a capability refusal", hv, err)
+		if err := EgressServed(linuxHull(), hv, spec); err != nil {
+			t.Errorf("%q: an egress policy was refused on hull on Linux: %v", hv, err)
 		}
 	}
 	if err := EgressServed(&hull{bin: "hull"}, "hvi", spec); err != nil {
 		t.Errorf("the macOS hull on hvi: %v", err)
+	}
+	var refusal *CapabilityError
+	if err := EgressServed(&hull{bin: "hull"}, "vz", spec); !errors.As(err, &refusal) {
+		t.Errorf("the macOS hull on vz: %v, want a capability refusal", err)
+	}
+	if err := EgressServed(&hull{bin: "hull"}, "hvi", spec); err != nil {
+		t.Errorf("the macOS hull on hvi: %v", err)
+	}
+	// Route mode stays refused on hull on Linux.
+	if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); !errors.As(err, &refusal) {
+		t.Errorf("route mode on hull on Linux: %v, want a capability refusal", err)
+	}
+}
+
+// bootedOn reports whether the double was asked to boot a guest, which is a
+// `hull run` line. Other lines merely contain the word.
+func bootedOn(d *hullDouble) bool {
+	return strings.Contains("\n"+d.calls(), "\nrun ")
+}
+
+// Negative, for the network promise: a policy-bound sandbox on hull on Linux
+// is on a gateway of its own that holds the rules, as on hvi. The gateway was
+// asked whether it takes the rules before the boot, and BRIG_HYPERVISOR does
+// not change any of it, since the guest boots on urunc whatever it says.
+func TestLinuxHullBootsAPolicyOnItsOwnGateway(t *testing.T) {
+	for _, hv := range []string{"", "vz", "hvi"} {
+		t.Run("hypervisor="+hv, func(t *testing.T) {
+			h, d := newLinuxHullDouble(t, egressHelp, "0")
+			shared, err := gatewaySocket()
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := linuxBootSpec()
+			spec.Net, spec.Hypervisor = "shared", hv
+			spec.Egress = Egress{Default: "deny", Allow: []Rule{{Host: "api.anthropic.com"}}}
+			if err := h.Run(spec); err != nil {
+				t.Fatalf("a policy on hull on Linux did not boot: %v", err)
+			}
+			if !bootedOn(d) {
+				t.Fatalf("hull was never asked to boot: %s", d.calls())
+			}
+			for _, want := range []string{"version --json", "network-gateway --help"} {
+				if !d.called(want) {
+					t.Errorf("the gateway was not asked %q before the boot: %s", want, d.calls())
+				}
+			}
+			var start, run string
+			for _, line := range strings.Split(strings.TrimSpace(d.calls()), "\n") {
+				switch {
+				case strings.HasPrefix(line, "network-gateway ") && !strings.Contains(line, "--help"):
+					start = line
+				case strings.HasPrefix(line, "run "):
+					run = line
+				}
+			}
+			for _, want := range []string{"--egress-default deny", "--egress-allow host=api.anthropic.com"} {
+				if !strings.Contains(start, want) {
+					t.Errorf("the gateway was started without %q: %q", want, start)
+				}
+			}
+			sock, _ := gatewayOnLine(t, run)
+			if sock == shared {
+				t.Errorf("a policy-bound sandbox joined the shared gateway %s", sock)
+			}
+			if !strings.HasPrefix(filepath.Base(sock), "sandbox-") || !strings.HasSuffix(sock, ".sock") {
+				t.Errorf("the sandbox joined %s, want a gateway of its own (sandbox-*.sock)", sock)
+			}
+		})
 	}
 }
