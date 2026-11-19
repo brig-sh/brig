@@ -1,0 +1,91 @@
+name: hull on Linux
+
+# Boot real hull sandboxes on Linux on every change that can affect them.
+#
+# ci.yml runs script/smoke.sh against a stub runtime, so it shows nothing
+# about a real boot. This workflow installs the Linux runtime bundle, puts the
+# brig built from the checkout behind its launcher, and boots the ubuntu
+# profile under BRIG_RUNTIME=hull. script/hull-linux-boot.sh holds the checks.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - internal/runtime/**
+      - internal/wrap/**
+      - cmd/brig/**
+      - install.sh
+      - script/hull-linux-boot.sh
+      - .github/workflows/hull-linux.yml
+  pull_request:
+    paths:
+      - internal/runtime/**
+      - internal/wrap/**
+      - cmd/brig/**
+      - install.sh
+      - script/hull-linux-boot.sh
+      - .github/workflows/hull-linux.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time on the host. A run in progress is not cancelled: it
+# finishes, and its own cleanup removes its sandboxes.
+concurrency:
+  group: hull-linux-boot
+  cancel-in-progress: false
+
+jobs:
+  boot:
+    name: boot
+    # The runner is self-hosted. A pull request from a fork would run its own
+    # code on that host, so only this repository's branches run here.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    # A real Ubuntu host with KVM and systemd. The runtime bundle runs its
+    # containerd as a systemd --user unit, so the kvm-dind ARC pods cannot
+    # host it: they have /dev/kvm and no systemd.
+    runs-on: [self-hosted, Linux, X64, kvm]
+    # A first install of the bundle downloads a few hundred MB. Every later
+    # run reuses it, and the checks take a few minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      - name: Build brig
+        run: go build -o "$RUNNER_TEMP/brig-build/" ./cmd/brig ./cmd/brigd ./cmd/brig-broker
+
+      - name: Install the runtime bundle and this brig
+        id: setup
+        run: script/hull-linux-boot.sh setup "$RUNNER_TEMP/brig-build"
+
+      - name: brig doctor
+        run: script/hull-linux-boot.sh doctor
+
+      - name: Boot offline and run a command
+        run: script/hull-linux-boot.sh offline
+
+      - name: Reach the network from an isolated sandbox
+        run: script/hull-linux-boot.sh isolated
+
+      # NEEDS brig#675. brig refuses a policy on hull on Linux until that
+      # change lands, so this step fails on main before it.
+      - name: Egress policy, deny by default (needs brig#675)
+        run: script/hull-linux-boot.sh policy
+
+      # Runs after a failed check too, on whatever sandboxes booted.
+      - name: brig rm leaves no sandbox and no gateway
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: script/hull-linux-boot.sh rm
+
+      - name: Remove what this run left
+        if: always()
+        run: script/hull-linux-boot.sh cleanup

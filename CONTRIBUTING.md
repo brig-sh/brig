@@ -39,6 +39,7 @@ CI does not call `make`. It runs these steps
 - `bash -n`, `shellcheck` and `--self-test` for
   `script/network-isolation-vm.sh`. The self-test checks the guards of the
   script. The comparison on a real VM is a manual run.
+- `sh -n` and `shellcheck` over `script/hull-linux-boot.sh`.
 - A cross-compile for `darwin/arm64` and one for `linux/amd64`.
 - `script/check-tests-kept.sh`. It fails when a test disappears. If your
   pull request renames a test, or removes one on purpose, label it
@@ -49,6 +50,30 @@ CI does not call `make`. It runs these steps
 
 `gofmt` and `go vet` are the only static checks. The repository has no
 `golangci-lint` configuration and no lint target in the Makefile.
+
+### hull on Linux
+
+[.github/workflows/hull-linux.yml](.github/workflows/hull-linux.yml) boots
+real sandboxes. It runs on a self-hosted Ubuntu host with KVM and systemd.
+It runs on a push to `main`, on a pull request from a branch of this
+repository, and by hand. A pull request from a fork does not run it.
+
+It runs only when a change touches `internal/runtime`, `internal/wrap`,
+`cmd/brig`, `install.sh`, the workflow or its script. It installs the runtime
+bundle that `install.sh` pins, rootless, for the runner's user. It boots the
+`ubuntu` profile under `BRIG_RUNTIME=hull`, with the `brig` built from the
+change. `script/hull-linux-boot.sh` holds the checks:
+
+- `brig doctor` marks nothing `!!`.
+- A sandbox with `--network offline` boots on a kernel of its own and
+  reaches nothing.
+- An isolated sandbox gets a network gateway of its own and reaches the
+  network.
+- Under a deny-by-default policy, a sandbox reaches the one allowed host. A
+  denied name and a denied address both fail.
+- `brig rm` leaves no sandbox, hull instance or gateway behind.
+
+This job does not cover hull on macOS or nerdctl on Linux.
 
 ## Dependencies
 
