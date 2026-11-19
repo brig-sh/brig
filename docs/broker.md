@@ -745,9 +745,12 @@ divert sockets present. It neither reads nor writes `port`, and
 registration with `brigInternal` or a route mode besides `endpoint` still gets
 one.
 
-The TLS handshake runs when the server first reads a connection, under the
-10 seconds a request header has to arrive. A client that never finishes it is
-closed then. The listener counts toward the 256 connections the broker holds.
+The broker closes a connection from an IP that no sandbox registered as soon
+as it accepts it, before the TLS handshake. Every pod of the cluster can
+reach the listener, and such a connection would otherwise hold one of the 256
+connections the broker holds open. The TLS handshake runs when the server
+first reads a connection, under the 10 seconds a request header has to
+arrive. A client that never finishes it is closed then.
 
 A pod does not need a divert socket. It resolves `brig.internal` to the
 listener, trusts the CA from the answer to its registration, and sends its
@@ -776,7 +779,7 @@ connection in place of the socket:
 | --- | --- |
 | The peer IP is the `address` of the sandbox the path names | Served, and the token is checked next |
 | The peer IP is the `address` of another sandbox | 404, `check=arrival`, `arrived=<that sandbox>` |
-| The peer IP is no sandbox's `address` | 404, `check=arrival`, before any token is read |
+| The peer IP is no sandbox's `address` | Closed at accept. A connection whose sandbox was removed while it stayed open gets 404, `check=arrival`, before any token is read |
 
 So a pod that holds the token of another sandbox cannot use it, and cannot
 tell another sandbox from one that does not exist. Two sandboxes may not

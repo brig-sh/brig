@@ -216,7 +216,9 @@ func TestNodeBrokerBindsEachPodByItsOwnAddress(t *testing.T) {
 }
 
 // A peer no sandbox registered is refused before a token is read: without a
-// token the answer is 404 and not 401.
+// token the answer is 404 and not 401. The listener drops such a peer at
+// accept, so the connection here is let in while its own sandbox is
+// registered, and that sandbox is then removed with the connection still open.
 func TestAnUnregisteredPeerIsRefusedBeforeTheToken(t *testing.T) {
 	u := newUpstream(t)
 	r := startBrokerWith(t, nodeConfig(t, io.Discard), u)
@@ -224,18 +226,80 @@ func TestAnUnregisteredPeerIsRefusedBeforeTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := r.mint(t, "brig-a", "inventory")
+	if _, err := r.client.Add(nodeSandbox("brig-p", "127.0.0.1", inventoryRoute())); err != nil {
+		t.Fatal(err)
+	}
+	token, tokenP := r.mint(t, "brig-a", "inventory"), r.mint(t, "brig-p", "inventory")
 	pod := nodeClient(listenAddr(r), caPool(t, added), nil)
+	tr := pod.Transport.(*http.Transport)
+	dial, dials := tr.DialContext, 0
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dials++
+		return dial(ctx, network, addr)
+	}
+	if code, body := sendTLS(t, pod, http.MethodGet, "brig-p", "inventory", tokenP, "/v2/items/1"); code != http.StatusOK {
+		t.Fatalf("the peer's own sandbox got %d: %s", code, body)
+	}
+	if _, err := r.client.RemoveSandbox("brig-p"); err != nil {
+		t.Fatal(err)
+	}
 	for _, tok := range []string{"", token} {
 		if code, _ := sendTLS(t, pod, http.MethodGet, "brig-a", "inventory", tok, "/v2/items/1"); code != http.StatusNotFound {
 			t.Errorf("a peer that registered nothing got %d with token %q, want 404", code, tok)
 		}
 	}
+	if dials != 1 {
+		t.Fatalf("the client dialed %d times, want one connection for every request", dials)
+	}
 	if lines := auditWith(t, r.dir, "check=arrival"); len(lines) < 2 {
 		t.Errorf("the audit log has %d check=arrival lines, want 2", len(lines))
 	}
-	if n := len(u.requests()); n != 0 {
-		t.Errorf("upstream saw %d requests", n)
+	if n := len(u.requests()); n != 1 {
+		t.Errorf("upstream saw %d requests, want the one of brig-p", n)
+	}
+}
+
+// A connection from an IP no sandbox registered is closed at accept, before
+// its TLS handshake, and takes none of the maxConns slots. Without that, a
+// peer that holds maxConns idle connections keeps every registered pod of the
+// node out until readHeaderTimeout, and again after each reconnect.
+func TestAnUnregisteredPeerTakesNoSlot(t *testing.T) {
+	u := newUpstream(t)
+	r := startBrokerWith(t, nodeConfig(t, io.Discard), u)
+	if _, err := r.client.Add(nodeSandbox("brig-a", "10.255.0.1", inventoryRoute())); err != nil {
+		t.Fatal(err)
+	}
+	// The connections stay open on this side for the rest of the test.
+	var idle []net.Conn
+	t.Cleanup(func() {
+		for _, c := range idle {
+			_ = c.Close()
+		}
+	})
+	for i := 0; i <= maxConns; i++ {
+		c, err := net.DialTimeout("tcp", listenAddr(r), 5*time.Second)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		idle = append(idle, c)
+		if err := c.SetReadDeadline(time.Now().Add(readHeaderTimeout / 2)); err != nil {
+			t.Fatal(err)
+		}
+		var ne net.Error
+		if _, err := c.Read(make([]byte, 1)); err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+			t.Fatalf("connection %d from an unregistered peer was not closed: %v", i, err)
+		}
+	}
+	// The peer registers now, and gets in while those connections are open.
+	added, err := r.client.Add(nodeSandbox("brig-p", "127.0.0.1", inventoryRoute()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := nodeClient(listenAddr(r), caPool(t, added), nil)
+	pod.Timeout = readHeaderTimeout / 2
+	if code, body := sendTLS(t, pod, http.MethodGet, "brig-p", "inventory", r.mint(t, "brig-p", "inventory"),
+		"/v2/items/1"); code != http.StatusOK {
+		t.Fatalf("a registered peer got %d: %s", code, body)
 	}
 }
 

@@ -271,7 +271,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if cfg.listen != "" {
 		// The port file is the loopback listener's. A node broker neither
 		// reads nor writes it, so a stale one stays as it is.
-		if s.routes, err = listenAddress(cfg.listen, s.ca); err != nil {
+		if s.routes, err = listenAddress(cfg.listen, s.ca, s.registeredAddr); err != nil {
 			return nil, err
 		}
 	} else {
@@ -761,6 +761,14 @@ func (s *server) setAddress(id, addr string) {
 	if addr != "" {
 		s.addrs[id], s.byAddr[addr] = addr, id
 	}
+}
+
+// registeredAddr reports whether a sandbox is registered with ip.
+func (s *server) registeredAddr(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.byAddr[ip]
+	return ok
 }
 
 // brigInternalAddr reads the brig.internal address of a registration: "" for

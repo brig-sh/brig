@@ -63,29 +63,69 @@ func (l addressListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		peer, err := netip.ParseAddrPort(c.RemoteAddr().String())
-		if err != nil {
+		peer, ok := connPeer(c)
+		if !ok {
 			_ = c.Close()
 			continue
 		}
-		peer = netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port())
 		return &addressConn{Conn: c, remote: addressAddr{peer: peer}}, nil
 	}
 }
 
-// listenAddress serves the routes on listen with TLS: a TCP listener bounded
-// at maxConns by newLimitListener, under tls.NewListener with the
-// brig.internal configuration of ca, wrapped in an addressListener.
+// connPeer returns the peer of c, unmapped and with no zone, and false when
+// its remote address does not parse.
+func connPeer(c net.Conn) (netip.AddrPort, bool) {
+	peer, err := netip.ParseAddrPort(c.RemoteAddr().String())
+	if err != nil {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port()), true
+}
+
+// registeredListener closes each connection whose peer IP no sandbox
+// registered, as soon as it is accepted. It sits under newLimitListener. Any
+// pod of the cluster can reach the listener, and a connection that waited
+// for its TLS handshake would hold one of the maxConns slots for up to
+// readHeaderTimeout. A peer that opens maxConns of them would then keep
+// every registered pod of the node out.
+type registeredListener struct {
+	net.Listener
+	// registered reports whether a sandbox is registered with ip, in the
+	// spelling canonicalAddr returns.
+	registered func(ip string) bool
+}
+
+// Accept returns the next connection from a registered peer. The arrival
+// check still runs on each request: a sandbox can be removed while its
+// connection stays open.
+func (l registeredListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if peer, ok := connPeer(c); ok && l.registered(peer.Addr().String()) {
+			return c, nil
+		}
+		_ = c.Close()
+	}
+}
+
+// listenAddress serves the routes on listen with TLS: a TCP listener that
+// drops unregistered peers in a registeredListener, bounded at maxConns by
+// newLimitListener, under tls.NewListener with the brig.internal
+// configuration of ca, wrapped in an addressListener.
 //
 // The wrapper hides *tls.Conn from net/http, so the TLS handshake runs on the
 // server's first read of the connection, under ReadHeaderTimeout. r.TLS is
 // nil on these requests, and nothing on the route server reads it.
-func listenAddress(listen string, ca *authority) (net.Listener, error) {
+func listenAddress(listen string, ca *authority, registered func(ip string) bool) (net.Listener, error) {
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		return nil, fmt.Errorf("cannot serve routes on %s: %w", listen, err)
 	}
-	return addressListener{tls.NewListener(newLimitListener(ln, maxConns), ca.serverConfig())}, nil
+	filtered := registeredListener{Listener: ln, registered: registered}
+	return addressListener{tls.NewListener(newLimitListener(filtered, maxConns), ca.serverConfig())}, nil
 }
 
 // addressContext marks a connection of the address listener.
