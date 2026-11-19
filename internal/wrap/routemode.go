@@ -146,7 +146,11 @@ func RouteModeServed(p profile.Profile, rt runtime.Runtime, m v1alpha1.RouteMode
 	if env.String("NETWORK", p.Network) == string(NetOffline) {
 		net = NetOffline.RuntimeNet()
 	}
-	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
+	hypervisor := env.String("HYPERVISOR", p.Hypervisor)
+	path := runtime.RoutePath(rt, hypervisor)
+	if err := runtime.RequireGatewayMonitor(runtime.RouteModeProperty(m), rt, hypervisor, net); err != nil {
+		return err
+	}
 	switch {
 	case m.AtBrigInternal():
 		return runtime.CheckBrigInternal(rt, path, net)

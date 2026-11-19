@@ -928,6 +928,20 @@ func linuxSupports(spec RunSpec) error {
 				State: CannotEnforce, Why: endpointOfflineWhy, Remedy: "Run it with a network, or detach the policy"}
 		}
 	}
+	// A divert rides the gateway, which urunc joins only on hvi. Refused as
+	// brig policy check refuses the route mode it serves, exit 7.
+	if spec.Net != "none" {
+		for _, r := range spec.Egress.Divert.Routes {
+			if err := linuxHullOnHvi(RouteModeProperty(orMode(r.Mode)), spec.Hypervisor); err != nil {
+				return err
+			}
+		}
+		if spec.Egress.Divert.BrigInternal {
+			if err := linuxHullOnHvi(RouteModeProperty(v1alpha1.ModeEndpoint), spec.Hypervisor); err != nil {
+				return err
+			}
+		}
+	}
 	if err := checkSetup(spec, linuxHullPath); err != nil {
 		return err
 	}
@@ -2006,4 +2020,12 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// orMode is m, or endpoint for a divert that names no mode.
+func orMode(m v1alpha1.RouteMode) v1alpha1.RouteMode {
+	if m == "" {
+		return v1alpha1.ModeEndpoint
+	}
+	return m
 }

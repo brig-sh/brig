@@ -189,6 +189,14 @@ func linuxHullEgress(spec RunSpec, hypervisor string) error {
 	if !spec.Egress.Filtered() || spec.Net == "none" {
 		return nil
 	}
+	return linuxHullOnHvi(EgressPolicy, hypervisor)
+}
+
+// linuxHullOnHvi refuses property p for a networked run of hull on Linux on a
+// monitor other than hvi: urunc joins no other monitor to a gateway, so
+// nothing there would apply the rules or route brig.internal. The refusal is
+// a CapabilityError, exit 7, as for any path that cannot enforce a policy.
+func linuxHullOnHvi(p Property, hypervisor string) error {
 	monitor, err := linuxMonitor(hypervisor)
 	if err != nil {
 		return err
@@ -196,10 +204,20 @@ func linuxHullEgress(spec RunSpec, hypervisor string) error {
 	if monitor == monitorHvi {
 		return nil
 	}
-	return &CapabilityError{Property: EgressPolicy, Path: linuxHullPath, State: CannotEnforce,
+	return &CapabilityError{Property: p, Path: linuxHullPath, State: CannotEnforce,
 		Why: fmt.Sprintf("hull on Linux joins a sandbox to its network gateway only on hvi, "+
 			"and this run asks for %s", monitor),
 		Remedy: "Unset BRIG_HYPERVISOR to boot on hvi, or detach the policy"}
+}
+
+// RequireGatewayMonitor is linuxHullOnHvi for a run on rt: nil unless rt is
+// hull on Linux, the run has a network, and hypervisor names a monitor other
+// than hvi. brig policy check asks it for a route mode, as the run does.
+func RequireGatewayMonitor(p Property, rt Runtime, hypervisor, net string) error {
+	if h, ok := rt.(*hull); !ok || !h.linux || net == "none" {
+		return nil
+	}
+	return linuxHullOnHvi(p, hypervisor)
 }
 
 // requireEgress refuses a run whose path does not enforce the policy it

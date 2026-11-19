@@ -116,7 +116,8 @@ transport where the mode is served.
 | hull on `hvi` | `enforced` over `brig.internal`, when its gateway takes `--divert` and the run has a network |
 | hull on `vz` | `cannot enforce`: vz takes its network from vmnet, and Brig routes `brig.internal` at the gateway only `hvi` uses |
 | hull on `qemu` | `cannot enforce`, as on `vz` |
-| hull on Linux, on any monitor | `enforced` over `brig.internal`, as on `hvi`: the same gateway, the same probe for `--divert`, and the run has a network. A run on 2026-11-18 showed it. See [the record](manual-tests/hull-linux-gateway-2026-11-18.md) |
+| hull on Linux, on `hvi` (its default) | `enforced` over `brig.internal`, as on `hvi`: the same gateway, the same probe for `--divert`, and the run has a network. A run on 2026-11-18 showed it. See [the record](manual-tests/hull-linux-gateway-2026-11-18.md) |
+| hull on Linux, on another monitor | `cannot enforce`: urunc joins only `hvi` to a network gateway, so Brig refuses a networked run with a route there with exit 7 |
 | nerdctl on urunc | `enforced` over `brig.internal`, when `nft` is installed. A run with a route takes the `isolated` posture |
 | nerdctl on runc | `cannot enforce`: Brig boots no shim that gives the guest the host's own kernel |
 | docker | `cannot enforce`: docker manages its own bridges and firewall |
