@@ -1418,6 +1418,11 @@ default. On nerdctl, Brig's table does.
 | [Egress conformance on nerdctl, bundle v0.1.0-rc17, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 | [Egress conformance on nerdctl, bundle v0.1.0-rc21, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc21-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 
+`script/egress-conformance.sh -backend hull-linux` runs the same suite on
+hull on Linux, with the hull the runtime bundle ships. Its record is
+`egress-conformance-hull-linux-<bundle version>.md`. No such record is
+committed yet.
+
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox.
 

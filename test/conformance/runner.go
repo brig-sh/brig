@@ -214,7 +214,13 @@ func (s *suite) do(ctx context.Context) *report {
 		if rep.unfiled != "" {
 			return rep
 		}
-		rep.assets = s.nerdctlAssets(env, rep)
+		rep.assets = s.bundleAssets(env, rep)
+	case "hull-linux":
+		rep.stack = s.hullLinuxStack(ctx, env, rep)
+		if rep.unfiled != "" {
+			return rep
+		}
+		rep.assets = s.bundleAssets(env, rep)
 	default:
 		rep.stack = []stackRow{{"hvi", s.hviLine(ctx)}}
 		rep.assets = s.assetsLine(ctx, env)
@@ -747,6 +753,9 @@ func (s *suite) boot(ctx context.Context, env []string, policy string) *bootResu
 // a console". The suite has none, so on nerdctl every probe failed. brig exec
 // asks for one only from a terminal, and docs/migration.md keeps it for this
 // until sh can pipe. It runs no login shell, so the record says which it was.
+// The refusal is nerdctl's own check, not containerd's, so hull on Linux keeps
+// brig sh, the path the hvi records were measured on. No run on hull on Linux
+// has shown it needs brig exec. If one does, it goes here with nerdctl.
 func (s *suite) probeArgv() []string {
 	if s.backend == "nerdctl" {
 		return []string{"exec", profileName, "--"}

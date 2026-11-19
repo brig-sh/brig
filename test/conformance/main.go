@@ -39,10 +39,10 @@ func mainErr(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	brig := fs.String("brig", "", "the brig binary to test (required)")
 	probe := fs.String("probe", "", "netprobe built for the guest (required)")
-	runtime := fs.String("runtime", "", "the runtime brig boots, whose version the record names (default $BRIG_RUNTIME_BIN, else hull on hvi and nerdctl on nerdctl)")
+	runtime := fs.String("runtime", "", "the runtime brig boots, whose version the record names (default $BRIG_RUNTIME_BIN, else hull on hvi and hull-linux, and nerdctl on nerdctl)")
 	image := fs.String("image", defaultImage, "guest image; it needs curl for the proxy case")
 	backend := fs.String("backend", defaultBackend(), "backend to boot on: "+backendNames())
-	brigCtl := fs.String("brig-ctl", "brig-ctl", "on nerdctl, the runtime bundle's brig-ctl, whose pins the record names")
+	brigCtl := fs.String("brig-ctl", "brig-ctl", "on nerdctl and hull-linux, the runtime bundle's brig-ctl, whose pins the record names")
 	record := fs.String("record", "", "where to write the record (default docs/manual-tests/egress-conformance-<backend>-<runtime version>.md)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -149,7 +149,8 @@ func runCmd(ctx context.Context, env []string, name string, args ...string) (str
 }
 
 // defaultBackend is the one this host has: hvi is a macOS backend, and on
-// Linux brig enforces a policy with nerdctl.
+// Linux brig enforces a policy with nerdctl. hull on Linux is asked for by
+// name, -backend hull-linux, since nerdctl stays brig's default there.
 func defaultBackend() string {
 	if goruntime.GOOS == "linux" {
 		return "nerdctl"
