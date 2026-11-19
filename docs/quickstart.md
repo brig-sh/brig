@@ -38,7 +38,7 @@ Brig prints one line per check. The output is in this shape, and the
 versions and paths differ on your host:
 
 ```
-  ok  brig      v0.5.2 (<commit>, <date>, <go version>, darwin/arm64)
+  ok  brig      v0.6.0 (<commit>, <date>, <go version>, darwin/arm64)
   ok  host      macOS 26.7 on arm64
   ok  virtual   Hypervisor.framework available
   ok  runtime   hull <version> at /opt/homebrew/bin/hull, gateway asked by <report or probe>
