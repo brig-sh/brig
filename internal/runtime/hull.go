@@ -1199,6 +1199,13 @@ func linuxRunArgs(spec RunSpec, gatewaySock, gatewayCidr string, fetch assetFetc
 		if err != nil {
 			return nil, nil, err
 		}
+		// hull checks the kernel against the record beside it before it
+		// boots. See fillFetchRecordSizes.
+		for _, kv := range annotations {
+			if k, ok := strings.CutPrefix(kv, annotationBootKernel+"="); ok {
+				fillFetchRecordSizes(filepath.Dir(k))
+			}
+		}
 		mode, err := linuxHullRootfsMode(spec)
 		if err != nil {
 			return nil, nil, err

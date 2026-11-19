@@ -112,7 +112,9 @@ func orasPull(dir string, fetch BootFetch, notice, progress io.Writer) error {
 const fetchRecordName = "provenance.json"
 
 // writeFetchRecord records which bundle oras fetched into dir, in the shape
-// hull writes for its own fetches, so wrap reads both the same way.
+// hull writes for its own fetches, so wrap reads both the same way. hull on
+// Linux checks the kernel and initrd against this record before it boots, by
+// digest and by size, so a record without a size refuses every boot.
 //
 // Without it, files a later publish of the tag left behind are
 // indistinguishable from files somebody changed: both differ from the bundle
@@ -129,20 +131,15 @@ func writeFetchRecord(dir, ref string) error {
 	}
 	type file struct {
 		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
 	}
 	files := map[string]file{}
 	for _, name := range []string{bootKernelName(), bootInitrdName} {
-		f, err := os.Open(filepath.Join(dir, name))
+		sum, n, err := hashFile(filepath.Join(dir, name))
 		if err != nil {
 			return err
 		}
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-		files[name] = file{SHA256: hex.EncodeToString(h.Sum(nil))}
+		files[name] = file{SHA256: sum, Size: n}
 	}
 	raw, err := json.Marshal(struct {
 		Ref            string          `json:"ref"`
@@ -154,6 +151,71 @@ func writeFetchRecord(dir, ref string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, fetchRecordName), raw, 0o644)
+}
+
+// fillFetchRecordSizes gives each file in dir's fetch record the size it is
+// missing, when the file still has the digest the record names. A brig older
+// than writeFetchRecord's size wrote records without one, and hull on Linux
+// reads the absent size as zero and refuses every boot from that directory.
+// brig fetches again only when the files change, so such a record would stay.
+//
+// It vouches for nothing new: a file whose digest differs from the record
+// keeps the record as it was, and hull refuses it as before. Any error leaves
+// the record alone, for hull to report.
+func fillFetchRecordSizes(dir string) {
+	path := filepath.Join(dir, fetchRecordName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var rec map[string]json.RawMessage
+	if json.Unmarshal(raw, &rec) != nil {
+		return
+	}
+	var files map[string]map[string]any
+	if json.Unmarshal(rec["files"], &files) != nil {
+		return
+	}
+	changed := false
+	for name, f := range files {
+		if size, _ := f["size"].(float64); size > 0 {
+			continue
+		}
+		want, _ := f["sha256"].(string)
+		got, n, err := hashFile(filepath.Join(dir, name))
+		if err != nil || want == "" || got != want {
+			continue
+		}
+		f["size"] = n
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	out, err := json.Marshal(files)
+	if err != nil {
+		return
+	}
+	rec["files"] = out
+	if raw, err = json.Marshal(rec); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, raw, 0o644)
+}
+
+// hashFile returns the sha256 of the file at path, in hex, and its size.
+func hashFile(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 // orasFetcher binds the Linux download to one run's writers, the way the hull
