@@ -306,6 +306,14 @@ func showPolicy(args []string) error {
 			}
 			notes = append(notes, note)
 		}
+		// A server with a preset may not set url or inject, since the preset
+		// fixes where the credential goes. Printed, they would make a policy
+		// brig refuses to load, so show leaves them to the preset.
+		for i := range expanded.Spec.MCP {
+			if s := &expanded.Spec.MCP[i]; s.Preset != "" {
+				s.URL, s.Inject = "", nil
+			}
+		}
 		doc = expanded
 	}
 	var blob []byte
@@ -397,6 +405,10 @@ func parseNameAndForce(verb string, args []string) (name string, force bool, err
 	}
 	return words[0], force, nil
 }
+
+// starterPolicySchemaURL is where an editor finds the policy schema. It resolves
+// once the schema is on the default branch.
+const starterPolicySchemaURL = "https://raw.githubusercontent.com/brig-sh/brig/main/api/policy/v1alpha1/policy.schema.json"
 
 // createPolicy writes a starter policy document, then opens it in your
 // editor: $VISUAL, then $EDITOR, then vi. With a pipe or a file on stdin, it
@@ -542,7 +554,8 @@ func stdinPiped() bool {
 
 // policyStarter is a minimal, valid policy document to start editing from.
 func policyStarter(name string) string {
-	return fmt.Sprintf(`apiVersion: %s
+	return fmt.Sprintf(`# yaml-language-server: $schema=%s
+apiVersion: %s
 kind: Policy
 metadata:
   name: %s
@@ -552,7 +565,7 @@ spec:
     default: deny
     allow:
       - host: api.anthropic.com
-`, policy.APIVersion, name)
+`, starterPolicySchemaURL, policy.APIVersion, name)
 }
 
 // editPolicy opens an existing policy in a scratch copy, and only replaces
@@ -853,6 +866,29 @@ func routeMode(r v1alpha1.Route) v1alpha1.RouteMode {
 		}
 	}
 	return v1alpha1.ModeEndpoint
+}
+
+// printMCP prints one row per MCP server of p, on stderr with the route rows.
+// The row says where the guest's calls end up and which tools may run, and a
+// wildcard is warned about because it admits tools the author never read.
+func printMCP(p policy.Policy) {
+	servers, err := policy.MCPServers([]policy.Policy{p})
+	if err != nil {
+		// Parse refused a server that does not expand, and checkPolicy
+		// reports a clash between policies, so there is nothing to print.
+		return
+	}
+	for _, e := range servers {
+		s := e.Server
+		tools := "tools: " + strings.Join(s.Tools.Allow, ", ")
+		if slices.Contains(s.Tools.Allow, v1alpha1.MCPAllTools) {
+			tools = "tools: all (*)"
+		}
+		fmt.Fprintf(os.Stderr, "  mcp %s  %s  %s\n", s.Name, s.URL, tools)
+		if slices.Contains(s.Tools.Allow, v1alpha1.MCPAllTools) {
+			fmt.Fprintf(os.Stderr, "  warning: mcp %s allows every tool; list the tools it needs\n", s.Name)
+		}
+	}
 }
 
 // routeModes lists the modes of the routes of ps in the order a boot checks
@@ -1240,6 +1276,7 @@ func checkPolicy(args []string) error {
 		if e, ok := entries[name]; ok {
 			fmt.Println(name)
 			printRoutes(e.Policy)
+			printMCP(e.Policy)
 			loaded = append(loaded, e.Policy)
 			continue
 		}
@@ -1268,6 +1305,11 @@ func checkPolicy(args []string) error {
 	// between them: a route name or a guest.env name that two of them use.
 	routes, err := policy.Routes(loaded)
 	if err != nil {
+		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
+	}
+	// The same holds for MCP servers: a name two policies share, or the
+	// reserved brig-memory, is refused by a run, so check says so first.
+	if _, err := policy.MCPServers(loaded); err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
 	// A boot refuses a route that its run path cannot serve, so check says
