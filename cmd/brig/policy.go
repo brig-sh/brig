@@ -49,10 +49,16 @@ flags:
                 with rm: delete one that is bound to something
       --json    with show: render JSON rather than YAML
       --preset  with show: a preset brig ships, not a policy
-      --name, --namespace, --selector k=v, --pod-identity
+      --name, --namespace, --selector k=v
                 with render-cilium: the object name (default: the policy's),
-                its namespace, a pod label (repeatable), and a rule to the
-                EKS Pod Identity agent
+                its namespace, and a pod label (repeatable)
+      --pod-identity, --cluster
+                with render-cilium: a rule to the EKS Pod Identity agent, and
+                a rule to every pod and node of the cluster
+      --broker-address ADDR, --dns-search DOMAIN
+                with render-cilium: the node broker's address or CIDR
+                (default: 169.254.171.1), and a search domain of the pod's
+                resolver beyond cluster.local (repeatable)
   -n, --name    with attach/detach/check: one session by name, not every run
 
 A policy is a named document declaring what an agent may reach outbound,
