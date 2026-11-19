@@ -460,8 +460,8 @@ func TestRenderBrokerAddress(t *testing.T) {
 		"169.254.171.9":      "169.254.171.9/32",
 		"fd00::171:1":        "fd00::171:1/128",
 		"::ffff:169.254.1.1": "169.254.1.1/32",
-		"169.254.171.0/24":   "169.254.171.0/24",
-		"169.254.171.5/24":   "169.254.171.0/24",
+		"169.254.171.9/32":   "169.254.171.9/32",
+		"fd00::171:1/128":    "fd00::171:1/128",
 	} {
 		np, err := Render(p, Options{BrokerCIDR: in})
 		if err != nil {
@@ -472,7 +472,9 @@ func TestRenderBrokerAddress(t *testing.T) {
 			t.Errorf("%s: broker rule %q, want %q", in, got, want)
 		}
 	}
-	for _, in := range []string{"not-an-address", "169.254.171.1/40", "brig.internal"} {
+	// Negative: a range opened port 443 to all of it for every selected pod.
+	for _, in := range []string{"not-an-address", "169.254.171.1/40", "brig.internal",
+		"10.0.0.0/8", "169.254.171.0/24", "fd00::/64"} {
 		if _, err := Render(p, Options{BrokerCIDR: in}); err == nil {
 			t.Errorf("broker address %q rendered", in)
 		}
@@ -504,5 +506,51 @@ func TestRenderPodIdentityOpensBothAddresses(t *testing.T) {
 	want := []string{PodIdentityCIDR, PodIdentityCIDR6}
 	if !slices.ContainsFunc(np.Spec.Egress, func(r EgressRule) bool { return slices.Equal(r.ToCIDR, want) }) {
 		t.Errorf("no rule to %q in %+v", want, np.Spec.Egress)
+	}
+}
+
+// Negative: under --cluster a deny CIDR is refused. Cilium matches pods and
+// nodes by identity, so the deny could not take back what the cluster rule
+// lets through.
+func TestRenderRefusesADenyCIDRUnderCluster(t *testing.T) {
+	p := &v1alpha1.Policy{
+		Metadata: v1alpha1.ObjectMeta{Name: "cluster-deny-cidr"},
+		Spec: v1alpha1.PolicySpec{Egress: &v1alpha1.Egress{
+			Default: v1alpha1.EgressDeny,
+			Allow:   []v1alpha1.Rule{{Host: "api.example.com"}},
+			Deny:    []v1alpha1.Rule{{CIDR: "10.0.0.0/8"}},
+		}},
+	}
+	if _, err := Render(p, Options{Cluster: true}); err == nil || !strings.Contains(err.Error(), "deny[0] cidr") {
+		t.Errorf("err = %v, want a refusal of deny[0] cidr", err)
+	}
+	if _, err := Render(p, Options{}); err != nil {
+		t.Errorf("refused without --cluster: %v", err)
+	}
+}
+
+// A dropped deny host is reported, because it stays denied only while no
+// other policy for the same pods allows it.
+func TestRenderReportsADroppedDenyHost(t *testing.T) {
+	np, err := Render(loadPolicy(t, "deny-host-dropped"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := np.DroppedDenyHosts(); !slices.Equal(got, []string{"evil.example.com"}) {
+		t.Errorf("DroppedDenyHosts = %q, want evil.example.com", got)
+	}
+	np, err = Render(loadPolicy(t, "deny-default"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := np.DroppedDenyHosts(); len(got) != 0 {
+		t.Errorf("DroppedDenyHosts = %q with no deny host", got)
+	}
+	out, err := RenderYAML(loadPolicy(t, "deny-host-dropped"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte("evil.example.com")) {
+		t.Errorf("the dropped host reached the object:\n%s", out)
 	}
 }

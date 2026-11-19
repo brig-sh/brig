@@ -2783,3 +2783,34 @@ func TestPolicyHelpNamesEveryRenderCiliumFlag(t *testing.T) {
 		}
 	}
 }
+
+// A deny host the object leaves out is named on stderr, and stdout holds only
+// the object, so it can be piped to kubectl.
+func TestRenderCiliumWarnsOfADroppedDenyHost(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: dropped
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.example.com
+    deny:
+      - host: evil.example.com
+`)
+	var out string
+	var err error
+	stderr := captureStderr(t, func() {
+		out, err = captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, `"evil.example.com" is left out`) {
+		t.Errorf("stderr does not name the dropped host: %q", stderr)
+	}
+	if strings.Contains(out, "evil.example.com") || !strings.HasPrefix(out, "apiVersion:") {
+		t.Errorf("stdout is not the object alone:\n%s", out)
+	}
+}

@@ -25,6 +25,10 @@ type NetworkPolicy struct {
 	Metadata ObjectMeta `json:"metadata"`
 	// Spec holds the rules.
 	Spec Spec `json:"spec"`
+
+	// droppedDenyHosts lists the deny hosts Render left out. It is not
+	// marshalled.
+	droppedDenyHosts []string
 }
 
 // ObjectMeta is the Kubernetes object metadata Render writes.
@@ -125,4 +129,11 @@ type DNSRule struct {
 	MatchName string `json:"matchName,omitempty"`
 	// MatchPattern is a name in which '*' is a wildcard.
 	MatchPattern string `json:"matchPattern,omitempty"`
+}
+
+// DroppedDenyHosts returns the deny hosts of the policy that Render left out,
+// in document order. Each is refused only by the absence of an allow rule for
+// it, which holds while no other policy that selects the same pods allows it.
+func (np *NetworkPolicy) DroppedDenyHosts() []string {
+	return np.droppedDenyHosts
 }

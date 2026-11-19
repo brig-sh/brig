@@ -49,7 +49,7 @@ type Options struct {
 	// PodIdentity adds a rule to the EKS Pod Identity agent.
 	PodIdentity bool
 	// BrokerCIDR is the address of the node broker, as an address or a
-	// CIDR. Empty means BrokerCIDR.
+	// prefix of its full length. Empty means BrokerCIDR.
 	BrokerCIDR string
 	// DNSSearch lists search domains of the pod's resolver beyond
 	// ClusterDomain, such as the node's own. Under a deny default the DNS
@@ -104,7 +104,8 @@ type Options struct {
 // also an error when the policy has any allow CIDR, which may contain the
 // host's addresses, and when o.Cluster is set, since the cluster rule lets
 // through any pod or node the host may name. Any other deny host is an
-// error.
+// error. A dropped deny host is listed by DroppedDenyHosts. A deny CIDR is
+// an error when o.Cluster is set.
 //
 // A host is lowercased and loses one trailing dot. It must then be one or
 // more labels joined by '.', each a non-empty run of [a-z0-9-*]; a bare "*"
@@ -245,6 +246,12 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			if err != nil {
 				return nil, fmt.Errorf("deny[%d] cidr: %w", i, err)
 			}
+			// Cilium matches a pod or a node by its identity, not by a CIDR
+			// rule, so a deny CIDR cannot take back what the cluster rule
+			// lets through.
+			if o.Cluster {
+				return nil, fmt.Errorf("deny[%d] cidr %q: --cluster lets through every pod and node of the cluster, and Cilium applies no CIDR rule to them, so the deny cannot be rendered", i, r.CIDR)
+			}
 			np.Spec.EgressDeny = append(np.Spec.EgressDeny, EgressDenyRule{ToCIDR: []string{c}})
 		case r.Host != "":
 			h := normalizeHost(r.Host)
@@ -259,10 +266,13 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			}
 			// Under a deny default the host is refused already, unless an
 			// allow host reaches it. The check is wider than Cilium's
-			// matching on purpose: it may refuse a policy that would have
-			// rendered right, and it never drops a deny host that an allow
-			// host or an allow CIDR lets through. A deny glob needs the overlap test: it
-			// can deny one name under an allow glob without covering it.
+			// matching: it may refuse a policy that would have rendered
+			// right, and it never drops a deny host that an allow host or
+			// an allow CIDR lets through. A deny glob needs the overlap
+			// test, since it can deny one name under an allow glob without
+			// covering it. The drop holds only while no other policy that
+			// selects the same pods allows the host, because Cilium joins
+			// the allow rules of every policy. So it is reported.
 			if o.Cluster {
 				return nil, fmt.Errorf("deny[%d] host %q: --cluster lets through every pod and node of the cluster, which the host may name, and Cilium egressDeny has no toFQDNs, so the deny cannot be rendered", i, r.Host)
 			}
@@ -278,6 +288,7 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 					return nil, fmt.Errorf("deny[%d] host %q overlaps allow[%d] host %q: Cilium egressDeny has no toFQDNs, so the deny cannot be rendered", i, r.Host, a.i, eg.Allow[a.i].Host)
 				}
 			}
+			np.droppedDenyHosts = append(np.droppedDenyHosts, r.Host)
 		default:
 			return nil, fmt.Errorf("deny[%d] has neither host nor cidr", i)
 		}
@@ -410,18 +421,23 @@ func canonicalCIDR(s string) (string, error) {
 	return p.Masked().String(), nil
 }
 
-// brokerPrefix returns the CIDR rule for the broker address s, which is an
-// address or a CIDR. An address becomes a prefix of its full length.
+// brokerPrefix returns the CIDR rule for the broker address s: an address,
+// or a prefix of its full length. A wider prefix is refused, because the
+// rule would open port 443 to that whole range for every selected pod.
 func brokerPrefix(s string) (string, error) {
-	if a, err := netip.ParseAddr(s); err == nil {
-		a = a.Unmap()
-		return netip.PrefixFrom(a, a.BitLen()).String(), nil
-	}
-	c, err := canonicalCIDR(s)
+	a, err := netip.ParseAddr(s)
 	if err != nil {
-		return "", fmt.Errorf("broker address %q is neither an address nor a CIDR", s)
+		p, perr := netip.ParsePrefix(s)
+		if perr != nil {
+			return "", fmt.Errorf("broker address %q is not an address", s)
+		}
+		if p.Bits() != p.Addr().BitLen() {
+			return "", fmt.Errorf("broker address %q is a range; give the one address the node broker listens on", s)
+		}
+		a = p.Addr()
 	}
-	return c, nil
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()).String(), nil
 }
 
 // checkNamespace refuses a namespace that Kubernetes does not take as a
