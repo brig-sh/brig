@@ -16,8 +16,10 @@
 #   rm              brig rm leaves no sandbox and no gateway behind
 #   cleanup         remove whatever this run left, by its name prefix
 #
-# Every sandbox is a session of the ubuntu profile. Its image runs as root, and
-# hull on Linux refuses an image whose USER is a name.
+# Every sandbox is a session of the ubuntu profile, except the policy check's:
+# brig binds a policy only to an agent profile, so that one is a session of the
+# codex profile. Both images run as root, and hull on Linux refuses an image
+# whose USER is a name.
 set -eu
 
 say() { printf 'hull-linux: %s\n' "$*" >&2; }
@@ -66,6 +68,9 @@ export BRIG_RUNTIME DO_NOT_TRACK BRIG_POLICY_DIR BRIG_GATEWAY_DIR
 unset GH_TOKEN GITHUB_TOKEN BRIG_RUNTIME_BIN BRIG_RUNTIME_VERSION
 
 ref() { printf 'ubuntu@%s-%s' "$RUN" "$1"; }
+# The policy check's profile. A shell profile such as ubuntu has no agent to
+# hook an egress rule into, and brig refuses to attach a policy to it.
+POLICY_PROFILE=codex
 
 # hull, with the environment the bundle's launcher gives brig.
 hull() {
@@ -81,7 +86,7 @@ hull() {
 run_refs() {
   command -v brig > /dev/null 2>&1 || return 0
   _all=$(brig -q ls) || fail "brig ls failed"
-  printf '%s\n' "$_all" | grep -F "ubuntu@$RUN-" || true
+  printf '%s\n' "$_all" | grep -F "@$RUN-" || true
 }
 
 show_logs() {
@@ -253,8 +258,8 @@ cmd_isolated() {
 }
 
 cmd_policy() {
-  _r=$(ref pol)
   _label="$RUN-pol"
+  _r="$POLICY_PROFILE@$_label"
   mkdir -p "$BRIG_POLICY_DIR"
   say "+ brig policy create ci-deny"
   brig policy create ci-deny << EOF
@@ -269,11 +274,11 @@ spec:
     allow:
       - host: $ALLOWED_HOST
 EOF
-  say "+ brig policy attach ci-deny ubuntu -n $_label"
-  brig policy attach ci-deny ubuntu -n "$_label"
-  say "+ brig policy check ubuntu -n $_label"
+  say "+ brig policy attach ci-deny $POLICY_PROFILE -n $_label"
+  brig policy attach ci-deny "$POLICY_PROFILE" -n "$_label"
+  say "+ brig policy check $POLICY_PROFILE -n $_label"
   _rc=0
-  brig policy check ubuntu -n "$_label" || _rc=$?
+  brig policy check "$POLICY_PROFILE" -n "$_label" || _rc=$?
   [ "$_rc" -ne 7 ] || fail "brig refuses a policy on hull on Linux (exit 7); brig#675 lifts the refusal"
   [ "$_rc" -eq 0 ] || fail "brig policy check exited $_rc"
   boot "$_r"
@@ -323,6 +328,9 @@ cmd_cleanup() {
   fi
   pkill -f -- "$BRIG_GATEWAY_DIR/"
   sleep 1
+  if command -v brig > /dev/null 2>&1; then
+    brig policy detach ci-deny "$POLICY_PROFILE" -n "$RUN-pol" > /dev/null 2>&1
+  fi
   rm -rf "$BRIG_GATEWAY_DIR" "$BRIG_POLICY_DIR"
   _left=$(leftovers)
   set -e
