@@ -233,6 +233,16 @@ func TestCompletePositions(t *testing.T) {
 		words:     []string{"agent", "import", ""},
 		directive: dirFiles,
 	}, {
+		// --broker-address was listed as a bare flag, so its value took the
+		// file slot and the file after it got nothing.
+		name:      "render-cilium's --broker-address takes a value",
+		words:     []string{"policy", "render-cilium", "--broker-address", "169.254.171.9", ""},
+		directive: dirFiles,
+	}, {
+		name:      "and so does --dns-search",
+		words:     []string{"policy", "render-cilium", "--dns-search", "corp.example", ""},
+		directive: dirFiles,
+	}, {
 		name:      "policies are completed where a policy goes",
 		words:     []string{"policy", "attach", ""},
 		directive: dirNames,

@@ -2710,6 +2710,10 @@ func TestRenderCiliumUsageErrors(t *testing.T) {
 		"no key":       {"render-cilium", path, "--selector", "=x"},
 		"unknown flag": {"render-cilium", path, "--bogus"},
 		"missing file": {"render-cilium", filepath.Join(t.TempDir(), "none.yaml")},
+		// Negative: these rendered and exited 0.
+		"bad broker address": {"render-cilium", path, "--name", "x", "--broker-address", "not-an-address"},
+		"bad namespace":      {"render-cilium", path, "--name", "x", "--namespace", "Agents_1"},
+		"glob search domain": {"render-cilium", path, "--name", "x", "--dns-search", "*.example.com"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, err := captureStdout(t, func() error { return policyCmd(args) })
@@ -2731,5 +2735,51 @@ func TestRenderCiliumRefusesAGlobCiliumCannotExpress(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "a?.example.com") {
 		t.Errorf("error does not name the rule: %v", err)
+	}
+}
+
+// A flag value Kubernetes or Cilium would not take is a usage mistake.
+func TestRenderCiliumRefusesABadFlagValueAsUsage(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	for _, args := range [][]string{
+		{"render-cilium", path, "--name", "x", "--broker-address", "not-an-address"},
+		{"render-cilium", path, "--name", "x", "--namespace", "Agents"},
+	} {
+		_, err := captureStdout(t, func() error { return policyCmd(args) })
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%q: err = %v, want a usage error", args, err)
+		}
+	}
+}
+
+// --dns-search and --broker-address reach the rendered object.
+func TestRenderCiliumHonorsTheDNSAndBrokerFlags(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "x",
+			"--dns-search", "us-west-2.compute.internal", "--dns-search", "corp.example",
+			"--broker-address", "169.254.171.9"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"'*.us-west-2.compute.internal'", "'*.corp.example'", "'*.cluster.local'"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "matchPattern: '*'\n") {
+		t.Errorf("a deny default answers every lookup:\n%s", out)
+	}
+}
+
+// brig policy --help names every render-cilium flag.
+func TestPolicyHelpNamesEveryRenderCiliumFlag(t *testing.T) {
+	for _, flag := range []string{"--name", "--namespace", "--selector", "--pod-identity",
+		"--cluster", "--broker-address", "--dns-search"} {
+		if !strings.Contains(policyUsage, flag) {
+			t.Errorf("brig policy --help does not name %s", flag)
+		}
 	}
 }

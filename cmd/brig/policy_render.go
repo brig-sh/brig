@@ -24,6 +24,10 @@ func renderCiliumPolicy(args []string) error {
 	fs.BoolVar(&o.PodIdentity, "pod-identity", false, "")
 	fs.BoolVar(&o.Cluster, "cluster", false, "")
 	fs.StringVar(&o.BrokerCIDR, "broker-address", "", "")
+	fs.Func("dns-search", "", func(v string) error {
+		o.DNSSearch = append(o.DNSSearch, v)
+		return nil
+	})
 	sel := map[string]string{}
 	var selErr error
 	fs.Func("selector", "", func(v string) error {
@@ -35,7 +39,7 @@ func renderCiliumPolicy(args []string) error {
 		sel[k] = val
 		return nil
 	})
-	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity, --cluster and --broker-address", fs, args)
+	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity, --cluster, --broker-address and --dns-search", fs, args)
 	if err != nil {
 		if selErr != nil {
 			return selErr
@@ -50,6 +54,9 @@ func renderCiliumPolicy(args []string) error {
 	}
 	if len(sel) > 0 {
 		o.PodSelector = sel
+	}
+	if err := o.Check(); err != nil {
+		return usagef("%v", err)
 	}
 	p, err := readPolicyFile(words[0])
 	if err != nil {
