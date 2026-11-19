@@ -121,6 +121,8 @@ type L7Rules struct {
 
 // DNSRule names the lookups the DNS proxy lets through.
 type DNSRule struct {
+	// MatchName is an exact name.
+	MatchName string `json:"matchName,omitempty"`
 	// MatchPattern is a name in which '*' is a wildcard.
-	MatchPattern string `json:"matchPattern"`
+	MatchPattern string `json:"matchPattern,omitempty"`
 }

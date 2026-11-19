@@ -1027,7 +1027,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
-| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address CIDR]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address ADDR] [--dns-search DOMAIN]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
 Complete command lines for all nine:
 
@@ -1216,14 +1216,19 @@ brig policy render-cilium deny-default.yaml --namespace agents --selector app=cl
 ```
 
 The object name defaults to `metadata.name`, and it must be a valid
-Kubernetes name. `--name` replaces it. `--selector` is repeatable and sets
-the pod labels the policy applies to. With none, it applies to every pod in
-the namespace. `--pod-identity` adds a rule to the EKS Pod Identity agent at
-`169.254.170.23/32` on port 80. `--cluster` adds a rule to the cluster entity,
-every pod and node of the cluster on every port. A brig policy's egress names
-the hosts a sandbox reaches outside; a pod on a cluster also talks to the
-services beside it, a database or a queue, which the policy does not name.
-Without the flag a deny default cuts those off.
+Kubernetes name. `--name` replaces it. `--namespace` must be a valid
+namespace name. `--selector` is repeatable and sets the pod labels the policy
+applies to. With none, it applies to every pod in the namespace.
+`--pod-identity` adds a rule to the EKS Pod Identity agent at
+`169.254.170.23/32` and `fd00:ec2::23/128` on port 80. `--cluster` adds a
+rule to the cluster entity, every pod and node of the cluster on every port.
+A brig policy's egress names the hosts a sandbox reaches outside. A pod on a
+cluster also talks to the services beside it, a database or a queue, which
+the policy does not name. Without the flag a deny default cuts those off.
+`--broker-address` takes the node broker's address or CIDR, when it is not
+`169.254.171.1`. `--dns-search` is repeatable and adds a search domain of
+the pod's resolver, as described below. A flag value Kubernetes or Cilium
+would not take is refused as a usage error.
 
 The mapping:
 
@@ -1232,13 +1237,39 @@ The mapping:
 | `default: deny` | `enableDefaultDeny: {egress: true}` and the allow rules |
 | `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
 | allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. Cilium's `*` does not cross a dot, so a leading `*.` becomes `**.` and then `*.`, `*.*.` and so on, up to five labels. See below |
-| allow `cidr` | `toCIDR` |
-| deny `cidr` | `egressDeny` with `toCIDR` |
-| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host |
+| allow `cidr` | `toCIDR`, masked. An IPv4-mapped CIDR such as `::ffff:10.0.0.0/104` is written as the IPv4 CIDR it names, `10.0.0.0/8`, as brig's enforcer reads it |
+| deny `cidr` | `egressDeny` with `toCIDR`, written the same way |
+| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host. It is refused under `--cluster`, because the cluster rule lets through any pod or node the host may name, such as one under `*.svc.cluster.local` |
 | `spec.routes` | a rule to the broker's address (`169.254.171.1/32`, or `--broker-address`) on port 443, where the node broker serves `brig.internal`. A CIDR rule, not the `host` entity: the address has link scope on the node and Cilium does not count it as the host |
 
+Cilium does not apply a CIDR rule to the address of a pod or a node of the
+cluster. A deny `cidr` that covers them does not block them, as brig's
+enforcer would. Under an allow default or `--cluster` the pod still reaches
+them. An allow `cidr` does not open them either; `--cluster` does.
+
 The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
-makes `toFQDNs` work. Only `*` is accepted as a wildcard in a host glob.
+makes `toFQDNs` work. Under an allow default the rule answers every lookup.
+Under a deny default it answers only the allow hosts, `brig.internal` when
+the policy has routes, and the names under the resolver's search domains.
+The proxy refuses any other lookup, so a sandbox cannot carry data out in
+the names it looks up, as in `<data>.attacker.example`. Brig's own resolver
+refuses those names too.
+
+A pod's resolver, with the usual `ndots:5`, looks a name up under each search
+domain before it looks it up as written. A lookup the proxy refuses ends
+there: glibc stops at the refusal, and musl waits until it times out. So the
+DNS rule answers every name under `cluster.local`, which kube-dns serves
+itself. Pass any other search domain in the pod's `/etc/resolv.conf` with
+`--dns-search`. On EKS that is the node's domain, such as
+`us-west-2.compute.internal`. Without it, a name the policy allows does not
+resolve.
+
+The DNS rule reaches kube-dns, the pods labeled `k8s-app: kube-dns` in
+`kube-system`. A cluster that runs NodeLocal DNSCache sends lookups to the
+cache on the node instead, and the rule does not reach it, so no allow host
+resolves. Add a rule for the cache to the rendered object on such a cluster.
+
+Only `*` is accepted as a wildcard in a host glob.
 `?`, `[` and `\` are refused, and the error names the rule. A `*` inside a label, as in `a*.example.com`, matches within one label in Cilium, which is narrower than brig.
 
 A leading `*.` matches names of any depth in brig. Cilium 1.17 reads `**.` as one label: under `**.amazonaws.com` alone, it lets `sts.amazonaws.com` through and drops `sts.us-east-2.amazonaws.com`. So the renderer writes `**.` for a release that spans labels with it, and one pattern for each depth from one to five labels for one that does not. A name more than five labels deep under the glob is dropped on such a release. None of the patterns matches the apex, as `*.` does not in brig.
@@ -1264,7 +1295,24 @@ spec:
         protocol: ANY
       rules:
         dns:
-        - matchPattern: '*'
+        - matchName: api.anthropic.com
+        - matchPattern: '**.githubusercontent.com'
+        - matchPattern: '*.githubusercontent.com'
+        - matchPattern: '*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.*.githubusercontent.com'
+        - matchName: brig.internal
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.*.cluster.local'
   - toCIDR:
     - 169.254.171.1/32
     toPorts:

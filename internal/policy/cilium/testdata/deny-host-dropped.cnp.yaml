@@ -14,7 +14,13 @@ spec:
         protocol: ANY
       rules:
         dns:
-        - matchPattern: '*'
+        - matchName: api.anthropic.com
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
   - toFQDNs:
     - matchName: api.anthropic.com
   enableDefaultDeny:

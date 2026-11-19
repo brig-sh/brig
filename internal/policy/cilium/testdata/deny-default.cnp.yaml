@@ -15,7 +15,24 @@ spec:
         protocol: ANY
       rules:
         dns:
-        - matchPattern: '*'
+        - matchName: api.anthropic.com
+        - matchPattern: '**.githubusercontent.com'
+        - matchPattern: '*.githubusercontent.com'
+        - matchPattern: '*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.*.githubusercontent.com'
+        - matchName: brig.internal
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.*.cluster.local'
   - toCIDR:
     - 169.254.171.1/32
     toPorts:
