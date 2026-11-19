@@ -701,11 +701,21 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.sandboxes {
 		ids = append(ids, id)
 	}
+	var vends map[string]map[string]injector.VendInfo
+	for id, routes := range s.vends {
+		if vends == nil {
+			vends = map[string]map[string]injector.VendInfo{}
+		}
+		vends[id] = map[string]injector.VendInfo{}
+		for name, v := range routes {
+			vends[id][name] = v.info
+		}
+	}
 	s.mu.Unlock()
 	sort.Strings(ids)
 	pending, failing, recovering := s.creds.report()
 	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
-		Pending: pending, Failing: failing, Recovering: recovering}
+		Pending: pending, Failing: failing, Recovering: recovering, Vends: vends}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
