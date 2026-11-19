@@ -193,6 +193,11 @@ func (s *server) addMemory(w http.ResponseWriter, r *http.Request) {
 		reply(w, s.memoryAdded(req.ID))
 		return
 	}
+	if m, ok := s.mcps[req.ID]; ok && internal.IsValid() && m.internal != internal {
+		http.Error(w, fmt.Sprintf("sandbox %s: its memory reaches brig.internal at %s, and its mcp servers at %s; "+
+			"both must name the same address", req.ID, internal, m.internal), http.StatusConflict)
+		return
+	}
 	// The routes and the memory of a sandbox share its divert socket, which
 	// serves one brig.internal address. Routes that do not reach
 	// brig.internal are served on the loopback port, which a sandbox with a
@@ -262,10 +267,10 @@ func (s *server) removeMemory(w http.ResponseWriter, r *http.Request) {
 		clear(reg.key)
 		delete(s.memories, id)
 	}
-	// A socket the sandbox's routes hold stays for them.
+	// A socket the sandbox's routes or MCP servers hold stays for them.
 	if l := s.diverts[id]; l != nil && l.memory {
 		l.memory = false
-		if !l.servesRoutes() {
+		if !l.servesRoutes() && !l.mcp {
 			l.close()
 			delete(s.diverts, id)
 		}
@@ -312,8 +317,9 @@ func (s *server) mintMemory(w http.ResponseWriter, r *http.Request) {
 	reply(w, injector.MintResponse{Token: token})
 }
 
-// registered counts the sandboxes registered for routes, for memory or for
-// both: the broker is idle only when it serves neither. s.mu is held.
+// registered counts the sandboxes registered for routes, for memory, for
+// MCP servers or for more than one: the broker is idle only when it serves
+// none. s.mu is held.
 func (s *server) registered() int {
 	n := len(s.sandboxes)
 	for id := range s.memories {
@@ -321,17 +327,28 @@ func (s *server) registered() int {
 			n++
 		}
 	}
+	for id := range s.mcps {
+		_, routes := s.sandboxes[id]
+		_, memory := s.memories[id]
+		if !routes && !memory {
+			n++
+		}
+	}
 	return n
 }
 
 // internalMux is the handler of the brig.internal route server: the memory
-// of a sandbox at /<id>/memory, and the route handler for everything else.
-// The loopback route server has the route handler alone, so memory is never
-// reached there.
+// of a sandbox at /<id>/memory, its MCP servers under /<id>/mcp/, and the
+// route handler for everything else. The loopback route server has the route
+// handler alone, so memory and MCP are never reached there.
 func (s *server) internalMux() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id, ok := memoryTarget(r); ok {
 			s.serveMemory(w, r, id)
+			return
+		}
+		if id, name, ok := mcpPath(r.URL.Path); ok {
+			s.serveMCP(w, r, id, name)
 			return
 		}
 		s.handler.ServeHTTP(w, r)

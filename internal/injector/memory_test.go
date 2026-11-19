@@ -122,8 +122,8 @@ func TestForgetRemovesRoutesAndMemory(t *testing.T) {
 		remaining string
 		want      []string
 	}{
-		{"0", []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "POST /stop"}},
-		{"1", []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a"}},
+		{"0", []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "DELETE /mcp/sandboxes/brig-a", "POST /stop"}},
+		{"1", []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "DELETE /mcp/sandboxes/brig-a"}},
 	} {
 		dir, calls := fakeControl(t, func(method, path string) (int, string) {
 			if path == "/stop" {
@@ -155,7 +155,7 @@ func TestForgetToleratesABrokerWithoutMemory(t *testing.T) {
 	if err := Forget(dir, "brig-a"); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := paths(calls()), []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "POST /stop"}; !slices.Equal(got, want) {
+	if got, want := paths(calls()), []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "DELETE /mcp/sandboxes/brig-a", "POST /stop"}; !slices.Equal(got, want) {
 		t.Errorf("calls = %v, want %v", got, want)
 	}
 }
@@ -298,7 +298,7 @@ func TestForgetRemovesMemoryWhenRoutesFail(t *testing.T) {
 	if err := Forget(dir, "brig-a"); !errors.As(err, &ref) || ref.Status != 500 {
 		t.Errorf("Forget = %v, want the 500 refusal", err)
 	}
-	want := []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "POST /stop"}
+	want := []string{"DELETE /sandboxes/brig-a", "DELETE /memory/sandboxes/brig-a", "DELETE /mcp/sandboxes/brig-a", "POST /stop"}
 	if got := paths(calls()); !slices.Equal(got, want) {
 		t.Errorf("calls = %v, want %v", got, want)
 	}

@@ -6,7 +6,8 @@
 // directory, and takes its orders from
 // brig over a unix socket in its directory: add a sandbox's routes, mint a
 // session token, remove a sandbox, register a sandbox's memory and mint its
-// memory token, report, stop. It reads the credentials a
+// memory token, register a sandbox's MCP servers and mint its MCP token,
+// report, stop. It reads the credentials a
 // route injects from brig's secret store, and refreshes the ones with a
 // lifecycle through internal/renew. That refresher is why this is a binary of
 // its own: no package on brig's run path links it.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -684,5 +685,49 @@ func TestRedactSlashEscapedSplitAcrossReads(t *testing.T) {
 	want := `data: {"text":"Bearer ` + redacted + `","raw":"` + redacted + `"}` + "\n\n"
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The transport a Proxy uses by default goes to the upstream alone, asks for
+// TLS 1.2 or later and never decompresses: the filter must read the bytes
+// the upstream sent, and a proxy the host names would see the credential.
+func TestDefaultTransportGoesDirectAndKeepsEncoding(t *testing.T) {
+	tr := DefaultTransport()
+	if tr.Proxy != nil {
+		t.Error("the default transport uses a proxy")
+	}
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Errorf("the default transport accepts TLS below 1.2: %+v", tr.TLSClientConfig)
+	}
+	if !tr.DisableCompression {
+		t.Error("the default transport decompresses responses")
+	}
+	if DefaultTransport() == tr {
+		t.Error("DefaultTransport returned the same transport twice; a caller's change would reach the next one")
+	}
+}
+
+// The guest learns only that the server is unreachable. The transport's
+// error, which may name host addresses, goes to Log on the host.
+func TestServeLogsUnreachableDetail(t *testing.T) {
+	u := newUpstream(t, jsonResult(`{}`))
+	p, tgt, _ := setup(u, defaultCreds())
+	u.srv.Close()
+	var logged []string
+	p.Log = func(server string, err error) { logged = append(logged, server+": "+err.Error()) }
+	w := httptest.NewRecorder()
+	p.Serve(w, post(callEcho), tgt)
+	if w.Code != http.StatusBadGateway || strings.TrimSpace(w.Body.String()) != `mcp server "nf" is unreachable` {
+		t.Errorf("guest got %d %q, want 502 unreachable alone", w.Code, w.Body)
+	}
+	if len(logged) != 1 || !strings.HasPrefix(logged[0], "nf: ") || len(logged[0]) <= len("nf: ") {
+		t.Errorf("logged %q, want one line for nf with the transport's error", logged)
+	}
+	// A Proxy without Log still answers.
+	p.Log = nil
+	w = httptest.NewRecorder()
+	p.Serve(w, post(callEcho), tgt)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("without Log: status %d, want 502", w.Code)
 	}
 }

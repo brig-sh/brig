@@ -24,6 +24,7 @@ import (
 	"github.com/brig-sh/brig/internal/broker"
 	"github.com/brig-sh/brig/internal/gcpcred"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/mcpproxy"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/renew"
 	"github.com/brig-sh/brig/internal/routemode"
@@ -154,7 +155,17 @@ type server struct {
 	// memories are the memory registrations, by sandbox id.
 	memories map[string]memoryReg
 	// memGate bounds the memory requests in flight.
-	memGate  memoryGate
+	memGate memoryGate
+	// mcpKey signs the MCP tokens, through the sandbox keys in mcps. It is
+	// neither the host key nor the memory key.
+	mcpKey []byte
+	// mcps are the MCP registrations, by sandbox id.
+	mcps map[string]mcpReg
+	// mcpProxy forwards the requests of every sandbox's MCP servers.
+	mcpProxy *mcpproxy.Proxy
+	// mcpGate bounds the MCP calls in flight per sandbox, apart from
+	// memory's gate, so a guest busy with one cannot starve the other.
+	mcpGate  mcpGate
 	stopping bool
 	stop     chan struct{}
 }
@@ -170,7 +181,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
-		resolve: cfg.resolve, dial: cfg.dial, memories: map[string]memoryReg{}}
+		resolve: cfg.resolve, dial: cfg.dial, memories: map[string]memoryReg{}, mcps: map[string]mcpReg{}}
 	if s.resolve == nil {
 		s.resolve = lookupHost
 	}
@@ -190,6 +201,9 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	if s.memoryKey, err = loadOrCreateMemoryKey(filepath.Join(cfg.dir, injector.MemoryKeyName)); err != nil {
+		return nil, err
+	}
+	if s.mcpKey, err = loadOrCreateMCPKey(filepath.Join(cfg.dir, injector.MCPKeyName)); err != nil {
 		return nil, err
 	}
 	if s.ca, err = loadOrCreateCA(cfg.dir); err != nil {
@@ -227,6 +241,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		renewerFor = lifecycleRenewer
 	}
 	s.creds = newCredentials(store, renewerFor)
+	s.mcpProxy = s.newMCPProxy(cfg.transport)
 	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
 	s.handler, err = broker.New(broker.Config{
 		HostKey:      hostKey,
@@ -402,6 +417,9 @@ func (s *server) controlMux() http.Handler {
 	mux.HandleFunc("POST /memory/sandboxes", s.addMemory)
 	mux.HandleFunc("DELETE /memory/sandboxes/{id}", s.removeMemory)
 	mux.HandleFunc("POST /memory/tokens", s.mintMemory)
+	mux.HandleFunc("POST /mcp/sandboxes", s.addMCP)
+	mux.HandleFunc("DELETE /mcp/sandboxes/{id}", s.removeMCP)
+	mux.HandleFunc("POST /mcp/tokens", s.mintMCP)
 	return mux
 }
 
@@ -520,6 +538,15 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			"both must name the same address", req.ID, addrName(internal), m.internal), http.StatusConflict)
 		return
 	}
+	if m, ok := s.mcps[req.ID]; ok && m.internal != internal {
+		if _, ok := s.sandboxes[req.ID]; !ok {
+			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
+		}
+		http.Error(w, fmt.Sprintf("sandbox %s: the routes reach brig.internal at %s, and its mcp servers at %s; "+
+			"both must name the same address", req.ID, addrName(internal), m.internal), http.StatusConflict)
+		return
+	}
 	if s.sandboxes[req.ID] == string(key) {
 		s.setVends(req.ID, vends)
 		reply(w, s.added(req.ID))
@@ -566,13 +593,13 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	// One socket for brig.internal and every route mode besides endpoint.
 	// The socket path is the sandbox's, so the listener of a registration
-	// this one replaces goes first. A socket the sandbox's memory holds
-	// stays, at the address checked above, and only what the routes serve
-	// on it changes: closing it would cut the guest's open connections to
-	// its memory on every change of routes.
+	// this one replaces goes first. A socket the sandbox's memory or MCP
+	// servers hold stays, at the address checked above, and only what the
+	// routes serve on it changes: closing it would cut the guest's open
+	// connections to them on every change of routes.
 	routesHold := internal.IsValid() || len(sb.Modes) > 0
 	old := s.diverts[req.ID]
-	if old != nil && !old.memory {
+	if old != nil && !old.memory && !old.mcp {
 		old.close()
 		delete(s.diverts, req.ID)
 		old = nil
@@ -715,8 +742,8 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	s.aws.forget(id)
 	s.gcp.forget(id)
 	if l := s.diverts[id]; l != nil {
-		// A socket the sandbox's memory holds stays for it.
-		if l.memory {
+		// A socket the sandbox's memory or MCP servers hold stays for them.
+		if l.memory || l.mcp {
 			l.setRoutes(false, nil)
 		} else {
 			l.close()
@@ -765,12 +792,13 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.memories {
 		memories = append(memories, id)
 	}
+	mcps := slices.Sorted(maps.Keys(s.mcps))
 	s.mu.Unlock()
 	sort.Strings(ids)
 	sort.Strings(memories)
 	pending, failing, recovering := s.creds.report()
 	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
-		Pending: pending, Failing: failing, Recovering: recovering, Memory: memories}
+		Pending: pending, Failing: failing, Recovering: recovering, Memory: memories, MCP: mcps}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}

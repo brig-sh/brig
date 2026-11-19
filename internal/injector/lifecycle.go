@@ -82,6 +82,12 @@ func RegisterMemory(dir string, s MemorySandbox) (*Broker, AddResponse, error) {
 	return register(dir, func(c Client) (AddResponse, error) { return c.AddMemory(s) })
 }
 
+// RegisterMCP registers the MCP servers of s with the broker serving dir,
+// and starts that broker when none is running, as Register does for routes.
+func RegisterMCP(dir string, s MCPSandbox) (*Broker, AddResponse, error) {
+	return register(dir, func(c Client) (AddResponse, error) { return c.AddMCP(s) })
+}
+
 // register runs add against the broker serving dir, starting one when none
 // is running, and replacing one that was stopping or gone by then.
 func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddResponse, error) {
@@ -112,9 +118,9 @@ func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddRe
 	return nil, AddResponse{}, last
 }
 
-// Forget removes the sandbox id, its routes and its memory, from the broker
-// serving dir, which refuses its tokens from the next request on, and stops
-// that broker when no sandbox is left. It starts nothing: with no broker
+// Forget removes the sandbox id, its routes, its memory and its MCP servers,
+// from the broker serving dir, which refuses its tokens from the next
+// request on, and stops that broker when no sandbox is left. It starts nothing: with no broker
 // running there is nothing to revoke.
 //
 // It asks the control socket whatever the pid file says. A revocation that
@@ -122,8 +128,9 @@ func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddRe
 // a socket nobody listens on means no broker, and any other failure is
 // returned.
 //
-// Both removals are attempted whatever the other answers: a refused route
-// removal must not leave the memory token valid until the broker exits.
+// Every removal is attempted whatever the others answer: a refused route
+// removal must not leave the memory or MCP token valid until the broker
+// exits.
 func Forget(dir, id string) error {
 	c, ok := controlClient(dir)
 	if !ok {
@@ -133,16 +140,20 @@ func Forget(dir, id string) error {
 	if errors.Is(routesErr, ErrNotRunning) {
 		return nil
 	}
-	// The second answer counts both kinds of registration, after both
-	// removals.
-	r, err := removeMemory(c, id, routes)
-	if errors.Is(err, ErrNotRunning) {
+	mem, memErr := removeMemory(c, id, routes)
+	if errors.Is(memErr, ErrNotRunning) {
 		return routesErr
 	}
-	if err == nil && r.Remaining == 0 {
+	// The last answer counts every kind of registration, after every
+	// removal.
+	r, err := removeMCP(c, id, mem)
+	if errors.Is(err, ErrNotRunning) {
+		return errors.Join(routesErr, memErr)
+	}
+	if memErr == nil && err == nil && r.Remaining == 0 {
 		err = stopIfIdle(c)
 	}
-	return errors.Join(routesErr, err)
+	return errors.Join(routesErr, memErr, err)
 }
 
 // ForgetRoutes removes the routes of sandbox id from the broker serving dir
@@ -180,10 +191,22 @@ func removeMemory(c Client, id string, routes RemoveResponse) (RemoveResponse, e
 	return r, err
 }
 
+// removeMCP removes the MCP servers of sandbox id. A broker from a brig
+// without MCP answers 404, as for memory: the count of the removal before,
+// prev, is returned.
+func removeMCP(c Client, id string, prev RemoveResponse) (RemoveResponse, error) {
+	r, err := c.RemoveMCP(id)
+	var ref *RefusedError
+	if errors.As(err, &ref) && ref.Status == http.StatusNotFound {
+		return RemoveResponse{Remaining: prev.Remaining}, nil
+	}
+	return r, err
+}
+
 // ForgetAll removes every sandbox the broker serving dir has registered, its
-// routes and its memory, and stops it. It returns the ids it removed. brig
-// rm --all calls it after its own removals, for the sandboxes no runtime
-// lists any more.
+// routes, its memory and its MCP servers, and stops it. It returns the ids
+// it removed. brig rm --all calls it after its own removals, for the
+// sandboxes no runtime lists any more.
 func ForgetAll(dir string) ([]string, error) {
 	c, ok := controlClient(dir)
 	if !ok {
@@ -197,7 +220,7 @@ func ForgetAll(dir string) ([]string, error) {
 		return nil, err
 	}
 	// Every removal is attempted whatever another answers, as in Forget,
-	// so a refused route removal leaves no memory token valid.
+	// so a refused route removal leaves no memory or MCP token valid.
 	var removed []string
 	var errs []error
 	for _, id := range st.Sandboxes {
@@ -215,6 +238,19 @@ func ForgetAll(dir string) ([]string, error) {
 	}
 	for _, id := range st.Memory {
 		r, err := c.RemoveMemory(id)
+		if errors.Is(err, ErrNotRunning) {
+			return sortedUnique(removed), errors.Join(errs...)
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if r.Removed {
+			removed = append(removed, id)
+		}
+	}
+	for _, id := range st.MCP {
+		r, err := c.RemoveMCP(id)
 		if errors.Is(err, ErrNotRunning) {
 			return sortedUnique(removed), errors.Join(errs...)
 		}

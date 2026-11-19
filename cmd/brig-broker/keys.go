@@ -36,6 +36,11 @@ func loadOrCreateHostKey(path string) ([]byte, error) { return loadOrCreateKey(p
 // tokens alone.
 func loadOrCreateMemoryKey(path string) ([]byte, error) { return loadOrCreateKey(path, "memory key") }
 
+// loadOrCreateMCPKey reads the MCP key at path, and draws one at first
+// start, as loadOrCreateHostKey does the host key. It signs the MCP tokens
+// alone.
+func loadOrCreateMCPKey(path string) ([]byte, error) { return loadOrCreateKey(path, "mcp key") }
+
 // loadOrCreateKey reads the key at path, named what in errors, and draws
 // one at first start.
 func loadOrCreateKey(path, what string) ([]byte, error) {
