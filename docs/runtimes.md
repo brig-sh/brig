@@ -87,7 +87,8 @@ comes from one table, shown in
 | hull on `hvi`, with no report | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
-| hull on Linux, on any monitor | `enforced` | the same probe as hull on `hvi`, for the same gateway: the capability report, or else `network-gateway --help` listing `--egress-default`. A gateway that fails it answers `cannot enforce` or `unknown`, and the refusal names `hull on io.containerd.urunc.v2`. Measured on 2026-11-18 (hull `4bf76a6`, urunc `5c6bc70`, hvi 0.1.0-rc.3): `example.com` and `www.example.com` answered 200, while `github.com` and `one.one.one.one` failed with curl rc 6 and the gateway logged the refused queries. See [the manual test](manual-tests/egress-policy-hull-linux.md) |
+| hull on Linux, on `hvi` (its default) | `enforced` | the same probe as hull on `hvi`, for the same gateway: the capability report, or else `network-gateway --help` listing `--egress-default`. A gateway that fails it answers `cannot enforce` or `unknown`, and the refusal names `hull on io.containerd.urunc.v2`. Measured on 2026-11-18 (hull `4bf76a6`, urunc `5c6bc70`, hvi 0.1.0-rc.3): `example.com` and `www.example.com` answered 200, while `github.com` and `one.one.one.one` failed with curl rc 6 and the gateway logged the refused queries. See [the manual test](manual-tests/egress-policy-hull-linux.md) |
+| hull on Linux, on another monitor | `cannot enforce` | no probe runs: urunc joins only `hvi` to a network gateway |
 | docker on any shim | `cannot enforce` | no probe runs |
 | hull on a backend that the policies table does not name | `unknown` | |
 

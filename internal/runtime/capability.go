@@ -77,7 +77,8 @@ var records = []Record{
 			"at the user-mode network gateway that only the hvi backend uses",
 		"Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy"},
 	// hull on Linux boots its guest through urunc on a network gateway of
-	// its own, the same binary as the macOS gateway. A run on 2026-11-18
+	// its own, the same binary as the macOS gateway, on hvi only: on another
+	// monitor linuxHullEgress refuses the policy. A run on 2026-11-18
 	// (hull 4bf76a6, urunc 5c6bc70, hvi 0.1.0-rc.3) refused github.com and
 	// one.one.one.one and served example.com. Named by the shim rather than
 	// the monitor, so BRIG_HYPERVISOR=hvi on Linux never reads the hvi row
@@ -170,7 +171,35 @@ func (e *CapabilityError) Unwrap() error { return e.Err }
 // what the run refuses. The boot's probes are not run: a path the table holds
 // as enforced can still fail at boot on a host whose gateway or nft cannot.
 func EgressServed(rt Runtime, hypervisor string, spec RunSpec) error {
-	return requireEgress(spec, RoutePath(rt, hypervisor))
+	path := RoutePath(rt, hypervisor)
+	if path == linuxHullPath {
+		return linuxHullEgress(spec, hypervisor)
+	}
+	return requireEgress(spec, path)
+}
+
+// linuxHullEgress is requireEgress for hull on Linux, where the row holds only
+// on hvi: urunc joins no other monitor to a gateway, and the run refuses a
+// networked sandbox on one. A policy there is refused as unenforced, exit 7,
+// by brig policy check and brig run alike.
+func linuxHullEgress(spec RunSpec, hypervisor string) error {
+	if err := requireEgress(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if !spec.Egress.Filtered() || spec.Net == "none" {
+		return nil
+	}
+	monitor, err := linuxMonitor(hypervisor)
+	if err != nil {
+		return err
+	}
+	if monitor == monitorHvi {
+		return nil
+	}
+	return &CapabilityError{Property: EgressPolicy, Path: linuxHullPath, State: CannotEnforce,
+		Why: fmt.Sprintf("hull on Linux joins a sandbox to its network gateway only on hvi, "+
+			"and this run asks for %s", monitor),
+		Remedy: "Unset BRIG_HYPERVISOR to boot on hvi, or detach the policy"}
 }
 
 // requireEgress refuses a run whose path does not enforce the policy it

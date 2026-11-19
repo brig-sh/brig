@@ -191,15 +191,24 @@ func TestLinuxHullSandboxNetworkReadsTheGatewaySocket(t *testing.T) {
 	}
 }
 
-// The name is kept from when hull on Linux was refused egress rules. Now an
-// egress-only policy is served on every hypervisor, as on macOS hvi, while a
-// divert and a route mode are still refused and the macOS vz row still refuses.
-// brig policy check asks through EgressServed.
-func TestEgressServedRefusesHullOnLinuxOnEveryHypervisor(t *testing.T) {
+// brig policy check asks through EgressServed, and answers as the run does:
+// an egress-only policy is served on hull on Linux on hvi, from its own row,
+// and refused as unenforced on any other monitor. A route mode is still
+// refused there, and the macOS rows answer as before.
+func TestEgressServedOnHullOnLinuxOnlyOnHvi(t *testing.T) {
 	spec := RunSpec{Net: "isolated", Egress: Egress{Default: "deny"}}
 	for _, hv := range []string{"", "hvi", "vz"} {
 		if err := EgressServed(linuxHull(), hv, spec); err != nil {
 			t.Errorf("%q: an egress policy was refused on hull on Linux: %v", hv, err)
+		}
+		if got := RoutePath(linuxHull(), hv); got != linuxHullPath {
+			t.Errorf("%q: brig policy check reads %s, not %s", hv, got, linuxHullPath)
+		}
+	}
+	for _, hv := range []string{"qemu", "cloud-hypervisor"} {
+		var ce *CapabilityError
+		if err := EgressServed(linuxHull(), hv, spec); !errors.As(err, &ce) || ce.Path != linuxHullPath {
+			t.Errorf("%q: an egress policy was not refused on %s: %v", hv, linuxHullPath, err)
 		}
 	}
 	if err := EgressServed(&hull{bin: "hull"}, "hvi", spec); err != nil {

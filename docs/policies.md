@@ -1263,7 +1263,8 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
-| hull on Linux, on any monitor | `enforced` | the rules apply at the network gateway of the sandbox, its only way out. A run on 2026-11-18 refused `github.com` and `one.one.one.one` and served `example.com` and `www.example.com` ([measured](manual-tests/egress-policy-hull-linux.md)) | a hull whose gateway passes the same probe as on `hvi` |
+| hull on Linux, on `hvi` (its default) | `enforced` | the rules apply at the network gateway of the sandbox, its only way out. A run on 2026-11-18 refused `github.com` and `one.one.one.one` and served `example.com` and `www.example.com` ([measured](manual-tests/egress-policy-hull-linux.md)) | a hull whose gateway passes the same probe as on `hvi` |
+| hull on Linux, on another monitor | `cannot enforce` | urunc joins only `hvi` to a network gateway, so Brig refuses a networked run there with exit 7 | |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
