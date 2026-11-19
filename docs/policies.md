@@ -332,8 +332,9 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
 | `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. `host`: the guest reaches the route at `https://<route>.brig.internal`, so `name` is at most 63 characters and does not end with a dash. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
+| `passthrough` | no | `true` for a route that holds no credential: the guest sends its own, and the broker forwards it after the request rules. It takes no `credential`, no `inject` and no `guest.git`, no `{session.token}` in `guest.env`, and only the `anthropic-api-key` and `claude-code` presets, or none. See [Passthrough routes](#passthrough-routes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
-| `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
+| `credential.secretRef.name` | yes, unless the route is certificate-only or passthrough | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
 | `inject.headers.set` | unless a preset sets it, `basicAuth` is set, or the route is certificate-only | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
@@ -450,6 +451,42 @@ answer where the rewrite does not look. The method of the checked call is
 read in any case, so `post` is checked as `POST`. A trailing slash, a
 `;parameter` or a path in another case does not change which call a request
 is.
+
+### Passthrough routes
+
+A passthrough route checks the requests of a guest that holds its own key.
+The broker applies `request.allow` and `request.body`, and forwards the
+guest's credential as it was sent. It holds no secret for the route.
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: anthropic-checked
+spec:
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      passthrough: true
+      request:
+        allow:
+          methods: [POST]
+          paths: ["/v1/messages"]
+        body:
+          models: ["claude-sonnet-4-5*"]
+          maxTokens: 8192
+          toolUse:
+            deny: [Bash]
+```
+
+The preset still sets the upstream and `ANTHROPIC_BASE_URL`. It no longer
+sets `ANTHROPIC_API_KEY`, so the guest keeps its own.
+
+The route has no session token, so the broker serves it only for a request
+that arrived bound to the sandbox: on its divert socket, or from the address
+it registered on a node broker. See [Passthrough
+routes](broker.md#passthrough-routes) for what the broker checks, and what it
+leaves to the egress rules.
 
 ### Client certificates
 
