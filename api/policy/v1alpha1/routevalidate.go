@@ -51,6 +51,11 @@ func (r *Route) validate(expanded bool) error {
 		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s, %s or %s",
 			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetGitHubAPI, PresetAWS, PresetGCP)
 	}
+	if r.Passthrough {
+		if err := r.validatePassthrough(); err != nil {
+			return err
+		}
+	}
 	// Services are what the gcp preset forwards to. On another route they
 	// would read as a restriction that nothing enforces.
 	if len(r.Services) > 0 && r.Preset != PresetGCP {
@@ -122,9 +127,10 @@ func (r *Route) validate(expanded bool) error {
 		}
 	}
 	// A route that injects only a client certificate has no credential to
-	// resolve; every other route needs one.
+	// resolve, and neither has a passthrough route; every other route needs
+	// one.
 	if r.Credential == nil {
-		if r.Inject == nil || !r.Inject.CertificateOnly() {
+		if !r.Passthrough && (r.Inject == nil || !r.Inject.CertificateOnly()) {
 			return fmt.Errorf("credential.secretRef.name is required")
 		}
 	} else {
@@ -153,7 +159,7 @@ func (r *Route) validate(expanded bool) error {
 		if err := r.Inject.validate(complete, expanded); err != nil {
 			return err
 		}
-	} else if complete {
+	} else if complete && !r.Passthrough {
 		return fmt.Errorf("inject is required: headers.set, basicAuth or tls")
 	}
 
@@ -173,6 +179,41 @@ func (r *Route) validate(expanded bool) error {
 	if r.Request != nil && r.Request.Body != nil {
 		if err := r.Request.Body.validate(r.Preset); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validatePassthrough checks a route that forwards the guest's own
+// credential. The broker holds nothing for such a route. A credential or an
+// inject would name a secret that is never sent. A session token in the guest
+// would take the place of the credential the guest sends. The presets it
+// takes are the ones whose requests the broker can check without a
+// credential: the aws and gcp presets fetch one, and github-api reads
+// GitHub with one to check request.allow.graphql.repos.
+func (r *Route) validatePassthrough() error {
+	switch r.Preset {
+	case "", PresetClaudeCode, PresetAnthropicAPIKey:
+	default:
+		return fmt.Errorf("passthrough takes preset %s or %s, or none, not %s",
+			PresetAnthropicAPIKey, PresetClaudeCode, r.Preset)
+	}
+	if r.Credential != nil {
+		return fmt.Errorf("a passthrough route takes no credential; the guest sends its own")
+	}
+	if r.Inject != nil {
+		return fmt.Errorf("a passthrough route takes no inject; the guest's credential goes upstream as sent")
+	}
+	if r.Guest != nil {
+		for name, value := range r.Guest.Env {
+			if value == PlaceholderSessionToken {
+				return fmt.Errorf("guest.env %s is %s, and a passthrough route has no session token",
+					name, PlaceholderSessionToken)
+			}
+		}
+		// brig answers git's credential helper with the session token.
+		if r.Guest.Git != nil {
+			return fmt.Errorf("a passthrough route takes no guest.git; git would send a session token, not its own credential")
 		}
 	}
 	return nil

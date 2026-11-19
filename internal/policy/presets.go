@@ -179,6 +179,9 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 		if base, err = decodePreset(r.Preset); err != nil {
 			return v1alpha1.Route{}, fmt.Errorf("route %s: %w", r.Name, err)
 		}
+		if r.Passthrough {
+			dropBrokerCredential(&base.Route)
+		}
 		if out, err = overlay(base.Route, out); err != nil {
 			return v1alpha1.Route{}, fmt.Errorf("route %s: %w", r.Name, err)
 		}
@@ -201,6 +204,26 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 		return v1alpha1.Route{}, err
 	}
 	return out, nil
+}
+
+// dropBrokerCredential removes from a preset's route what carries the
+// broker's credential, for a passthrough route: the credential with its
+// lifecycle, the inject, and each guest.env variable that holds the session
+// token. The upstream, the mode and the rest of guest.env stay. base is the
+// caller's own copy, decoded for this expansion.
+func dropBrokerCredential(base *v1alpha1.Route) {
+	base.Credential, base.Inject = nil, nil
+	if base.Guest == nil {
+		return
+	}
+	g := *base.Guest
+	g.Env = map[string]string{}
+	for name, value := range base.Guest.Env {
+		if value != v1alpha1.PlaceholderSessionToken {
+			g.Env[name] = value
+		}
+	}
+	base.Guest = &g
 }
 
 // joinModes names modes the way an error lists them.
@@ -229,6 +252,7 @@ func overlay(base, r v1alpha1.Route) (v1alpha1.Route, error) {
 	out := base
 	out.Name = r.Name
 	out.Preset = r.Preset
+	out.Passthrough = r.Passthrough
 	if r.Mode != "" {
 		out.Mode = r.Mode
 	}
