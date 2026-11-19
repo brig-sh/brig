@@ -3,15 +3,25 @@ package cilium
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"sigs.k8s.io/yaml"
 )
 
-// PodIdentityCIDR is the address of the EKS Pod Identity agent on every
-// node.
+// PodIdentityCIDR is the IPv4 address of the EKS Pod Identity agent on
+// every node.
 const PodIdentityCIDR = "169.254.170.23/32"
+
+// PodIdentityCIDR6 is the IPv6 address of the EKS Pod Identity agent, which
+// a pod on an IPv6 cluster reaches.
+const PodIdentityCIDR6 = "fd00:ec2::23/128"
+
+// ClusterDomain is the search domain under which a pod's resolver looks up
+// a name first.
+const ClusterDomain = "cluster.local"
 
 // DNSPort is the port of the kube-dns rule.
 const DNSPort = "53"
@@ -38,8 +48,13 @@ type Options struct {
 	PodSelector map[string]string
 	// PodIdentity adds a rule to the EKS Pod Identity agent.
 	PodIdentity bool
-	// BrokerCIDR is the address of the node broker. Empty means BrokerCIDR.
+	// BrokerCIDR is the address of the node broker, as an address or a
+	// CIDR. Empty means BrokerCIDR.
 	BrokerCIDR string
+	// DNSSearch lists search domains of the pod's resolver beyond
+	// ClusterDomain, such as the node's own. Under a deny default the DNS
+	// rule answers the lookups the resolver makes under each one.
+	DNSSearch []string
 	// Cluster adds a rule to the cluster entity: every pod and node of the
 	// cluster, on every port. A brig policy's egress names the hosts a
 	// sandbox reaches outside; a pod also talks to the services beside it,
@@ -56,31 +71,40 @@ type Options struct {
 //
 // The egress list always starts with the same rules, in this order:
 //
-//   - a rule to kube-dns on port 53, with a DNS rule that sends every lookup
+//   - a rule to kube-dns on port 53, with a DNS rule that sends the lookups
 //     through Cilium's DNS proxy. toFQDNs only works for names the proxy has
-//     seen resolved.
+//     seen resolved. Under an allow default the rule lets every name
+//     through. Under a deny default it lets through the allow hosts,
+//     brig.internal when p has routes, and every name under ClusterDomain
+//     and o.DNSSearch. The proxy refuses any other lookup, so a guest
+//     cannot carry data out in the names it looks up.
 //   - when p has routes, a rule to the broker's address on port 443, for the
 //     node broker at brig.internal. The address is a CIDR rule, not the host
 //     entity: it sits on the node with link scope, so Cilium does not count
 //     it as the host identity.
-//   - when o.PodIdentity is set, a rule to PodIdentityCIDR on port 80.
+//   - when o.PodIdentity is set, a rule to PodIdentityCIDR and
+//     PodIdentityCIDR6 on port 80.
 //   - when o.Cluster is set, a rule to the cluster entity on every port.
 //
 // Under a deny default, enableDefaultDeny.egress is true and each allow rule
 // follows as its own egress entry, in document order, on every port. A host
 // with no '*' becomes toFQDNs matchName, a host with '*' becomes toFQDNs
-// matchPattern, and a CIDR becomes toCIDR as written.
+// matchPattern, and a CIDR becomes toCIDR in its canonical form.
 //
 // Under an allow default, enableDefaultDeny.egress is false and the allow
 // rules are left out, because Cilium already lets that traffic through.
 //
 // Each deny CIDR becomes its own egressDeny toCIDR entry, in document order.
+// A CIDR is masked, and an IPv4-mapped one is written as the IPv4 prefix it
+// names.
 // Cilium has no toFQDNs for egressDeny, so a deny host cannot be rendered.
 // Under a deny default, a deny host that no allow host covers is already
 // refused and is dropped; for a deny host with '*', no allow host may match
 // any name it matches. The renderer cannot resolve names, so a deny host is
 // also an error when the policy has any allow CIDR, which may contain the
-// host's addresses. Any other deny host is an error.
+// host's addresses, and when o.Cluster is set, since the cluster rule lets
+// through any pod or node the host may name. Any other deny host is an
+// error.
 //
 // A host is lowercased and loses one trailing dot. It must then be one or
 // more labels joined by '.', each a non-empty run of [a-z0-9-*]; a bare "*"
@@ -117,6 +141,10 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	if err := checkObjectName(name); err != nil {
 		return nil, err
 	}
+	broker, search, err := o.resolve()
+	if err != nil {
+		return nil, err
+	}
 
 	np := &NetworkPolicy{
 		APIVersion: APIVersion,
@@ -130,7 +158,8 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 
 	// Cilium learns the addresses behind a toFQDNs name only from lookups
 	// that pass through its DNS proxy. Without this rule every toFQDNs rule
-	// below matches nothing, so it is written under either default.
+	// below matches nothing, so it is written under either default. Its
+	// names are set once the allow rules are read.
 	np.Spec.Egress = append(np.Spec.Egress, EgressRule{
 		ToEndpoints: []EndpointSelector{{MatchLabels: map[string]string{
 			"k8s:io.kubernetes.pod.namespace": "kube-system",
@@ -138,16 +167,12 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 		}}},
 		ToPorts: []PortRule{{
 			Ports: []PortProtocol{{Port: DNSPort, Protocol: "ANY"}},
-			Rules: &L7Rules{DNS: []DNSRule{{MatchPattern: "*"}}},
+			Rules: &L7Rules{},
 		}},
 	})
 	// A route is served by the node broker, which the pod reaches at
 	// brig.internal on a link-local address of the node.
 	if len(p.Spec.Routes) > 0 {
-		broker := o.BrokerCIDR
-		if broker == "" {
-			broker = BrokerCIDR
-		}
 		np.Spec.Egress = append(np.Spec.Egress, EgressRule{
 			ToCIDR:  []string{broker},
 			ToPorts: []PortRule{{Ports: []PortProtocol{{Port: BrokerPort, Protocol: "TCP"}}}},
@@ -155,7 +180,7 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	}
 	if o.PodIdentity {
 		np.Spec.Egress = append(np.Spec.Egress, EgressRule{
-			ToCIDR:  []string{PodIdentityCIDR},
+			ToCIDR:  []string{PodIdentityCIDR, PodIdentityCIDR6},
 			ToPorts: []PortRule{{Ports: []PortProtocol{{Port: PodIdentityPort, Protocol: "TCP"}}}},
 		})
 	}
@@ -165,11 +190,15 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 
 	// allowHosts holds the normalized allow hosts and their index, for the
 	// deny check below. It stays empty under an allow default.
-	type allowHost struct {
-		i    int
-		host string
-	}
 	var allowHosts []allowHost
+	// names holds the lookups the DNS rule lets through under a deny
+	// default, in order and without repeats.
+	var names []DNSRule
+	addName := func(r DNSRule) {
+		if !slices.Contains(names, r) {
+			names = append(names, r)
+		}
+	}
 	// allowCIDR is the index of the first allow CIDR, or -1.
 	allowCIDR := -1
 	// Under an allow default Cilium already lets the traffic of every allow
@@ -191,11 +220,18 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 				}
 				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToFQDNs: sels})
 				allowHosts = append(allowHosts, allowHost{i, h})
+				for _, sel := range sels {
+					addName(DNSRule(sel))
+				}
 			case r.CIDR != "":
 				if allowCIDR < 0 {
 					allowCIDR = i
 				}
-				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToCIDR: []string{r.CIDR}})
+				c, err := canonicalCIDR(r.CIDR)
+				if err != nil {
+					return nil, fmt.Errorf("allow[%d] cidr: %w", i, err)
+				}
+				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToCIDR: []string{c}})
 			default:
 				return nil, fmt.Errorf("allow[%d] has neither host nor cidr", i)
 			}
@@ -205,7 +241,11 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	for i, r := range eg.Deny {
 		switch {
 		case r.CIDR != "":
-			np.Spec.EgressDeny = append(np.Spec.EgressDeny, EgressDenyRule{ToCIDR: []string{r.CIDR}})
+			c, err := canonicalCIDR(r.CIDR)
+			if err != nil {
+				return nil, fmt.Errorf("deny[%d] cidr: %w", i, err)
+			}
+			np.Spec.EgressDeny = append(np.Spec.EgressDeny, EgressDenyRule{ToCIDR: []string{c}})
 		case r.Host != "":
 			h := normalizeHost(r.Host)
 			if err := checkHost(h); err != nil {
@@ -223,6 +263,9 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			// rendered right, and it never drops a deny host that an allow
 			// host or an allow CIDR lets through. A deny glob needs the overlap test: it
 			// can deny one name under an allow glob without covering it.
+			if o.Cluster {
+				return nil, fmt.Errorf("deny[%d] host %q: --cluster lets through every pod and node of the cluster, which the host may name, and Cilium egressDeny has no toFQDNs, so the deny cannot be rendered", i, r.Host)
+			}
 			if allowCIDR >= 0 {
 				return nil, fmt.Errorf("deny[%d] host %q: allow[%d] cidr %q may contain its addresses, and Cilium egressDeny has no toFQDNs, so the deny cannot be rendered", i, r.Host, allowCIDR, eg.Allow[allowCIDR].CIDR)
 			}
@@ -239,7 +282,86 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			return nil, fmt.Errorf("deny[%d] has neither host nor cidr", i)
 		}
 	}
+
+	dns := []DNSRule{{MatchPattern: "*"}}
+	if deny {
+		if len(p.Spec.Routes) > 0 {
+			addName(DNSRule{MatchName: "brig.internal"})
+		}
+		depth := searchDepth(allowHosts)
+		for _, d := range search {
+			for _, pat := range spanPatterns(d, depth) {
+				addName(DNSRule{MatchPattern: pat})
+			}
+		}
+		dns = names
+	}
+	np.Spec.Egress[0].ToPorts[0].Rules.DNS = dns
 	return np, nil
+}
+
+// searchDepth returns how many labels the patterns of a search domain cover
+// on a Cilium release that reads "**." as one label. A resolver with the
+// usual ndots:5 looks a name up under each search domain before it looks
+// it up as written, and the proxy refuses a lookup it has no pattern for.
+// glibc stops at such a refusal and musl waits until it times out, so the
+// name never resolves. The deepest such lookup is an allow host followed
+// by the namespace and "svc". A leading "*." counts as globDepth labels.
+// The result is never below globDepth, which leaves room for the names of
+// services in the cluster.
+func searchDepth(hosts []allowHost) int {
+	depth := globDepth
+	for _, a := range hosts {
+		n := strings.Count(a.host, ".") + 1
+		if strings.HasPrefix(a.host, "*.") {
+			n += globDepth - 1
+		}
+		depth = max(depth, n+2)
+	}
+	return depth
+}
+
+// allowHost is a normalized allow host and its index in the allow list.
+type allowHost struct {
+	i    int
+	host string
+}
+
+// Check returns an error for an option Kubernetes or Cilium would not take:
+// a namespace that is not a DNS-1123 label, a broker address that is neither
+// an address nor a CIDR, or a search domain that is not a name. Render makes
+// the same checks.
+func (o Options) Check() error {
+	_, _, err := o.resolve()
+	return err
+}
+
+// resolve checks o and returns the broker's CIDR rule and the search domains
+// the DNS rule answers under, ClusterDomain first.
+func (o Options) resolve() (broker string, search []string, err error) {
+	if o.Namespace != "" {
+		if err := checkNamespace(o.Namespace); err != nil {
+			return "", nil, err
+		}
+	}
+	broker = BrokerCIDR
+	if o.BrokerCIDR != "" {
+		if broker, err = brokerPrefix(o.BrokerCIDR); err != nil {
+			return "", nil, err
+		}
+	}
+	search = []string{ClusterDomain}
+	for _, d := range o.DNSSearch {
+		h := normalizeHost(d)
+		if err := checkHost(h); err != nil {
+			return "", nil, fmt.Errorf("search domain %q: %w", d, err)
+		}
+		if strings.Contains(h, "*") {
+			return "", nil, fmt.Errorf("search domain %q: a search domain is a name, not a glob", d)
+		}
+		search = append(search, h)
+	}
+	return broker, search, nil
 }
 
 // globDepth is the most labels that the "*." patterns of a leading glob
@@ -257,13 +379,69 @@ func ciliumPatterns(h string) []string {
 	if !ok {
 		return []string{h}
 	}
+	return spanPatterns(rest, globDepth)
+}
+
+// spanPatterns returns the patterns for the names under rest: "**." for a
+// Cilium release that spans labels with it, and then "*.", "*.*." and so on
+// up to depth labels before rest.
+func spanPatterns(rest string, depth int) []string {
 	out := []string{"**." + rest}
 	prefix := ""
-	for range globDepth {
+	for range depth {
 		prefix += "*."
 		out = append(out, prefix+rest)
 	}
 	return out
+}
+
+// canonicalCIDR returns s masked, with an IPv4-mapped prefix written as the
+// IPv4 prefix it names. Cilium matches a mapped prefix as IPv6, so it would
+// match no IPv4 address, and a deny rule would deny nothing. Brig's
+// enforcer unmaps it the same way.
+func canonicalCIDR(s string) (string, error) {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return "", fmt.Errorf("%q is not a CIDR", s)
+	}
+	if p.Addr().Is4In6() && p.Bits() >= 96 {
+		p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+	}
+	return p.Masked().String(), nil
+}
+
+// brokerPrefix returns the CIDR rule for the broker address s, which is an
+// address or a CIDR. An address becomes a prefix of its full length.
+func brokerPrefix(s string) (string, error) {
+	if a, err := netip.ParseAddr(s); err == nil {
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()).String(), nil
+	}
+	c, err := canonicalCIDR(s)
+	if err != nil {
+		return "", fmt.Errorf("broker address %q is neither an address nor a CIDR", s)
+	}
+	return c, nil
+}
+
+// checkNamespace refuses a namespace that Kubernetes does not take as a
+// DNS-1123 label, which kubectl would refuse only at apply time.
+func checkNamespace(ns string) error {
+	bad := func(why string) error {
+		return fmt.Errorf("namespace %q is not a Kubernetes namespace: %s", ns, why)
+	}
+	if len(ns) > 63 {
+		return bad("it is longer than 63 characters")
+	}
+	for _, c := range ns {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return bad("only a-z, 0-9 and '-' are allowed")
+		}
+	}
+	if ns[0] == '-' || ns[len(ns)-1] == '-' {
+		return bad("it starts or ends with '-'")
+	}
+	return nil
 }
 
 // checkObjectName refuses a name that Kubernetes does not take as a DNS-1123

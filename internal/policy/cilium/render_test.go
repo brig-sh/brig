@@ -290,3 +290,219 @@ spec:
 		t.Errorf("no rule to the broker at %s in %+v", BrokerCIDR, np.Spec.Egress)
 	}
 }
+
+// dnsNames returns the names and patterns of the DNS rule of np.
+func dnsNames(t *testing.T, np *NetworkPolicy) []DNSRule {
+	t.Helper()
+	r := np.Spec.Egress[0]
+	if len(r.ToEndpoints) == 0 || len(r.ToPorts) != 1 || r.ToPorts[0].Rules == nil {
+		t.Fatalf("the first egress rule is not the DNS rule: %+v", r)
+	}
+	return r.ToPorts[0].Rules.DNS
+}
+
+// dnsAnswers reports whether a lookup of name passes the DNS rule as Cilium
+// 1.17 reads it.
+func dnsAnswers(rules []DNSRule, name string) bool {
+	return slices.ContainsFunc(rules, func(r DNSRule) bool {
+		if r.MatchName != "" {
+			return r.MatchName == name
+		}
+		return cilium117Match(r.MatchPattern, name)
+	})
+}
+
+// Negative: under a deny default the DNS proxy refuses a name the policy does
+// not allow. A pattern of "*" let a guest carry data out in its lookups, as
+// in <data>.attacker.example, which brig's own resolver refuses.
+func TestRenderDenyDefaultLooksUpOnlyAllowedNames(t *testing.T) {
+	np, err := Render(loadPolicy(t, "deny-default"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := dnsNames(t, np)
+	if slices.Contains(rules, DNSRule{MatchPattern: "*"}) {
+		t.Fatalf("the DNS rule lets every name through: %+v", rules)
+	}
+	for _, name := range []string{"c2VjcmV0.attacker.example", "attacker.example",
+		"api.anthropic.com.attacker.example", "evilgithubusercontent.com"} {
+		if dnsAnswers(rules, name) {
+			t.Errorf("a lookup of %s passes the DNS rule", name)
+		}
+	}
+	for _, name := range []string{"api.anthropic.com", "raw.githubusercontent.com",
+		"a.b.c.d.e.githubusercontent.com", "brig.internal"} {
+		if !dnsAnswers(rules, name) {
+			t.Errorf("a lookup of %s is refused", name)
+		}
+	}
+}
+
+// The resolver looks a name up under each search domain before it looks it
+// up as written. The proxy refuses a lookup it has no pattern for, and glibc
+// stops there, so every allow host needs its search lookups answered.
+func TestRenderDenyDefaultAnswersTheSearchLookups(t *testing.T) {
+	np, err := Render(loadPolicy(t, "deny-default"), Options{DNSSearch: []string{"US-West-2.Compute.Internal."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := dnsNames(t, np)
+	for _, name := range []string{
+		"api.anthropic.com.agents.svc.cluster.local",
+		"api.anthropic.com.svc.cluster.local",
+		"api.anthropic.com.cluster.local",
+		"a.b.c.d.e.githubusercontent.com.agents.svc.cluster.local",
+		"brig.internal.agents.svc.cluster.local",
+		"db.agents.svc.cluster.local",
+		"api.anthropic.com.us-west-2.compute.internal",
+	} {
+		if !dnsAnswers(rules, name) {
+			t.Errorf("a search lookup of %s is refused", name)
+		}
+	}
+	if dnsAnswers(rules, "c2VjcmV0.compute.internal.attacker.example") {
+		t.Error("a name that only holds a search domain passes the DNS rule")
+	}
+}
+
+// Under an allow default every name may be reached, so every lookup is
+// answered.
+func TestRenderAllowDefaultLooksUpEveryName(t *testing.T) {
+	np, err := Render(loadPolicy(t, "allow-default"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dnsNames(t, np); !slices.Equal(got, []DNSRule{{MatchPattern: "*"}}) {
+		t.Errorf("DNS rule = %+v, want every name", got)
+	}
+}
+
+// A search domain is a name. A glob there would answer lookups the policy
+// does not allow.
+func TestRenderRefusesAnUnusableSearchDomain(t *testing.T) {
+	for _, d := range []string{"*.example.com", "a?.example.com", ""} {
+		if _, err := Render(loadPolicy(t, "deny-default"), Options{DNSSearch: []string{d}}); err == nil {
+			t.Errorf("search domain %q rendered", d)
+		}
+	}
+}
+
+// Negative: a CIDR is written as Cilium matches it. An IPv4-mapped deny kept
+// as IPv6 matched no IPv4 address, so it denied nothing.
+func TestRenderWritesCanonicalCIDRs(t *testing.T) {
+	p := &v1alpha1.Policy{
+		Metadata: v1alpha1.ObjectMeta{Name: "cidrs"},
+		Spec: v1alpha1.PolicySpec{Egress: &v1alpha1.Egress{
+			Default: v1alpha1.EgressDeny,
+			Allow:   []v1alpha1.Rule{{CIDR: "10.1.2.3/8"}, {CIDR: "2001:db8::1/32"}},
+			Deny:    []v1alpha1.Rule{{CIDR: "::ffff:10.0.0.0/104"}, {CIDR: "::ffff:192.168.1.7/120"}},
+		}},
+	}
+	np, err := Render(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allow, deny []string
+	for _, r := range np.Spec.Egress[1:] {
+		allow = append(allow, r.ToCIDR...)
+	}
+	for _, r := range np.Spec.EgressDeny {
+		deny = append(deny, r.ToCIDR...)
+	}
+	if want := []string{"10.0.0.0/8", "2001:db8::/32"}; !slices.Equal(allow, want) {
+		t.Errorf("allow CIDRs = %q, want %q", allow, want)
+	}
+	if want := []string{"10.0.0.0/8", "192.168.1.0/24"}; !slices.Equal(deny, want) {
+		t.Errorf("deny CIDRs = %q, want %q", deny, want)
+	}
+}
+
+// A CIDR that does not parse is refused by its rule, not written as it is.
+func TestRenderRefusesABadCIDR(t *testing.T) {
+	for name, eg := range map[string]*v1alpha1.Egress{
+		"allow[0] cidr": {Default: v1alpha1.EgressDeny, Allow: []v1alpha1.Rule{{CIDR: "10.0.0.0/33"}}},
+		"deny[0] cidr":  {Default: v1alpha1.EgressAllow, Deny: []v1alpha1.Rule{{CIDR: "not-a-cidr"}}},
+	} {
+		p := &v1alpha1.Policy{Metadata: v1alpha1.ObjectMeta{Name: "bad"}, Spec: v1alpha1.PolicySpec{Egress: eg}}
+		if _, err := Render(p, Options{}); err == nil || !strings.HasPrefix(err.Error(), name) {
+			t.Errorf("err = %v, want one starting %q", err, name)
+		}
+	}
+}
+
+// Negative: under --cluster a deny host is refused. The cluster rule lets
+// through any pod or node, such as one at *.svc.cluster.local, so dropping
+// the deny host would let it through.
+func TestRenderRefusesADenyHostUnderCluster(t *testing.T) {
+	for _, host := range []string{"*.svc.cluster.local", "evil.example.com"} {
+		p := &v1alpha1.Policy{
+			Metadata: v1alpha1.ObjectMeta{Name: "cluster-deny"},
+			Spec: v1alpha1.PolicySpec{Egress: &v1alpha1.Egress{
+				Default: v1alpha1.EgressDeny,
+				Allow:   []v1alpha1.Rule{{Host: "api.example.com"}},
+				Deny:    []v1alpha1.Rule{{Host: host}},
+			}},
+		}
+		if _, err := Render(p, Options{Cluster: true}); err == nil || !strings.Contains(err.Error(), "--cluster") {
+			t.Errorf("%s: err = %v, want a refusal that names --cluster", host, err)
+		}
+		if _, err := Render(p, Options{}); err != nil {
+			t.Errorf("%s: refused without --cluster: %v", host, err)
+		}
+	}
+}
+
+// The broker address is an address or a CIDR, and anything else is refused
+// before a rule is written for it.
+func TestRenderBrokerAddress(t *testing.T) {
+	p := loadPolicy(t, "deny-default")
+	for in, want := range map[string]string{
+		"169.254.171.9":      "169.254.171.9/32",
+		"fd00::171:1":        "fd00::171:1/128",
+		"::ffff:169.254.1.1": "169.254.1.1/32",
+		"169.254.171.0/24":   "169.254.171.0/24",
+		"169.254.171.5/24":   "169.254.171.0/24",
+	} {
+		np, err := Render(p, Options{BrokerCIDR: in})
+		if err != nil {
+			t.Errorf("%s: %v", in, err)
+			continue
+		}
+		if got := np.Spec.Egress[1].ToCIDR; !slices.Equal(got, []string{want}) {
+			t.Errorf("%s: broker rule %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"not-an-address", "169.254.171.1/40", "brig.internal"} {
+		if _, err := Render(p, Options{BrokerCIDR: in}); err == nil {
+			t.Errorf("broker address %q rendered", in)
+		}
+		if err := (Options{BrokerCIDR: in}).Check(); err == nil {
+			t.Errorf("Check passed broker address %q", in)
+		}
+	}
+}
+
+// A namespace that Kubernetes would refuse at apply time is refused here.
+func TestRenderRefusesANonKubernetesNamespace(t *testing.T) {
+	for _, ns := range []string{"Agents", "agents.prod", "-agents", "agents_", strings.Repeat("a", 64)} {
+		if _, err := Render(loadPolicy(t, "deny-default"), Options{Namespace: ns}); err == nil {
+			t.Errorf("namespace %q rendered", ns)
+		}
+	}
+	if _, err := Render(loadPolicy(t, "deny-default"), Options{Namespace: "agents-1"}); err != nil {
+		t.Errorf("a valid namespace was refused: %v", err)
+	}
+}
+
+// The Pod Identity agent answers at an IPv6 address on an IPv6 cluster, and
+// the rule opens both.
+func TestRenderPodIdentityOpensBothAddresses(t *testing.T) {
+	np, err := Render(loadPolicy(t, "pod-identity"), Options{PodIdentity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{PodIdentityCIDR, PodIdentityCIDR6}
+	if !slices.ContainsFunc(np.Spec.Egress, func(r EgressRule) bool { return slices.Equal(r.ToCIDR, want) }) {
+		t.Errorf("no rule to %q in %+v", want, np.Spec.Egress)
+	}
+}

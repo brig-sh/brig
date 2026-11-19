@@ -14,9 +14,16 @@ spec:
         protocol: ANY
       rules:
         dns:
-        - matchPattern: '*'
+        - matchName: sts.amazonaws.com
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
   - toCIDR:
     - 169.254.170.23/32
+    - fd00:ec2::23/128
     toPorts:
     - ports:
       - port: "80"
