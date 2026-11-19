@@ -26,6 +26,11 @@ spec:
     - matchName: api.anthropic.com
   - toFQDNs:
     - matchPattern: '**.githubusercontent.com'
+    - matchPattern: '*.githubusercontent.com'
+    - matchPattern: '*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.*.githubusercontent.com'
   - toCIDR:
     - 10.0.0.0/8
   egressDeny:

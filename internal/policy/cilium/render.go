@@ -85,10 +85,11 @@ type Options struct {
 // A host is lowercased and loses one trailing dot. It must then be one or
 // more labels joined by '.', each a non-empty run of [a-z0-9-*]; a bare "*"
 // is accepted. Only '*' is a wildcard. Brig's enforcer lets '*' cross a dot,
-// and Cilium's '*' never does, so a leading "*." is written as "**." in the
-// matchPattern. In Cilium, "**." matches one or more labels and never the
-// apex, as "*." does in brig. It needs a Cilium release that supports "**.".
-// A '*' elsewhere in a host is copied as written and matches within one
+// and Cilium's '*' never does, so a leading "*." becomes several
+// matchPatterns: "**." for a Cilium release that spans labels with it, and
+// "*.", "*.*." and so on up to globDepth labels for one that reads "**." as
+// one label, as Cilium 1.17 does. None matches the apex, as "*." does not in
+// brig. A '*' elsewhere in a host is copied as written and matches within one
 // label only, which is narrower than brig.
 //
 // Errors name the list and index of the rule, as in allow[2] or deny[0].
@@ -181,11 +182,14 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 				if err := checkHost(h); err != nil {
 					return nil, fmt.Errorf("allow[%d] host %q: %w", i, r.Host, err)
 				}
-				sel := FQDNSelector{MatchName: h}
+				sels := []FQDNSelector{{MatchName: h}}
 				if strings.Contains(h, "*") {
-					sel = FQDNSelector{MatchPattern: ciliumPattern(h)}
+					sels = nil
+					for _, pat := range ciliumPatterns(h) {
+						sels = append(sels, FQDNSelector{MatchPattern: pat})
+					}
 				}
-				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToFQDNs: []FQDNSelector{sel}})
+				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToFQDNs: sels})
 				allowHosts = append(allowHosts, allowHost{i, h})
 			case r.CIDR != "":
 				if allowCIDR < 0 {
@@ -238,13 +242,28 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	return np, nil
 }
 
-// ciliumPattern returns the matchPattern for a checked host. A leading "*."
-// becomes "**." so that it spans labels as brig's does.
-func ciliumPattern(h string) string {
-	if strings.HasPrefix(h, "*.") {
-		return "*" + h
+// globDepth is the most labels that the "*." patterns of a leading glob
+// cover on a Cilium release that reads "**." as one label. Five covers the
+// deepest AWS service names, such as
+// bucket.s3.dualstack.us-east-1.amazonaws.com.
+const globDepth = 5
+
+// ciliumPatterns returns the matchPatterns for a checked host. A host without
+// a leading "*." is one pattern, as written. A leading "*." spans labels in
+// brig and Cilium's '*' does not, so it becomes "**." and then "*.", "*.*."
+// and so on, up to globDepth labels before the rest of the host.
+func ciliumPatterns(h string) []string {
+	rest, ok := strings.CutPrefix(h, "*.")
+	if !ok {
+		return []string{h}
 	}
-	return h
+	out := []string{"**." + rest}
+	prefix := ""
+	for range globDepth {
+		prefix += "*."
+		out = append(out, prefix+rest)
+	}
+	return out
 }
 
 // checkObjectName refuses a name that Kubernetes does not take as a DNS-1123
