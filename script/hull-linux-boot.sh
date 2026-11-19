@@ -72,8 +72,10 @@ hull() {
   )
 }
 
-# run_refs prints the refs of this run that brig lists.
+# run_refs prints the refs of this run that brig lists. A run whose setup
+# failed before brig was installed has none, and cleanup must still run.
 run_refs() {
+  command -v brig > /dev/null 2>&1 || return 0
   _all=$(brig -q ls) || fail "brig ls failed"
   printf '%s\n' "$_all" | grep -F "ubuntu@$RUN-" || true
 }
