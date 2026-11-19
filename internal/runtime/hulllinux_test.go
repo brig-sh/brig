@@ -15,17 +15,27 @@ import (
 // linuxHull is the adapter as newHull builds it on a Linux host.
 func linuxHull() *hull { return &hull{bin: "hull", linux: true} }
 
-// The name is kept from when a policy was refused on hull on Linux, so the
-// history of the test holds. It now asserts the opposite: a policy is accepted
-// on every monitor, and the gateway probe at boot is what can still refuse it.
-// BRIG_HYPERVISOR=hvi does not change the path: the hvi row is the macOS
-// gateway's, and the Linux run reads its own.
-func TestLinuxHullRefusesAPolicyOnEveryMonitor(t *testing.T) {
-	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor"} {
+// A policy is served on hvi, the only monitor urunc joins to a gateway, and
+// the gateway probe at boot is what can still refuse it there. Every other
+// monitor refuses it as unenforced, exit 7, on hull on Linux's own path:
+// BRIG_HYPERVISOR=hvi does not make the run read the macOS hvi row.
+func TestLinuxHullServesAPolicyOnlyOnHvi(t *testing.T) {
+	for _, hv := range []string{"", "vz", "hvi"} {
 		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv,
 			Egress: Egress{Default: "deny"}}
 		if err := linuxHull().CanRun(spec); err != nil {
 			t.Errorf("hypervisor %q: a policy was refused on hull on Linux: %v", hv, err)
+		}
+		if got := RoutePath(linuxHull(), hv); got != linuxHullPath {
+			t.Errorf("hypervisor %q: the run reads %s, not %s", hv, got, linuxHullPath)
+		}
+	}
+	for _, hv := range []string{"cloud-hypervisor", "qemu", "firecracker"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv,
+			Egress: Egress{Default: "deny"}}
+		var ce *CapabilityError
+		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath || ce.State != CannotEnforce {
+			t.Errorf("hypervisor %q: a policy was not refused as unenforced on %s: %v", hv, linuxHullPath, err)
 		}
 	}
 }

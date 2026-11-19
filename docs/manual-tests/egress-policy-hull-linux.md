@@ -43,6 +43,23 @@ $ hull run --net shared --gateway-sock <sock> --gateway-cidr 198.18.9.2/30 \
 The gateway logged `egress: refused the A query github.com. from 198.18.9.2`,
 and the A and AAAA refusals for `one.one.one.one`.
 
+## Through brig, 2026-11-19
+
+The run above drove hull by hand. This one is `brig run`, built from this
+branch, on the same host and bundle, with the guest kernel 6.18.64 from
+hull-assets 0.1.14. The `codex` profile was bound to a policy with
+`default: deny` that allows `example.com`.
+
+| Check | Result |
+| --- | --- |
+| The sandbox's gateway | started with `--egress-default deny --egress-allow host=example.com` |
+| The guest's interfaces | `eth0`, `lo` and the inactive `sit0`. The only route is the default one, through the gateway's address |
+| `https://example.com` | 200 |
+| `https://github.com` | curl exit 6, the name is not resolved |
+| `https://1.1.1.1`, `https://8.8.8.8`, dialed by address | curl exit 7, refused at the gateway |
+| `BRIG_HYPERVISOR=qemu`, `brig policy check codex` and `brig run -d codex@…` | both exit 7: urunc joins only `hvi` to a gateway |
+| `brig rm` | no sandbox and no gateway left |
+
 ## What this does not show
 
 - A divert, `brig.internal` and a published port. Brig still refuses them on

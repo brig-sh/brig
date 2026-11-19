@@ -891,6 +891,11 @@ func linuxSupports(spec RunSpec) error {
 		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
 			"run it on macOS, where hull's vz backend can show it")
 	}
+	// The policy first, from the same answer brig policy check reads, so the
+	// two refuse alike: exit 7, on a monitor other than hvi too.
+	if err := linuxHullEgress(spec, spec.Hypervisor); err != nil {
+		return err
+	}
 	if err := requireDiverts(spec, linuxHullPath); err != nil {
 		return err
 	}
