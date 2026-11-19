@@ -37,6 +37,15 @@ type routeServer interface {
 	RegisterMemory(s injector.MemorySandbox) (injector.AddResponse, error)
 	// MintMemory returns a memory token for a sandbox registered for memory.
 	MintMemory(r injector.MemoryMintRequest) (string, error)
+	// RegisterMCP registers the MCP servers of s, starting the broker when
+	// none is running, and returns its answer. Other servers than the ones
+	// registered replace them.
+	RegisterMCP(s injector.MCPSandbox) (injector.AddResponse, error)
+	// MintMCP returns an MCP token for a sandbox registered for MCP servers.
+	MintMCP(r injector.MCPMintRequest) (string, error)
+	// ForgetMCP removes the MCP servers of a sandbox and keeps its routes
+	// and its memory registered, as Forget does otherwise.
+	ForgetMCP(id string) error
 	// Status is what a running broker reports, and false when none answers.
 	// A broker whose process is alive and does not answer reports its PID
 	// alone, with false. It starts nothing.
@@ -103,6 +112,34 @@ func (b *brokerProcess) MintMemory(r injector.MemoryMintRequest) (string, error)
 		return "", injector.ErrNotRunning
 	}
 	return b.client.MintMemory(r)
+}
+
+func (b *brokerProcess) RegisterMCP(s injector.MCPSandbox) (injector.AddResponse, error) {
+	dir, err := injector.Dir()
+	if err != nil {
+		return injector.AddResponse{}, err
+	}
+	running, added, err := injector.RegisterMCP(dir, s)
+	if err != nil {
+		return injector.AddResponse{}, err
+	}
+	b.client = &running.Client
+	return added, nil
+}
+
+func (b *brokerProcess) MintMCP(r injector.MCPMintRequest) (string, error) {
+	if b.client == nil {
+		return "", injector.ErrNotRunning
+	}
+	return b.client.MintMCP(r)
+}
+
+func (b *brokerProcess) ForgetMCP(id string) error {
+	dir, err := injector.Dir()
+	if err != nil {
+		return err
+	}
+	return injector.ForgetMCP(dir, id)
 }
 
 func (b *brokerProcess) Status() (injector.Status, bool) {
@@ -198,12 +235,12 @@ func (c *Config) routeRefusal() error {
 }
 
 // brigInternal reports whether this run's guest reaches the broker at
-// brig.internal: a run with a route in mode endpoint, or with memory. A run
-// with memory and no route gets brig.internal alone: the divert of its
-// address and the CA, and no link-local address or route variable, which
-// follow from routes.
+// brig.internal: a run with a route in mode endpoint, with memory, or with
+// an MCP server. A run with memory or an MCP server and no route gets
+// brig.internal alone: the divert of its address and the CA, and no
+// link-local address or route variable, which follow from routes.
 func (c *Config) brigInternal() bool {
-	return c.Runtime != nil && (len(c.endpointRoutes()) > 0 || c.memoryKey != "")
+	return c.Runtime != nil && (len(c.endpointRoutes()) > 0 || c.memoryKey != "" || len(c.mcp) > 0)
 }
 
 // awsShadowVars are the variables an AWS SDK reads before the container
@@ -503,6 +540,20 @@ func brokeredSecrets(routes []v1alpha1.Route) map[string]string {
 	return out
 }
 
+// brokeredMCPSecrets are the secrets the credentials of MCP servers name, by
+// secret, with the server that names each. Each stays on the host as a
+// route's does: the broker sends it upstream, and a copy in the guest would
+// reach the server around the tool allowlist.
+func brokeredMCPSecrets(servers []policy.MCPEntry) map[string]string {
+	out := map[string]string{}
+	for _, e := range servers {
+		if c := e.Server.Credential; c != nil && c.SecretRef.Name != "" {
+			out[c.SecretRef.Name] = e.Server.Name
+		}
+	}
+	return out
+}
+
 // namesBrokered reports whether a binding's chain names a brokered secret.
 func namesBrokered(refs []string, brokered map[string]string) bool {
 	for _, raw := range refs {
@@ -525,7 +576,14 @@ func namesBrokered(refs []string, brokered map[string]string) bool {
 // or not the profile delivers it.
 func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alpha1.Route) (
 	profile.Profile, []profile.EnvBinding, []string) {
-	brokered := brokeredSecrets(routes)
+	return withBrokered(t, bindings, brokeredSecrets(routes))
+}
+
+// withBrokered is withRoutes for the secrets brokered names, by secret: the
+// ones the routes inject and the ones the MCP servers' credentials name,
+// which the broker reads on the host alike.
+func withBrokered(t profile.Profile, bindings []profile.EnvBinding, brokered map[string]string) (
+	profile.Profile, []profile.EnvBinding, []string) {
 	if len(brokered) == 0 {
 		return t, bindings, nil
 	}

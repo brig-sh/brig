@@ -56,9 +56,9 @@ func (c *Config) deliverSecretFiles() error {
 	if err := c.deliverBrigCA(); err != nil {
 		return err
 	}
-	// And the MCP configuration of its memory, which names the token's
-	// variable and holds no secret either.
-	if err := c.deliverMemoryConfig(); err != nil {
+	// And the MCP configuration of its memory and its MCP servers, which
+	// names the tokens' variables and holds no secret either.
+	if err := c.deliverMCPConfig(); err != nil {
 		return err
 	}
 	if len(c.Profile.Volumes) == 0 && len(c.Profile.Files) == 0 {

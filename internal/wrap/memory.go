@@ -66,24 +66,10 @@ func (c *Config) MemoryKey() string { return c.memoryKey }
 // project key is a hash, which tells a reader nothing.
 func (c *Config) MemoryLabel() string { return c.memoryLabel }
 
-// memoryMCPConfigPath is where the guest finds the MCP configuration that
-// points Claude Code at its store: beside the brig CA, outside the guest
-// home, root's and 0644. It holds no token. See deliverMemoryConfig.
-const memoryMCPConfigPath = "/brig/memory/mcp.json"
-
 // memoryTokenVar holds the memory token in the guest's environment. The MCP
 // configuration names it, and Claude Code expands it when it reads the file,
 // so the token is never written into the guest.
 const memoryTokenVar = "BRIG_MEMORY_TOKEN"
-
-// MemoryMCPConfig is the guest path of the MCP configuration of this run's
-// memory, or "" when memory is off.
-func (c *Config) MemoryMCPConfig() string {
-	if c.memoryKey == "" {
-		return ""
-	}
-	return memoryMCPConfigPath
-}
 
 // MemoryOfSandboxes is the store key each sandbox was booted with, by sandbox
 // name. A sandbox with no entry was booted without memory.
@@ -336,27 +322,8 @@ func (c *Config) memoryRefusal() error {
 	if c.memoryKey == "" || c.Runtime == nil {
 		return nil
 	}
-	if c.Network == NetOffline {
-		return fmt.Errorf("agent memory (%s) is served to the guest at %s, which an offline run cannot "+
-			"reach; run with --network isolated, or with --no-agent-memory", c.memoryLabel,
-			injector.BrigInternal)
-	}
-	err := c.endpointCheck()
-	if err == nil {
-		return nil
-	}
-	why := err.Error()
-	var ce *runtime.CapabilityError
-	if errors.As(err, &ce) {
-		why = ce.Why
-		if ce.Err != nil {
-			why += ": " + ce.Err.Error()
-		}
-	}
-	return fmt.Errorf("agent memory (%s) is served to the guest at %s, and %s cannot route it: %s. "+
-		"Agent memory runs on hull with the hvi backend (BRIG_HYPERVISOR=hvi) and on nerdctl with urunc; "+
-		"run there, or with --no-agent-memory",
-		c.memoryLabel, injector.BrigInternal, c.routePath(), why)
+	return c.brigInternalRefusal(fmt.Sprintf("agent memory (%s)", c.memoryLabel), "Agent memory runs",
+		"with --no-agent-memory")
 }
 
 // memoryChange refuses a run that asks a running sandbox for a store other
@@ -467,24 +434,18 @@ func forgetMemory(vmName string) {
 //
 // The routes and the memory of a sandbox share its divert socket and the
 // broker's CA, so each is checked against what the gateway was handed and
-// what serveRoutes took.
+// what serveRoutes took. See acceptBrigInternal.
 func (c *Config) serveMemory() error {
 	c.memoryVars = nil
 	if c.memoryKey == "" {
 		return nil
 	}
-	router, ok := c.Runtime.(runtime.BrigInternalRouter)
-	if !ok {
-		return fmt.Errorf("the runtime %s cannot say where its guest reaches %s", c.Runtime.Kind(),
-			injector.BrigInternal)
-	}
-	addr, err := router.BrigInternalAddr(c.VMName)
+	addr, err := c.guestBrigInternal()
 	if err != nil {
-		return fmt.Errorf("could not find where the guest of %s reaches %s: %w", c.VMName,
-			injector.BrigInternal, err)
+		return err
 	}
 	b := c.routeBroker()
-	reg := injector.MemorySandbox{ID: c.VMName, Session: c.RawName, Key: c.memoryKey, BrigInternal: addr.String()}
+	reg := injector.MemorySandbox{ID: c.VMName, Session: c.RawName, Key: c.memoryKey, BrigInternal: addr}
 	// The broker records a project store's folder, so `brig memory ls` can
 	// name it: its key is a hash.
 	if c.memoryMode == memoryProject {
@@ -494,27 +455,9 @@ func (c *Config) serveMemory() error {
 	if err != nil {
 		return fmt.Errorf("could not register the memory of %s with the credential broker: %w", c.VMName, err)
 	}
-	// The gateway is handed the socket before the broker answers, as for a
-	// route. A broker that listens elsewhere would leave the store's
-	// connections reset.
-	if want := c.diverts(); !want.Requested() || added.DivertSocket != want.Socket {
-		return fmt.Errorf("the credential broker listens for the diverted connections of %s on %q, "+
-			"and brig expected %q; stop the broker with `brig stop` on every sandbox and run again",
-			c.VMName, added.DivertSocket, want.Socket)
+	if err := c.acceptBrigInternal("the memory", "its routes", added); err != nil {
+		return err
 	}
-	ca, err := checkBrigCA(added.CA)
-	if err != nil {
-		return fmt.Errorf("the credential broker handed over a brig CA that brig will not put in the "+
-			"guest: %w", err)
-	}
-	// One broker makes one CA. Another CA here means the routes and the
-	// memory were answered by two brokers, and the guest would trust one
-	// and be served by the other.
-	if c.brigCA != "" && c.brigCA != ca {
-		return fmt.Errorf("the credential broker handed the memory of %s a different brig CA from its routes; "+
-			"stop the broker with `brig stop` on every sandbox and run again", c.VMName)
-	}
-	c.brigCA = ca
 	token, err := b.MintMemory(injector.MemoryMintRequest{
 		Sandbox:    c.VMName,
 		Session:    c.RawName,

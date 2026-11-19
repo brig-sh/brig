@@ -10,7 +10,9 @@ import (
 	pathpkg "path"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -129,42 +131,134 @@ func (c *Config) feedGuestFile(path, body string) error {
 	return nil
 }
 
-// memoryMCPConfig is the MCP configuration that points Claude Code at the
-// store of sandbox vm, at brig.internal. The token is named by its variable,
-// which Claude Code expands from its environment when it reads the file, so
-// the file holds no secret and is the same on every exec.
-func memoryMCPConfig(vm string) (string, error) {
+// guestBrigInternal is the address the guest of this sandbox resolves
+// brig.internal to: its own gateway's, which the runtime diverts to the
+// broker. The broker serves brig.internal on connections to that address
+// alone.
+func (c *Config) guestBrigInternal() (string, error) {
+	router, ok := c.Runtime.(runtime.BrigInternalRouter)
+	if !ok {
+		return "", fmt.Errorf("the runtime %s cannot say where its guest reaches %s", c.Runtime.Kind(),
+			injector.BrigInternal)
+	}
+	addr, err := router.BrigInternalAddr(c.VMName)
+	if err != nil {
+		return "", fmt.Errorf("could not find where the guest of %s reaches %s: %w", c.VMName,
+			injector.BrigInternal, err)
+	}
+	return addr.String(), nil
+}
+
+// acceptBrigInternal checks what the broker answered a brig.internal
+// registration of what ("the memory", "the MCP servers") and takes its CA.
+// others names what this sandbox registered before it, for the message.
+//
+// The routes, the memory and the MCP servers of a sandbox share its divert
+// socket and the broker's CA, so each answer is checked against what the
+// gateway was handed and what the registrations before it took.
+func (c *Config) acceptBrigInternal(what, others string, added injector.AddResponse) error {
+	// The gateway is handed the socket before the broker answers, as for a
+	// route. A broker that listens elsewhere would leave the guest's
+	// connections reset.
+	if want := c.diverts(); !want.Requested() || added.DivertSocket != want.Socket {
+		return fmt.Errorf("the credential broker listens for the diverted connections of %s on %q, "+
+			"and brig expected %q; stop the broker with `brig stop` on every sandbox and run again",
+			c.VMName, added.DivertSocket, want.Socket)
+	}
+	ca, err := checkBrigCA(added.CA)
+	if err != nil {
+		return fmt.Errorf("the credential broker handed over a brig CA that brig will not put in the "+
+			"guest: %w", err)
+	}
+	// One broker makes one CA. Another CA here means two brokers answered
+	// the registrations of one sandbox, and the guest would trust one and
+	// be served by the other.
+	if c.brigCA != "" && c.brigCA != ca {
+		return fmt.Errorf("the credential broker handed %s of %s a different brig CA from %s; "+
+			"stop the broker with `brig stop` on every sandbox and run again", what, c.VMName, others)
+	}
+	c.brigCA = ca
+	return nil
+}
+
+// brigInternalRefusal is why this run cannot serve subject to its guest at
+// brig.internal, or nil: an offline run cannot reach it, and a run path
+// that does not route that name to the broker cannot serve it. runs says
+// where it runs, as a sentence's start ("Agent memory runs"), and wayOut is
+// the other way past the refusal.
+func (c *Config) brigInternalRefusal(subject, runs, wayOut string) error {
+	if c.Network == NetOffline {
+		return fmt.Errorf("%s is served to the guest at %s, which an offline run cannot "+
+			"reach; run with --network isolated, or %s", subject, injector.BrigInternal, wayOut)
+	}
+	err := c.endpointCheck()
+	if err == nil {
+		return nil
+	}
+	why := err.Error()
+	var ce *runtime.CapabilityError
+	if errors.As(err, &ce) {
+		why = ce.Why
+		if ce.Err != nil {
+			why += ": " + ce.Err.Error()
+		}
+	}
+	return fmt.Errorf("%s is served to the guest at %s, and %s cannot route it: %s. "+
+		"%s on hull with the hvi backend (BRIG_HYPERVISOR=hvi) and on nerdctl with urunc; "+
+		"run there, or %s", subject, injector.BrigInternal, c.routePath(), why, runs, wayOut)
+}
+
+// mcpConfig is the MCP configuration that points Claude Code at what the
+// broker serves sandbox vm at brig.internal: its memory store, when memory
+// is on, and each of servers. Every token is named by its variable, which
+// Claude Code expands from its environment when it reads the file, so the
+// file holds no secret and is the same on every exec. One file for all of
+// them, because --mcp-config is one flag and the agent is handed one path.
+func mcpConfig(vm string, memory bool, servers []policy.MCPEntry) (string, error) {
 	type server struct {
 		Type    string            `json:"type"`
 		URL     string            `json:"url"`
 		Headers map[string]string `json:"headers"`
 	}
+	base := injector.HostEndpoint{}.Base() + "/" + vm
+	entries := map[string]server{}
+	if memory {
+		entries[v1alpha1.MCPReservedName] = server{
+			Type:    "http",
+			URL:     base + "/memory",
+			Headers: map[string]string{"Authorization": "Bearer ${" + memoryTokenVar + "}"},
+		}
+	}
+	for _, e := range servers {
+		entries[e.Server.Name] = server{
+			Type:    "http",
+			URL:     base + "/mcp/" + e.Server.Name,
+			Headers: map[string]string{"Authorization": "Bearer ${" + mcpTokenVar + "}"},
+		}
+	}
 	b, err := json.Marshal(struct {
 		MCPServers map[string]server `json:"mcpServers"`
-	}{map[string]server{"brig-memory": {
-		Type:    "http",
-		URL:     injector.HostEndpoint{}.Base() + "/" + vm + "/memory",
-		Headers: map[string]string{"Authorization": "Bearer ${" + memoryTokenVar + "}"},
-	}}})
+	}{entries})
 	return string(b), err
 }
 
-// deliverMemoryConfig writes the MCP configuration of this run's memory to
-// memoryMCPConfigPath, for a run with memory, the way deliverBrigCA writes
-// the CA: root's and 0644 in a directory of root's, outside the guest home,
-// on stdin, on every exec. The agent reads it and cannot change it, so it
-// cannot point itself at another server with the token.
-func (c *Config) deliverMemoryConfig() error {
-	if c.memoryKey == "" {
+// deliverMCPConfig writes the MCP configuration of this run to
+// mcpConfigPath, for a run with memory or an MCP server, the way
+// deliverBrigCA writes the CA: root's and 0644 in a directory of root's,
+// outside the guest home, on stdin, on every exec. The agent reads it and
+// cannot change it, so it cannot point itself at another server with a
+// token.
+func (c *Config) deliverMCPConfig() error {
+	if c.MCPConfig() == "" {
 		return nil
 	}
-	body, err := memoryMCPConfig(c.VMName)
+	body, err := mcpConfig(c.VMName, c.memoryKey != "", c.mcp)
 	if err != nil {
 		return err
 	}
-	dir := pathpkg.Dir(memoryMCPConfigPath)
-	if err := c.guestRoot("sh", "-c", guestFileCreateScript, "sh", dir, memoryMCPConfigPath); err != nil {
-		return fmt.Errorf("could not create %s in the sandbox: %w", memoryMCPConfigPath, err)
+	dir := pathpkg.Dir(mcpConfigPath)
+	if err := c.guestRoot("sh", "-c", guestFileCreateScript, "sh", dir, mcpConfigPath); err != nil {
+		return fmt.Errorf("could not create %s in the sandbox: %w", mcpConfigPath, err)
 	}
-	return c.feedGuestFile(memoryMCPConfigPath, body)
+	return c.feedGuestFile(mcpConfigPath, body)
 }

@@ -179,6 +179,35 @@ func ForgetRoutes(dir, id string) error {
 	return nil
 }
 
+// ForgetMCP removes the MCP servers of sandbox id from the broker serving dir
+// and keeps its routes and its memory registered. An exec of a running
+// sandbox whose policies no longer declare an MCP server calls it: its MCP
+// tokens are refused, and the tokens of another exec's agent for the routes
+// and the memory stay valid. It starts nothing, and stops the broker when no
+// sandbox is left, as Forget does.
+func ForgetMCP(dir, id string) error {
+	c, ok := controlClient(dir)
+	if !ok {
+		return nil
+	}
+	r, err := c.RemoveMCP(id)
+	if errors.Is(err, ErrNotRunning) {
+		return nil
+	}
+	// A broker from a brig without MCP has no MCP server to revoke.
+	var ref *RefusedError
+	if errors.As(err, &ref) && ref.Status == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if r.Remaining == 0 {
+		return stopIfIdle(c)
+	}
+	return nil
+}
+
 // removeMemory removes the memory of sandbox id. A broker from a brig without
 // memory answers 404: it has no memory to revoke, so the count from the route
 // removal, routes, is returned and brig stop still stops it.

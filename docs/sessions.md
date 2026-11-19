@@ -178,7 +178,7 @@ Stores live in `~/.brig/memory`, or `memory/` under `BRIG_STATE_DIR`. They
 outlive `brig stop` and `brig rm`. List them and remove them with
 [`brig memory`](cli.md#brig-memory).
 
-Brig starts `claude` with `--mcp-config=/brig/memory/mcp.json`, and the
+Brig starts `claude` with `--mcp-config=/brig/mcp/mcp.json`, and the
 sandbox receives a token in `BRIG_MEMORY_TOKEN`. A `claude` that you start by
 hand in a shell from `brig sh` has the token and no MCP entry, so it has no
 memory. A store shared by several sandboxes is a channel between them. See

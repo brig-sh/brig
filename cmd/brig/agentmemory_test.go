@@ -161,7 +161,7 @@ func loadAgentMemory(t *testing.T, mem, rawName string) (*wrap.Config, profile.P
 func TestAgentArgsAddTheMemoryMCPConfig(t *testing.T) {
 	cfg, p := loadAgentMemory(t, "team", "refactor")
 	got := agentArgs(cfg, p, []string{"-p", "hi"})
-	want := []string{"--mcp-config=/brig/memory/mcp.json", "--name", "refactor", "-p", "hi"}
+	want := []string{"--mcp-config=/brig/mcp/mcp.json", "--name", "refactor", "-p", "hi"}
 	if !slices.Equal(got, want) {
 		t.Errorf("agentArgs = %q, want %q", got, want)
 	}
@@ -197,7 +197,7 @@ func TestAgentArgsKeepAPromptAfterTheMCPConfig(t *testing.T) {
 		t.Fatalf("RawName = %q, want an unnamed run", cfg.RawName)
 	}
 	got := agentArgs(cfg, p, []string{"fix it"})
-	if want := []string{"--mcp-config=/brig/memory/mcp.json", "fix it"}; !slices.Equal(got, want) {
+	if want := []string{"--mcp-config=/brig/mcp/mcp.json", "fix it"}; !slices.Equal(got, want) {
 		t.Errorf("agentArgs = %q, want %q", got, want)
 	}
 }
@@ -235,6 +235,45 @@ func TestAgentMemoryFlagLastWins(t *testing.T) {
 		o, _, _, err := parse("run", append(tc.args, "claude"))
 		if err != nil || o.load.Memory != tc.memory || o.load.NoMemory != tc.off {
 			t.Errorf("%v: memory %q, no-memory %v, %v; want %q, %v", tc.args, o.load.Memory, o.load.NoMemory, err, tc.memory, tc.off)
+		}
+	}
+}
+
+// Memory and an MCP server share one configuration file, so Claude Code is
+// started with --mcp-config once, naming it.
+func TestAgentArgsPassOneMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(dir, "ws"))
+	t.Setenv("BRIG_POLICY_DIR", filepath.Join(dir, "policies"))
+	for _, key := range []string{"BRIG_MEMORY", "BRIG_CLAUDE_CODE_MEMORY"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: nofire}\nspec:\n  mcp:\n" +
+		"    - name: nofire\n      preset: nofire\n      credential: {secretRef: {name: nofire-token}}\n" +
+		"      tools: {allow: [search]}\n"
+	if err := os.MkdirAll(filepath.Join(dir, "policies"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policies", "nofire.yaml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	p.Policy = []string{"nofire"}
+	for _, mem := range []string{"", "team"} {
+		cfg, err := wrap.Load(p, wrap.Options{Memory: mem}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := agentArgs(cfg, p, []string{"fix it"})
+		if want := []string{"--mcp-config=/brig/mcp/mcp.json", "fix it"}; !slices.Equal(got, want) {
+			t.Errorf("memory %q: agentArgs = %q, want %q", mem, got, want)
 		}
 	}
 }

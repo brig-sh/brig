@@ -128,8 +128,8 @@ func TestMemoryEnvOnExec(t *testing.T) {
 	if d := rt.spec.Egress.Divert; !d.BrigInternal || d.Socket != sock || len(d.Routes) != 0 {
 		t.Errorf("Divert = %+v, want brig.internal alone to %s", d, sock)
 	}
-	if c.MemoryMCPConfig() != "/brig/memory/mcp.json" {
-		t.Errorf("MemoryMCPConfig = %q", c.MemoryMCPConfig())
+	if c.MCPConfig() != "/brig/mcp/mcp.json" {
+		t.Errorf("MCPConfig = %q", c.MCPConfig())
 	}
 	if rt.guestFiles[injector.GuestCAPath] != testBrigCA() {
 		t.Error("the CA the broker handed the memory registration did not reach the guest")
@@ -190,18 +190,18 @@ func TestMemoryConfigHasNoToken(t *testing.T) {
 	if err := c.EnsureRunning(creds.Set{}); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := rt.guestFiles[memoryMCPConfigPath]
+	got, ok := rt.guestFiles[mcpConfigPath]
 	if !ok {
-		t.Fatalf("no %s in the guest: %v", memoryMCPConfigPath, rt.guestFiles)
+		t.Fatalf("no %s in the guest: %v", mcpConfigPath, rt.guestFiles)
 	}
 	if got != wantMCPConfig(c.VMName) {
-		t.Errorf("%s holds\n%s\nwant\n%s", memoryMCPConfigPath, got, wantMCPConfig(c.VMName))
+		t.Errorf("%s holds\n%s\nwant\n%s", mcpConfigPath, got, wantMCPConfig(c.VMName))
 	}
 	if strings.Contains(got, "memory-token") {
 		t.Error("the MCP configuration holds the memory token")
 	}
-	if strings.HasPrefix(memoryMCPConfigPath, c.Profile.GuestHome+"/") {
-		t.Errorf("%s is in the guest home %s", memoryMCPConfigPath, c.Profile.GuestHome)
+	if strings.HasPrefix(mcpConfigPath, c.Profile.GuestHome+"/") {
+		t.Errorf("%s is in the guest home %s", mcpConfigPath, c.Profile.GuestHome)
 	}
 }
 
@@ -232,11 +232,11 @@ func TestNoMemoryNoTokenNoArgs(t *testing.T) {
 			t.Errorf("a run without memory got %s", name)
 		}
 	}
-	if c.MemoryMCPConfig() != "" {
-		t.Errorf("MemoryMCPConfig = %q for a run without memory", c.MemoryMCPConfig())
+	if c.MCPConfig() != "" {
+		t.Errorf("MCPConfig = %q for a run without memory", c.MCPConfig())
 	}
-	if _, ok := rt.guestFiles[memoryMCPConfigPath]; ok {
-		t.Errorf("a run without memory wrote %s", memoryMCPConfigPath)
+	if _, ok := rt.guestFiles[mcpConfigPath]; ok {
+		t.Errorf("a run without memory wrote %s", mcpConfigPath)
 	}
 	if d := rt.spec.Egress.Divert; d.BrigInternal || d.Socket != "" {
 		t.Errorf("Divert = %+v for a run without memory or route", d)
