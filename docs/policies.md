@@ -1231,7 +1231,7 @@ The mapping:
 | --- | --- |
 | `default: deny` | `enableDefaultDeny: {egress: true}` and the allow rules |
 | `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
-| allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. A leading `*.` is written `**.`, because Cilium's `*` does not cross a dot |
+| allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. Cilium's `*` does not cross a dot, so a leading `*.` becomes `**.` and then `*.`, `*.*.` and so on, up to five labels. See below |
 | allow `cidr` | `toCIDR` |
 | deny `cidr` | `egressDeny` with `toCIDR` |
 | deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host |
@@ -1239,7 +1239,9 @@ The mapping:
 
 The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
 makes `toFQDNs` work. Only `*` is accepted as a wildcard in a host glob.
-`?`, `[` and `\` are refused, and the error names the rule. A `*` inside a label, as in `a*.example.com`, matches within one label in Cilium, which is narrower than brig. The `**.` form needs a Cilium release that supports it.
+`?`, `[` and `\` are refused, and the error names the rule. A `*` inside a label, as in `a*.example.com`, matches within one label in Cilium, which is narrower than brig.
+
+A leading `*.` matches names of any depth in brig. Cilium 1.17 reads `**.` as one label: under `**.amazonaws.com` alone, it lets `sts.amazonaws.com` through and drops `sts.us-east-2.amazonaws.com`. So the renderer writes `**.` for a release that spans labels with it, and one pattern for each depth from one to five labels for one that does not. A name more than five labels deep under the glob is dropped on such a release. None of the patterns matches the apex, as `*.` does not in brig.
 
 This is the output for a deny default with a host, a glob, a CIDR and a
 route:
@@ -1263,8 +1265,8 @@ spec:
       rules:
         dns:
         - matchPattern: '*'
-  - toEntities:
-    - host
+  - toCIDR:
+    - 169.254.171.1/32
     toPorts:
     - ports:
       - port: "443"
@@ -1273,6 +1275,11 @@ spec:
     - matchName: api.anthropic.com
   - toFQDNs:
     - matchPattern: '**.githubusercontent.com'
+    - matchPattern: '*.githubusercontent.com'
+    - matchPattern: '*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.*.githubusercontent.com'
   - toCIDR:
     - 10.0.0.0/8
   egressDeny:

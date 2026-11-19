@@ -5,6 +5,8 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -199,11 +201,92 @@ func TestRenderDenyHostUnderAllowCIDR(t *testing.T) {
 	}
 }
 
-// TestRenderLeadingGlobSpansLabels checks the "**." rewrite.
+// TestRenderLeadingGlobSpansLabels checks the patterns a leading glob becomes.
 func TestRenderLeadingGlobSpansLabels(t *testing.T) {
-	for in, want := range map[string]string{"*.amazonaws.com": "**.amazonaws.com", "a*.example.com": "a*.example.com", "*": "*"} {
-		if got := ciliumPattern(in); got != want {
-			t.Errorf("ciliumPattern(%q) = %q, want %q", in, got, want)
+	for in, want := range map[string][]string{
+		"*.amazonaws.com": {"**.amazonaws.com", "*.amazonaws.com", "*.*.amazonaws.com", "*.*.*.amazonaws.com",
+			"*.*.*.*.amazonaws.com", "*.*.*.*.*.amazonaws.com"},
+		"a*.example.com": {"a*.example.com"},
+		"*":              {"*"},
+	} {
+		if got := ciliumPatterns(in); !slices.Equal(got, want) {
+			t.Errorf("ciliumPatterns(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// cilium117Match reports whether name matches pattern as Cilium 1.17 reads a
+// matchPattern: a bare "*" matches every name, and any other '*' matches a run
+// of DNS characters within one label. "**." is then one label, not several:
+// stg-1 dropped sts.us-east-2.amazonaws.com under "**.amazonaws.com" alone.
+func cilium117Match(pattern, name string) bool {
+	if pattern == "*" {
+		return true
+	}
+	re := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, `[-a-zA-Z0-9_]*`) + "$"
+	return regexp.MustCompile(re).MatchString(name)
+}
+
+// A leading glob reaches a name several labels deep on a Cilium release that
+// reads "**." as one label, and still never the apex or a name that only ends
+// in the same letters.
+func TestRenderLeadingGlobOnCilium117(t *testing.T) {
+	p := &v1alpha1.Policy{Spec: v1alpha1.PolicySpec{Egress: &v1alpha1.Egress{
+		Default: v1alpha1.EgressDeny, Allow: []v1alpha1.Rule{{Host: "*.amazonaws.com"}},
+	}}}
+	np, err := Render(p, Options{Name: "glob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patterns []string
+	for _, r := range np.Spec.Egress {
+		for _, f := range r.ToFQDNs {
+			patterns = append(patterns, f.MatchPattern)
+		}
+	}
+	matches := func(name string) bool {
+		return slices.ContainsFunc(patterns, func(pat string) bool { return cilium117Match(pat, name) })
+	}
+	for _, name := range []string{"sts.amazonaws.com", "sts.us-east-2.amazonaws.com",
+		"bedrock-runtime.us-east-1.amazonaws.com", "bucket.s3.dualstack.us-east-1.amazonaws.com"} {
+		if !matches(name) {
+			t.Errorf("%s matches none of %q", name, patterns)
+		}
+	}
+	for _, name := range []string{"amazonaws.com", "evilamazonaws.com", "amazonaws.com.evil.example"} {
+		if matches(name) {
+			t.Errorf("%s matches %q", name, patterns)
+		}
+	}
+}
+
+// A passthrough route holds no credential, and the pod still reaches the node
+// broker for it, so the policy gets the broker rule as for any route.
+func TestRenderPassthroughRouteReachesTheBroker(t *testing.T) {
+	p, err := policy.Parse([]byte(`apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: anthropic
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      passthrough: true
+      guest:
+        env:
+          ANTHROPIC_BASE_URL: "{route.url}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	np, err := Render(&p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := slices.ContainsFunc(np.Spec.Egress, func(r EgressRule) bool { return slices.Equal(r.ToCIDR, []string{BrokerCIDR}) })
+	if !found {
+		t.Errorf("no rule to the broker at %s in %+v", BrokerCIDR, np.Spec.Egress)
 	}
 }
