@@ -636,3 +636,35 @@ func TestLinuxHullRefusesAPolicyItsGatewayCannotTake(t *testing.T) {
 		})
 	}
 }
+
+// A route rides the gateway as the rules do, and urunc joins only hvi to one.
+// On another monitor brig.internal and a route's divert are refused as
+// unenforced, exit 7, by the run and by brig policy check alike; offline and
+// on hvi nothing changes.
+func TestLinuxHullServesARouteOnlyOnHvi(t *testing.T) {
+	d := Divert{BrigInternal: true, Socket: "/tmp/divert.sock",
+		Routes: []DivertRoute{{Host: "169.254.170.2", Port: 80}}}
+	for _, hv := range []string{"", "hvi"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv, Egress: Egress{Divert: d}}
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("hypervisor %q: a route was refused on hull on Linux: %v", hv, err)
+		}
+	}
+	for _, hv := range []string{"qemu", "cloud-hypervisor"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv, Egress: Egress{Divert: d}}
+		var ce *CapabilityError
+		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath || ce.State != CannotEnforce {
+			t.Errorf("hypervisor %q: a route was not refused as unenforced on %s: %v", hv, linuxHullPath, err)
+		}
+		p := RouteModeProperty(v1alpha1.ModeEndpoint)
+		if err := RequireGatewayMonitor(p, linuxHull(), hv, "isolated"); !errors.As(err, &ce) || ce.Path != linuxHullPath {
+			t.Errorf("hypervisor %q: brig policy check does not refuse the route: %v", hv, err)
+		}
+		if err := RequireGatewayMonitor(p, linuxHull(), hv, "none"); err != nil {
+			t.Errorf("hypervisor %q: an offline run was refused for its monitor: %v", hv, err)
+		}
+		if err := RequireGatewayMonitor(p, &hull{bin: "hull"}, hv, "isolated"); err != nil {
+			t.Errorf("hypervisor %q: the macOS hull was asked about urunc's monitors: %v", hv, err)
+		}
+	}
+}
