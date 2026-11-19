@@ -551,8 +551,17 @@ func (c *Config) runtimeRefusal() error {
 	if recorded == current {
 		return nil
 	}
-	return &OtherRuntimeError{Sandbox: c.VMName, Recorded: recorded, Current: current,
-		OnPath: runtime.OnPath(recorded)}
+	onPath := runtime.OnPath(recorded)
+	// An entry that records no runtime may be one the nerdctl runtime booted
+	// through docker, which it drives when no nerdctl is on PATH. The
+	// BRIG_RUNTIME=nerdctl the refusal names reaches it there, so a docker on
+	// PATH is not a runtime gone, and the refusal does not point at --forget.
+	// An entry that records nerdctl was booted by nerdctl itself, and docker
+	// does not see it.
+	if entry.Runtime == "" && !onPath {
+		onPath = runtime.OnPath("docker")
+	}
+	return &OtherRuntimeError{Sandbox: c.VMName, Recorded: recorded, Current: current, OnPath: onPath}
 }
 
 // SandboxesOfOtherRuntimes names every sandbox the session index records on a
