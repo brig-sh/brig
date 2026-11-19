@@ -114,11 +114,12 @@ func ownedByMe(info os.FileInfo) bool {
 
 // divertSandbox is the divert socket of one sandbox and what serves it.
 //
-// One socket serves a sandbox's routes and its memory. The routes hold it
-// when they reach brig.internal or have a route mode besides endpoint; the
-// memory holds it when memory reaches brig.internal. It opens with the first
-// holder and closes with the last, so a change of routes keeps the guest's
-// memory connections open.
+// One socket serves a sandbox's routes, its memory and its MCP servers. The
+// routes hold it when they reach brig.internal or have a route mode besides
+// endpoint; the memory holds it when memory reaches brig.internal; the MCP
+// servers always hold it. It opens with the first holder and closes with the
+// last, so a change of routes keeps the guest's memory and MCP connections
+// open.
 type divertSandbox struct {
 	srv  *server
 	id   string
@@ -130,6 +131,9 @@ type divertSandbox struct {
 	// memory reports that the sandbox's memory holds the socket. s.mu
 	// guards it.
 	memory bool
+	// mcp reports that the sandbox's MCP servers hold the socket. s.mu
+	// guards it.
+	mcp bool
 	// mu guards routes and handlers, which a registration of routes changes
 	// while connections are served.
 	mu sync.Mutex
@@ -302,7 +306,8 @@ func (l *divertSandbox) handle(client net.Conn) {
 	l.mu.Unlock()
 	// The link-local address is the broker's own for the routes that vend,
 	// never an upstream, on every port: a divert handler never claims it. A
-	// socket that memory alone holds serves no route there, and closes it.
+	// socket that memory or MCP servers alone hold serves no route there,
+	// and closes it.
 	if pre.dst.Addr().Unmap() == linkLocal.Addr() {
 		if !routes {
 			a.check = "port"

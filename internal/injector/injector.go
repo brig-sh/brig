@@ -54,6 +54,11 @@ const (
 	// signed with. It is separate from the host key, so memory can move to
 	// its own process without the route key. Only the broker reads it.
 	MemoryKeyName = "memorykey"
+	// MCPKeyName is the MCP key, 32 random bytes the MCP tokens are signed
+	// with. It is separate from the host key and the memory key, so the MCP
+	// servers can move to their own process with no other key. Only the
+	// broker reads it.
+	MCPKeyName = "mcpkey"
 	// CACertName and CAKeyName are the brig CA, which signs only
 	// brig.internal. Only the broker reads the key.
 	CACertName = "ca.pem"
@@ -251,6 +256,36 @@ type MemoryMintRequest struct {
 	TTLSeconds int64 `json:"ttlSeconds"`
 }
 
+// MCPServer is one MCP server of a sandbox and the policy that declared it.
+type MCPServer struct {
+	Policy string             `json:"policy"`
+	Server v1alpha1.MCPServer `json:"server"`
+}
+
+// MCPSandbox is a sandbox's MCP servers, the body of add-mcp. It is a
+// registration of its own, apart from the sandbox's routes and memory, as
+// memory is.
+type MCPSandbox struct {
+	ID      string `json:"id"`
+	Profile string `json:"profile"`
+	Session string `json:"session,omitempty"`
+	// Servers are the sandbox's MCP servers. The broker expands each again
+	// and refuses one it cannot.
+	Servers []MCPServer `json:"servers"`
+	// BrigInternal is the address the sandbox's guest resolves
+	// brig.internal to, as in Sandbox. MCP is served there alone, so it is
+	// required.
+	BrigInternal string `json:"brigInternal"`
+}
+
+// MCPMintRequest is the body of mint-mcp.
+type MCPMintRequest struct {
+	Sandbox string `json:"sandbox"`
+	Session string `json:"session,omitempty"`
+	// TTLSeconds is the token's lifetime. The broker caps it at TokenTTL.
+	TTLSeconds int64 `json:"ttlSeconds"`
+}
+
 // StopRequest is the body of stop.
 type StopRequest struct {
 	// IfIdle stops the broker only when no sandbox is registered, for
@@ -288,4 +323,6 @@ type Status struct {
 	Vending []string `json:"vending,omitempty"`
 	// Memory are the ids of the sandboxes registered for memory, sorted.
 	Memory []string `json:"memory,omitempty"`
+	// MCP are the ids of the sandboxes registered for MCP servers, sorted.
+	MCP []string `json:"mcp,omitempty"`
 }

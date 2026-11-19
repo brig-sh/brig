@@ -55,12 +55,15 @@ type Record struct {
 type Proxy struct {
 	// Credentials resolves the secret a server names.
 	Credentials secret.Broker
-	// Transport reaches the upstream. Nil means a clone of
-	// http.DefaultTransport that requires TLS 1.2 and uses no proxy.
+	// Transport reaches the upstream. Nil means DefaultTransport.
 	Transport http.RoundTripper
 	// Audit, if set, receives one Record per exchange, and one per server
 	// request dropped from a response.
 	Audit func(Record)
+	// Log, if set, receives the error of an upstream that could not be
+	// reached. The guest is told only that it is unreachable: the error can
+	// name host addresses and resolvers.
+	Log func(server string, err error)
 
 	once      sync.Once
 	transport http.RoundTripper
@@ -83,21 +86,28 @@ var forwardedRequestHeaders = []string{"Content-Type", "Accept", "Mcp-Session-Id
 // the broker holds.
 var returnedResponseHeaders = []string{"Content-Type", "Mcp-Session-Id", "MCP-Protocol-Version"}
 
+// DefaultTransport returns a new clone of http.DefaultTransport that requires
+// TLS 1.2, uses no proxy and never decompresses. A caller that sets more on
+// it, a timeout, changes its own copy alone.
+func DefaultTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	// The credential goes to the upstream only, as on a route, not through
+	// a proxy the host environment names.
+	t.Proxy = nil
+	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	// The filter reads plain bytes; Accept-Encoding: identity is set on
+	// each request.
+	t.DisableCompression = true
+	return t
+}
+
 func (p *Proxy) roundTripper() http.RoundTripper {
 	p.once.Do(func() {
 		if p.Transport != nil {
 			p.transport = p.Transport
 			return
 		}
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		// The credential goes to the upstream only, as on a route, not
-		// through a proxy the host environment names.
-		t.Proxy = nil
-		t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-		// The filter reads plain bytes; Accept-Encoding: identity is set
-		// on each request.
-		t.DisableCompression = true
-		p.transport = t
+		p.transport = DefaultTransport()
 	})
 	return p.transport
 }
@@ -198,6 +208,9 @@ func (x *exchange) forward(r *http.Request, method string, body []byte, rpcMetho
 
 	resp, err := x.p.roundTripper().RoundTrip(up)
 	if err != nil {
+		if x.p.Log != nil {
+			x.p.Log(srv.Name, err)
+		}
 		x.fail(VerdictError, http.StatusBadGateway, fmt.Sprintf("mcp server %q is unreachable", srv.Name))
 		return
 	}
