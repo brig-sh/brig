@@ -177,19 +177,40 @@ func checkBody(rules *v1alpha1.RequestBody, held *heldBody) *bodyRefusal {
 			}
 		}
 	}
-	if len(rules.ToolResultDeny) > 0 && toolResultHit(rules.ToolResultDeny, req.Messages) {
-		// The message says which rule, never what matched: the guest wrote
-		// the text, and the answer must not hand a secret back to it.
-		return &bodyRefusal{"toolResultDeny", "tool_result",
-			"brig broker refused this request: a tool result or user text matches request.body.toolResultDeny"}
+	if len(rules.ToolResultDeny) > 0 {
+		// A model or a tool name that an allow list let through is a value
+		// the policy named, not text. A pattern that matched it would refuse
+		// every request for that model or tool.
+		vetted := func(at []*jsonFrame) bool {
+			return len(rules.Models) > 0 && atModel(at) ||
+				rules.Tools != nil && len(rules.Tools.Allow) > 0 && atToolName(at)
+		}
+		hit, err := textHit(rules.ToolResultDeny, body, vetted)
+		if err != nil {
+			return &bodyRefusal{reason: "json", message: unreadableBody}
+		}
+		if hit {
+			// The message says which rule, never what matched: the guest
+			// wrote the text, and the answer must not hand a secret back to
+			// it.
+			return &bodyRefusal{"toolResultDeny", "text",
+				"brig broker refused this request: text in the request body matches request.body.toolResultDeny"}
+		}
 	}
 	return nil
 }
 
-// toolResultHit reports whether a pattern matches the text of a tool_result
-// block or a user text block. The patterns were proved by validation, so
-// they compile.
-func toolResultHit(patterns []string, msgs []message) bool {
+// textHit reports whether a pattern matches a string of body, a key or a
+// value, at any depth. The model reads more than tool results: the system
+// prompt, the history the guest sends back, tool inputs, documents and
+// search results, at whatever depth the API nests them. A list of the parts
+// to read would miss the next block type, so every string is read but a
+// value at a position skip names. The patterns were proved by validation,
+// so they compile.
+//
+// It reads tokens rather than decoding into a map, because a map keeps one
+// of two equal keys and the upstream may read the other.
+func textHit(patterns []string, body []byte, skip func([]*jsonFrame) bool) (bool, error) {
 	res := make([]*regexp.Regexp, len(patterns))
 	for i, p := range patterns {
 		res[i] = regexp.MustCompile(p)
@@ -197,21 +218,71 @@ func toolResultHit(patterns []string, msgs []message) bool {
 	hit := func(s string) bool {
 		return slices.ContainsFunc(res, func(re *regexp.Regexp) bool { return re.MatchString(s) })
 	}
-	for _, m := range msgs {
-		for _, b := range m.Content {
-			switch {
-			case b.Type == "tool_result":
-				if slices.ContainsFunc(b.Content, hit) {
-					return true
-				}
-			case b.Type == "text" && m.Role == "user":
-				if hit(b.Text) {
-					return true
-				}
-			}
+	var stack []*jsonFrame
+	// done marks the end of a value: in an object, a key comes next.
+	done := func() {
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].wantKey = true
 		}
 	}
-	return false
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	for {
+		t, err := dec.Token()
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].wantKey {
+			if k, ok := t.(string); ok {
+				stack[n-1].key, stack[n-1].wantKey = k, false
+				if hit(k) {
+					return true, nil
+				}
+				continue
+			}
+		}
+		switch v := t.(type) {
+		case json.Delim:
+			switch v {
+			case '{':
+				stack = append(stack, &jsonFrame{object: true, wantKey: true})
+			case '[':
+				stack = append(stack, &jsonFrame{})
+			default:
+				stack = stack[:len(stack)-1]
+				done()
+			}
+		case string:
+			if !skip(stack) && hit(v) {
+				return true, nil
+			}
+			done()
+		default:
+			done()
+		}
+	}
+}
+
+// atModel reports whether textHit is at the value of the top-level model.
+func atModel(stack []*jsonFrame) bool {
+	return len(stack) == 1 && stack[0].object && stack[0].key == "model"
+}
+
+// atToolName reports whether textHit is at the name of an entry of the
+// top-level tools.
+func atToolName(stack []*jsonFrame) bool {
+	return len(stack) == 3 && stack[0].object && stack[0].key == "tools" &&
+		!stack[1].object && stack[2].object && stack[2].key == "name"
+}
+
+// jsonFrame is an object or an array that textHit is inside. key is the key
+// of the member being read, and wantKey says a key comes next.
+type jsonFrame struct {
+	object, wantKey bool
+	key             string
 }
 
 // number writes a max_tokens value as an integer when it is one, which is
@@ -229,26 +300,9 @@ type messagesRequest struct {
 	Model     string
 	MaxTokens *float64
 	Tools     []tool
-	Messages  []message
 }
 
 type tool struct{ Name string }
-
-type message struct {
-	Role string
-	// Content is the message's blocks. A plain string is one text block.
-	Content []block
-}
-
-type block struct {
-	Type, Text string
-	// Content is the text of a tool_result: its string content, or the text
-	// of each of its text blocks.
-	Content []string
-}
-
-// textBlock is a block of a tool_result's content.
-type textBlock struct{ Type, Text string }
 
 // decodeMessages reads a Messages API request into req.
 //
@@ -271,11 +325,8 @@ func decodeMessages(body []byte, req *messagesRequest) error {
 	if err := member(f, "max_tokens", &req.MaxTokens); err != nil {
 		return err
 	}
-	var tools, msgs []json.RawMessage
+	var tools []json.RawMessage
 	if err := member(f, "tools", &tools); err != nil {
-		return err
-	}
-	if err := member(f, "messages", &msgs); err != nil {
 		return err
 	}
 	for _, raw := range tools {
@@ -289,95 +340,7 @@ func decodeMessages(body []byte, req *messagesRequest) error {
 		}
 		req.Tools = append(req.Tools, t)
 	}
-	for _, raw := range msgs {
-		m, err := decodeMessage(raw)
-		if err != nil {
-			return err
-		}
-		req.Messages = append(req.Messages, m)
-	}
 	return nil
-}
-
-func decodeMessage(raw json.RawMessage) (message, error) {
-	var m message
-	mf, err := fields(raw)
-	if err != nil {
-		return m, err
-	}
-	if err := member(mf, "role", &m.Role); err != nil {
-		return m, err
-	}
-	content, ok := mf["content"]
-	if !ok {
-		return m, nil
-	}
-	var s string
-	if json.Unmarshal(content, &s) == nil {
-		m.Content = []block{{Type: "text", Text: s}}
-		return m, nil
-	}
-	var blocks []json.RawMessage
-	if err := json.Unmarshal(content, &blocks); err != nil {
-		return m, err
-	}
-	for _, rb := range blocks {
-		bf, err := fields(rb)
-		if err != nil {
-			return m, err
-		}
-		var b block
-		if err := member(bf, "type", &b.Type); err != nil {
-			return m, err
-		}
-		if b.Type == "text" {
-			if err := member(bf, "text", &b.Text); err != nil {
-				return m, err
-			}
-		}
-		if b.Type == "tool_result" {
-			if b.Content, err = toolResultText(bf["content"]); err != nil {
-				return m, err
-			}
-		}
-		m.Content = append(m.Content, b)
-	}
-	return m, nil
-}
-
-// toolResultText returns the text of a tool_result's content: the string, or
-// the text of each text block.
-func toolResultText(raw json.RawMessage) ([]string, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return []string{s}, nil
-	}
-	var blocks []json.RawMessage
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, rb := range blocks {
-		bf, err := fields(rb)
-		if err != nil {
-			return nil, err
-		}
-		var tb textBlock
-		if err := member(bf, "type", &tb.Type); err != nil {
-			return nil, err
-		}
-		if tb.Type != "text" {
-			continue
-		}
-		if err := member(bf, "text", &tb.Text); err != nil {
-			return nil, err
-		}
-		out = append(out, tb.Text)
-	}
-	return out, nil
 }
 
 // errBadBody is a body that is not one JSON object with distinct keys.

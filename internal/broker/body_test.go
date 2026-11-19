@@ -113,15 +113,15 @@ func TestRequestBodyRefusalsHappenBeforeResolve(t *testing.T) {
 			`{"model":"claude-sonnet-4-5","max_tokens":8192,"messages":[]}`, "maxTokens", `reason="max_tokens=8192"`},
 		{"tool_result string", v1alpha1.RequestBody{ToolResultDeny: akia},
 			userTurn("claude-sonnet-4-5", `[{"type":"tool_result","tool_use_id":"toolu_01","content":"key=`+leakedKey+`"}]`),
-			"toolResultDeny", "reason=tool_result"},
+			"toolResultDeny", "reason=text"},
 		{"tool_result text block", v1alpha1.RequestBody{ToolResultDeny: akia},
 			userTurn("claude-sonnet-4-5", `[{"type":"tool_result","tool_use_id":"toolu_01","content":[{"type":"text","text":"`+leakedKey+`"}]}]`),
-			"toolResultDeny", "reason=tool_result"},
+			"toolResultDeny", "reason=text"},
 		{"user text block", v1alpha1.RequestBody{ToolResultDeny: akia},
 			userTurn("claude-sonnet-4-5", `[{"type":"text","text":"use `+leakedKey+`"}]`),
-			"toolResultDeny", "reason=tool_result"},
+			"toolResultDeny", "reason=text"},
 		{"user string content", v1alpha1.RequestBody{ToolResultDeny: akia},
-			userTurn("claude-sonnet-4-5", `"use `+leakedKey+`"`), "toolResultDeny", "reason=tool_result"},
+			userTurn("claude-sonnet-4-5", `"use `+leakedKey+`"`), "toolResultDeny", "reason=text"},
 	} {
 		for _, preset := range []v1alpha1.Preset{v1alpha1.PresetClaudeCode, v1alpha1.PresetAnthropicAPIKey} {
 			t.Run(tc.name+"/"+string(preset), func(t *testing.T) {
@@ -215,9 +215,6 @@ func TestRequestBodyPassesAnAllowedRequestUnchanged(t *testing.T) {
 					` {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "README.md"}]} ] }`,
 				// No max_tokens passes a maxTokens rule.
 				`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"hi"}]}`,
-				// The pattern reads tool results and user text, not what the
-				// assistant said.
-				`{"model":"claude-haiku-4-5","messages":[{"role":"assistant","content":"` + leakedKey + `"}]}`,
 			} {
 				resp, _ := r.messages(sent)
 				wantStatus(t, resp, http.StatusOK)
@@ -287,6 +284,76 @@ func TestRequestBodyCoversEverySpellingOfTheCall(t *testing.T) {
 		wantAnthropicError(t, resp, body, http.StatusForbidden, "permission_error")
 	}
 	r.wantNothingRead(t)
+}
+
+// toolResultDeny reads every string the model could be shown, not only tool
+// results and user text: a key the agent read from a file reaches the
+// upstream in a document, a thinking block or the history as well.
+func TestRequestBodyTextRuleReadsTheWholeBody(t *testing.T) {
+	key := leakedKey
+	turn := func(role, content string) string {
+		return `{"model":"claude-sonnet-4-5","max_tokens":1024,"messages":[{"role":"` + role + `","content":` + content + `}]}`
+	}
+	nested := func(block string) string {
+		return turn("user", `[{"type":"tool_result","tool_use_id":"toolu_01","content":[`+block+`]}]`)
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"system string", `{"model":"claude-sonnet-4-5","system":"key ` + key + `","messages":[]}`},
+		{"system blocks", `{"model":"claude-sonnet-4-5","system":[{"type":"text","text":"key ` + key + `"}],"messages":[]}`},
+		{"assistant string", turn("assistant", `"key `+key+`"`)},
+		{"assistant text block", turn("assistant", `[{"type":"text","text":"key `+key+`"}]`)},
+		{"tool_use input value", turn("assistant", `[{"type":"tool_use","id":"toolu_01","name":"Write","input":{"content":"`+key+`"}}]`)},
+		{"tool_use input key", turn("assistant", `[{"type":"tool_use","id":"toolu_01","name":"Write","input":{"`+key+`":1}}]`)},
+		{"tool_use input key twice", turn("assistant", `[{"type":"tool_use","id":"toolu_01","name":"Write","input":{"a":"`+key+`","a":"x"}}]`)},
+		{"tool_use id", turn("assistant", `[{"type":"tool_use","id":"`+key+`","name":"Write","input":{}}]`)},
+		{"document text source", turn("user", `[{"type":"document","source":{"type":"text","media_type":"text/plain","data":"`+key+`"}}]`)},
+		{"document content source", turn("user", `[{"type":"document","source":{"type":"content","content":[{"type":"text","text":"`+key+`"}]}}]`)},
+		{"document title", turn("user", `[{"type":"document","title":"`+key+`","source":{"type":"text","media_type":"text/plain","data":"x"}}]`)},
+		{"search_result", turn("user", `[{"type":"search_result","source":"https://example.com","title":"t","content":[{"type":"text","text":"`+key+`"}]}]`)},
+		{"document in tool_result", nested(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"` + key + `"}}`)},
+		{"search_result in tool_result", nested(`{"type":"search_result","source":"https://example.com","title":"` + key + `","content":[]}`)},
+		{"image in tool_result", nested(`{"type":"image","source":{"type":"url","url":"https://example.com/?k=` + key + `"}}`)},
+		{"thinking", turn("assistant", `[{"type":"thinking","thinking":"the key is `+key+`","signature":"sig"}]`)},
+		{"escaped", turn("assistant", `"\u0041KIAABCDEFGHIJKLMNOP"`)},
+		{"tool description", `{"model":"claude-sonnet-4-5","tools":[{"name":"Read","description":"` + key + `"}],"messages":[]}`},
+		{"unknown member", `{"model":"claude-sonnet-4-5","metadata":{"user_id":"` + key + `"},"messages":[]}`},
+		{"model with no models rule", `{"model":"` + key + `","messages":[]}`},
+		{"tool name under deny alone", `{"model":"claude-sonnet-4-5","tools":[{"name":"` + key + `"}],"messages":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newBodyRig(t, v1alpha1.PresetClaudeCode, &v1alpha1.RequestBody{
+				Tools:          &v1alpha1.ToolRules{Deny: []string{"Bash"}},
+				ToolResultDeny: []string{`AKIA[0-9A-Z]{16}`},
+			})
+			resp, body := r.messages(tc.body)
+			wantAnthropicError(t, resp, body, http.StatusForbidden, "permission_error")
+			wantAudit(t, r.lastAudit(), "check=body", "rule=spec.routes[anthropic].request.body.toolResultDeny", "reason=text")
+			r.wantNothingRead(t)
+			if strings.Contains(body, key) || strings.Contains(r.audit.String(), key) {
+				t.Errorf("the matched text left the broker:\nbody %s\naudit %s", body, r.audit.String())
+			}
+		})
+	}
+}
+
+// A model or a tool name that an allow list let through is not read as
+// text, so a pattern that happens to match it does not refuse every request.
+func TestRequestBodyTextRuleSkipsVettedNames(t *testing.T) {
+	r := newBodyRig(t, v1alpha1.PresetClaudeCode, &v1alpha1.RequestBody{
+		Models:         []string{"claude-sonnet-4-5"},
+		Tools:          &v1alpha1.ToolRules{Allow: []string{"Read"}},
+		ToolResultDeny: []string{`sonnet`, `^Read$`},
+	})
+	sent := `{"model":"claude-sonnet-4-5","tools":[{"name":"Read"}],"messages":[{"role":"user","content":"hi"}]}`
+	resp, _ := r.messages(sent)
+	wantStatus(t, resp, http.StatusOK)
+	if got := r.up.last(t); got.body != sent {
+		t.Errorf("the upstream got %q, want %q", got.body, sent)
+	}
+	// The same name anywhere else is text.
+	resp, body := r.messages(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"use sonnet"}]}`)
+	wantAnthropicError(t, resp, body, http.StatusForbidden, "permission_error")
+	wantAudit(t, r.lastAudit(), "reason=text")
 }
 
 func TestMatchStar(t *testing.T) {

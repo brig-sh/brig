@@ -550,9 +550,10 @@ sandbox: brig-7f3a
 route serves that call, `GET /v1/models` and `GET /v1/models/{id}`, and
 refuses every other call with 403 and `reason=path`. The method of
 `POST /v1/messages` is read in any case, so `post` is checked too. The
-broker reads the request body for the model, the tools, `max_tokens` and the
-text of the tool results and user messages. A miss is a 403 in the Anthropic
-error shape, and the upstream is never dialed. No credential has been read.
+broker reads the request body for the model, the tools and `max_tokens`. It
+matches the `toolResultDeny` patterns against every string in the body. A
+miss is a 403 in the Anthropic error shape, and the upstream is never
+dialed. No credential has been read.
 
 ```
 {"type":"error","error":{"type":"permission_error","message":"brig broker refused this request: model \"gpt-4o\" is not in request.body.models [claude-sonnet-4-5]"}}
@@ -564,10 +565,10 @@ The audit line carries the policy, the rule and the reason, with `check=body`:
 msg=broker sandbox=brig-7f3a route=anthropic method=POST path=/v1/messages status=403 check=body policy=claude-body rule=spec.routes[anthropic].request.body.models reason=model=gpt-4o
 ```
 
-The `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`,
-`tool_result`, or `path` for a call the route does not serve. A `tool_result` reason never names the text that matched. A
-body that is not JSON, or is over 8 MiB, is a 400 with `check=body`, and the
-`reason` is `json` or `size`.
+The `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `text`, or
+`path` for a call the route does not serve. A `text` reason never names the
+text that matched. A body that is not JSON, or is over 8 MiB, is a 400 with
+`check=body`, and the `reason` is `json` or `size`.
 
 ## Session tokens
 
@@ -1554,7 +1555,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `dur` | The time from the request to the end of the response |
 | `check` | The check that refused the request. `body` is a `request.body` refusal or a body that is not JSON, and `tool_use` is a denied tool call that the broker rewrote in the answer |
 | `arrived` | The sandbox whose divert socket the request arrived on, or, on the address listener, the sandbox registered with the IP of its connection. A request on the loopback port has none, and so does one from an IP no sandbox registered |
-| `policy`, `rule`, `reason` | The refusal of a `request.allow` miss, and of a `request.body` refusal, which shares these three fields. A `request.body` refusal has `check=body`, and `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `tool_result` or `path`. `check=tool_use` is written once per denied `tool_use` block that the broker rewrites, with `reason=tool=<name>` |
+| `policy`, `rule`, `reason` | The refusal of a `request.allow` miss, and of a `request.body` refusal, which shares these three fields. A `request.body` refusal has `check=body`, and `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `text` or `path`. `check=tool_use` is written once per denied `tool_use` block that the broker rewrites, with `reason=tool=<name>` |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
 | `cert` | The fingerprint of the client certificate that the connection of the request presented, `sha256:` and 16 hex digits. Only on a route with `inject.tls.clientCertificate` |
 | `cert.notAfter` | The expiry of that certificate, in UTC. Written with `cert` |

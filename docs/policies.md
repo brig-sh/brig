@@ -354,7 +354,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `request.body.tools.allow` | no | Exact tool names that the request's `tools` may name. A request that names another tool is a 403. With `tools.deny` alone, every other name passes |
 | `request.body.tools.deny` | no | Exact tool names that the request's `tools` may not name. A request that names one is a 403. Deny wins over allow |
 | `request.body.maxTokens` | no | The largest `max_tokens` a request may ask for. A larger value is a 403, and a request without `max_tokens` passes. Zero, or leaving the key out, sets no limit |
-| `request.body.toolResultDeny` | no | RE2 patterns matched against the text of every `tool_result` block and every user text block. A match is a 403, and the matched text is never logged |
+| `request.body.toolResultDeny` | no | RE2 patterns matched against every string in the body, keys included, at any depth. A match is a 403, and the matched text is never logged |
 | `request.body.toolUse.deny` | no | Exact tool names that the model may not call. A `tool_use` block of one of them in the answer is rewritten, and the request still goes upstream |
 | `request.body.toolUse.action` | no | `refuse`, the default, replaces the rewritten block with a text block that says the tool was refused. `drop` removes the block |
 
@@ -381,9 +381,14 @@ the body as plain JSON.
 In `models`, `*` is the only wildcard. It matches any run of characters,
 including none, and every other glob character is refused. `tools` names are
 exact. Where an allow list and a deny list both match a tool, deny wins.
-`toolResultDeny` takes RE2 patterns. The broker matches them against the text
-of each `tool_result` block and each user text block, and it never writes the
-matched text to a log.
+`toolResultDeny` takes RE2 patterns. The broker matches them against every
+string in the body, each key and each value, at any depth, after it decodes
+JSON escapes. That covers the system prompt, the history the agent sends back,
+tool inputs and results, documents, search results and thinking blocks. It
+skips the `model` when `models` is set, and the tool names when `tools.allow`
+is set, because the policy named those values. It never writes the matched
+text to a log. A pattern finds text as it is written: it does not stop an
+agent that encodes the text first.
 
 A route with the body rules, and the tool calls the model may not make:
 
