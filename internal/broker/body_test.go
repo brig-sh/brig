@@ -356,6 +356,42 @@ func TestRequestBodyTextRuleSkipsVettedNames(t *testing.T) {
 	wantAudit(t, r.lastAudit(), "reason=text")
 }
 
+// A beta that may carry tools inside messages would take them past
+// request.body.tools, so a route with tools rules does not forward it.
+func TestRequestBodyToolsDropsToolBetas(t *testing.T) {
+	sent := userTurn("claude-sonnet-4-5", `"hi"`)
+	for _, tc := range []struct {
+		name  string
+		rules *v1alpha1.RequestBody
+		want  string
+		drop  bool
+	}{
+		{"tools.deny", &v1alpha1.RequestBody{Tools: &v1alpha1.ToolRules{Deny: []string{"Bash"}}},
+			"claude-code-20250219,effort-2025-11-24", true},
+		{"tools.allow", &v1alpha1.RequestBody{Tools: &v1alpha1.ToolRules{Allow: []string{"Read"}}},
+			"claude-code-20250219,effort-2025-11-24", true},
+		{"no tools rules", &v1alpha1.RequestBody{Models: []string{"claude-sonnet-4-5*"}},
+			"claude-code-20250219,inline-tools-2026-09-15,effort-2025-11-24,mid-conversation-tool-changes-2026-07-01", false},
+	} {
+		for _, preset := range []v1alpha1.Preset{v1alpha1.PresetClaudeCode, v1alpha1.PresetAnthropicAPIKey} {
+			t.Run(tc.name+"/"+string(preset), func(t *testing.T) {
+				r := newBodyRig(t, preset, tc.rules)
+				h := r.header()
+				h["Anthropic-Beta"] = []string{"claude-code-20250219,inline-tools-2026-09-15", "effort-2025-11-24, mid-conversation-tool-changes-2026-07-01"}
+				resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", h, sent)
+				wantStatus(t, resp, http.StatusOK)
+				got := r.up.last(t).header.Values("Anthropic-Beta")
+				if strings.Join(got, ",") != tc.want {
+					t.Errorf("the upstream got Anthropic-Beta %q, want %q", got, tc.want)
+				}
+				if tc.drop {
+					wantAudit(t, r.lastAudit(), "dropped.anthropic-beta=2")
+				}
+			})
+		}
+	}
+}
+
 func TestMatchStar(t *testing.T) {
 	for _, tc := range []struct {
 		pattern, s string

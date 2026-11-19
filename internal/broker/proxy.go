@@ -544,6 +544,14 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 			// not see them.
 			pr.Out.Trailer = nil
 			a.dropped = dropGuestHeaders(in, pr.Out.Header, token)
+			if body := bodyRules(&rt.spec); body != nil && body.Tools != nil {
+				if n := dropToolBetas(pr.Out.Header); n > 0 {
+					if a.dropped == nil {
+						a.dropped = map[string]int{}
+					}
+					a.dropped["Anthropic-Beta"] += n
+				}
+			}
 			// The transport asks for gzip, and undoes it, only when the
 			// request has no Range and is not a HEAD. Otherwise the
 			// upstream is asked for the body as it is.

@@ -570,6 +570,12 @@ The `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `text`, or
 text that matched. A body that is not JSON, or is over 8 MiB, is a 400 with
 `check=body`, and the `reason` is `json` or `size`.
 
+On a route with `request.body.tools`, the broker drops the `Anthropic-Beta`
+values `inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`
+before it forwards a request. They may carry tools inside `messages`, where
+the `tools` rule does not read. The audit line counts them in
+`dropped.anthropic-beta`.
+
 ## Session tokens
 
 A session token is two base64url strings, without padding, joined by a dot:
@@ -1556,7 +1562,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `check` | The check that refused the request. `body` is a `request.body` refusal or a body that is not JSON, and `tool_use` is a denied tool call that the broker rewrote in the answer |
 | `arrived` | The sandbox whose divert socket the request arrived on, or, on the address listener, the sandbox registered with the IP of its connection. A request on the loopback port has none, and so does one from an IP no sandbox registered |
 | `policy`, `rule`, `reason` | The refusal of a `request.allow` miss, and of a `request.body` refusal, which shares these three fields. A `request.body` refusal has `check=body`, and `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `text` or `path`. `check=tool_use` is written once per denied `tool_use` block that the broker rewrites, with `reason=tool=<name>` |
-| `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
+| `dropped.<header>` | The number of values that `inject.headers.allow` dropped. On a route with `request.body.tools`, `dropped.anthropic-beta` also counts the tool betas the broker drops |
 | `cert` | The fingerprint of the client certificate that the connection of the request presented, `sha256:` and 16 hex digits. Only on a route with `inject.tls.clientCertificate` |
 | `cert.notAfter` | The expiry of that certificate, in UTC. Written with `cert` |
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |

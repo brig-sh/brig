@@ -390,6 +390,13 @@ is set, because the policy named those values. It never writes the matched
 text to a log. A pattern finds text as it is written: it does not stop an
 agent that encodes the text first.
 
+`tools` reads the top-level `tools` of the request. The `Anthropic-Beta`
+values `inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`
+may let a request declare or change tools inside `messages`, in shapes the
+rule does not read. On a route with `tools`, the broker drops those two
+values before it forwards the request, as the presets drop a value outside
+their reviewed list. The audit line counts them in `dropped.anthropic-beta`.
+
 A route with the body rules, and the tool calls the model may not make:
 
 ```yaml
@@ -599,7 +606,9 @@ They are the values Claude Code 2.1.292, 2.1.301 and 2.1.309 send. The
 outside the list.
 Both Anthropic presets take `request.body`, which limits the model, the tools
 and the tool calls of the answer. See
-[Body rules for the Messages API](#body-rules-for-the-messages-api).
+[Body rules for the Messages API](#body-rules-for-the-messages-api). On a
+route with `request.body.tools`, the broker also drops
+`inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`.
 
 A value outside the list costs each session two `400` answers from the
 upstream. Claude Code then retries without the features the value names. The

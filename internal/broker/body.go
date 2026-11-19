@@ -74,6 +74,41 @@ func refusedCall(method, rest string) string {
 		"and GET /v1/models/{id}; " + method + " " + rest + " is refused"
 }
 
+// toolBetas are Anthropic-Beta values that may let a request declare or
+// change tools inside messages. request.body.tools reads the top-level tools
+// alone, and brig has not read the shapes these betas carry, so a route with
+// tools rules drops them, as the presets drop a value they have not
+// reviewed.
+var toolBetas = []string{"inline-tools-2026-09-15", "mid-conversation-tool-changes-2026-07-01"}
+
+// dropToolBetas removes the toolBetas from the Anthropic-Beta values of h,
+// in any case, and returns how many it removed.
+func dropToolBetas(h http.Header) int {
+	values := h.Values("Anthropic-Beta")
+	var keep []string
+	dropped := 0
+	for _, v := range values {
+		for _, item := range strings.Split(v, ",") {
+			item = strings.TrimSpace(item)
+			switch {
+			case item == "":
+			case slices.ContainsFunc(toolBetas, func(b string) bool { return strings.EqualFold(b, item) }):
+				dropped++
+			default:
+				keep = append(keep, item)
+			}
+		}
+	}
+	if dropped == 0 {
+		return 0
+	}
+	h.Del("Anthropic-Beta")
+	if len(keep) > 0 {
+		h.Set("Anthropic-Beta", strings.Join(keep, ","))
+	}
+	return dropped
+}
+
 // bodyRules returns the request.body rules of a route, or nil.
 func bodyRules(spec *v1alpha1.Route) *v1alpha1.RequestBody {
 	if spec.Request == nil {
