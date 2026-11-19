@@ -90,7 +90,8 @@ func sendTLS(t *testing.T, c *http.Client, method, sandbox, route, token, path s
 const inventoryValue = "inv-secret-value-for-the-node-tests"
 
 // nodeConfig is a broker on a node: TLS on a loopback port the kernel picks,
-// and the credentials in a directory of files.
+// and the credentials in a directory of files. The test pods dial from
+// loopback, so the config lets them register a loopback address.
 func nodeConfig(t *testing.T, logTo io.Writer) serverConfig {
 	t.Helper()
 	files := filesDir(t, map[string][]byte{
@@ -98,7 +99,7 @@ func nodeConfig(t *testing.T, logTo io.Writer) serverConfig {
 		"claude-credentials": fakeDoc(fakeAccess, time.Now().Add(time.Hour)),
 	})
 	return serverConfig{dir: shortDir(t), logTo: logTo, listen: "127.0.0.1:0", secretDir: files,
-		openStore: failingStore(t)}
+		openStore: failingStore(t), loopbackAddresses: true}
 }
 
 // listenAddr is where the broker serves its routes.
@@ -338,17 +339,52 @@ func TestListenKeepsTheDivertSockets(t *testing.T) {
 
 func TestCanonicalAddr(t *testing.T) {
 	for in, want := range map[string]string{
-		"": "", "10.0.0.1": "10.0.0.1", "127.0.0.1": "127.0.0.1", "::ffff:10.0.0.1": "10.0.0.1",
-		"2001:DB8::1": "2001:db8::1", "::1": "::1",
+		"": "", "10.0.0.1": "10.0.0.1", "::ffff:10.0.0.1": "10.0.0.1", "2001:DB8::1": "2001:db8::1",
 	} {
-		if got, err := canonicalAddr(in); err != nil || got != want {
+		if got, err := canonicalAddr(in, false); err != nil || got != want {
 			t.Errorf("canonicalAddr(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"x", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "fe80::1%en0", "10.0.0.1:80", " 10.0.0.1"} {
-		if got, err := canonicalAddr(in); err == nil {
+	for _, in := range []string{"x", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "fe80::1%en0", "10.0.0.1:80", " 10.0.0.1",
+		"127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1", "169.254.1.1", "::ffff:169.254.1.1", "fe80::1"} {
+		if got, err := canonicalAddr(in, false); err == nil {
 			t.Errorf("canonicalAddr(%q) = %q, want an error", in, got)
 		}
+	}
+	// The test seam admits loopback and nothing else.
+	for in, want := range map[string]string{"127.0.0.1": "127.0.0.1", "::1": "::1", "::ffff:127.0.0.1": "127.0.0.1"} {
+		if got, err := canonicalAddr(in, true); err != nil || got != want {
+			t.Errorf("canonicalAddr(%q, true) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"169.254.1.1", "fe80::1", "0.0.0.0"} {
+		if got, err := canonicalAddr(in, true); err == nil {
+			t.Errorf("canonicalAddr(%q, true) = %q, want an error", in, got)
+		}
+	}
+}
+
+// A pod never has a loopback or a link-local address. A connection from one
+// comes from the node's host network namespace, so a sandbox registered with
+// one would be bound to every process there. run builds the config without the
+// test seam, as this test does.
+func TestANodeBrokerRefusesALoopbackOrLinkLocalAddress(t *testing.T) {
+	cfg := nodeConfig(t, io.Discard)
+	cfg.loopbackAddresses = false
+	r := startBrokerWith(t, cfg, nil)
+	for _, bad := range []string{"127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1", "169.254.1.1", "fe80::1"} {
+		_, err := r.client.Add(nodeSandbox("brig-a", bad, inventoryRoute()))
+		ref := refusal(t, err)
+		if ref.Status != http.StatusBadRequest || !strings.Contains(ref.Message, "not one IP address a pod can have") {
+			t.Errorf("address %q = %d %q, want 400", bad, ref.Status, ref.Message)
+		}
+	}
+	if st, _ := r.client.Status(); len(st.Sandboxes) != 0 {
+		t.Errorf("sandboxes = %v after the refusals", st.Sandboxes)
+	}
+	// A pod's own address still registers on the same broker.
+	if _, err := r.client.Add(nodeSandbox("brig-a", "10.255.0.1", inventoryRoute())); err != nil {
+		t.Errorf("a pod address: %v", err)
 	}
 }
 

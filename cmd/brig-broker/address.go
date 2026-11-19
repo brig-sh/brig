@@ -95,17 +95,26 @@ func addressContext(ctx context.Context, _ net.Conn) context.Context {
 
 // canonicalAddr is the spelling of a registered address that the listener
 // compares peers with: "" for none, else one IP with no zone, neither
-// unspecified nor multicast, an IPv4-mapped IPv6 address unmapped. Loopback
-// is allowed.
-func canonicalAddr(s string) (string, error) {
+// unspecified nor multicast, an IPv4-mapped IPv6 address unmapped.
+//
+// A pod never has a loopback or a link-local address. A connection from one
+// comes from the node's host network namespace, which every hostNetwork pod,
+// the kubelet and the node's daemons share. A sandbox registered with one
+// would be bound to all of them, so both are refused. loopback lets a test
+// register a loopback address, the only kind a test can dial from.
+func canonicalAddr(s string, loopback bool) (string, error) {
 	if s == "" {
 		return "", nil
 	}
 	a, err := netip.ParseAddr(s)
-	if err != nil || a.Zone() != "" || a.IsUnspecified() || a.IsMulticast() {
+	if err != nil || a.Zone() != "" {
 		return "", fmt.Errorf("the sandbox address %q is not one IP address a pod can have", s)
 	}
-	return a.Unmap().String(), nil
+	a = a.Unmap()
+	if a.IsUnspecified() || a.IsMulticast() || a.IsLinkLocalUnicast() || (a.IsLoopback() && !loopback) {
+		return "", fmt.Errorf("the sandbox address %q is not one IP address a pod can have", s)
+	}
+	return a.String(), nil
 }
 
 // peerAddr returns the canonical spelling of the peer IP in the remote

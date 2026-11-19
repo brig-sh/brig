@@ -103,6 +103,10 @@ type serverConfig struct {
 	// tokens. nil is time.Now. A minted token's expiry comes from the host's
 	// clock, not from now.
 	now func() time.Time
+	// loopbackAddresses lets a test register a sandbox with a loopback
+	// address, because a test can dial from no other. run never sets it. See
+	// canonicalAddr.
+	loopbackAddresses bool
 }
 
 // lifecycleRenewer returns the Renewer that keeps a credential of lifecycle
@@ -732,7 +736,7 @@ func (s *server) refuseHostRoutes(sb broker.Sandbox) error {
 // pod could reach, and a sandbox is bound by its address or by a divert
 // socket and not by both, so the registration is refused in those cases.
 func (s *server) sandboxAddr(req injector.Sandbox) (string, error) {
-	addr, err := canonicalAddr(req.Address)
+	addr, err := canonicalAddr(req.Address, s.cfg.loopbackAddresses)
 	if err != nil {
 		return "", err
 	}

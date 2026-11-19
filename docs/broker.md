@@ -762,7 +762,10 @@ Kubernetes shim knows from the pod:
 
 The broker normalizes the IP, so an IPv4-mapped IPv6 spelling reads as the
 IPv4 address. It refuses, with 400, an address that is not one IP, that is
-unspecified or multicast, or that has a zone. Loopback is allowed, for a test.
+unspecified, multicast, loopback or link-local, or that has a zone. A pod
+never has a loopback or a link-local address. A connection from one comes
+from the node's host network namespace, which every `hostNetwork` pod, the
+kubelet and the node's daemons share, so the address would not name one pod.
 It also refuses `address` with `brigInternal` or `modes`, which belong to a
 divert socket, and `address` on a broker started without `--listen`.
 
