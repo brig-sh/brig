@@ -4,7 +4,7 @@ Brig v0.5.0 removed the retired spellings, with two exceptions. `brig exec`
 stays until `brig sh` can pipe the output of a command, and its notice says
 that instead of a release. The flat form of a
 [policy document](#policy-documents) still parses, prints a notice, and is
-removed in v0.6.0. `brig run` is never removed.
+removed in v0.7.0. `brig run` is never removed.
 [Stability](stability.md#retired-spellings) has the rule.
 
 Brig refuses a removed command or subcommand as a usage error, with exit code
@@ -364,7 +364,7 @@ including the ambiguity of stale specs left beside old shared overrides.
 
 A policy document uses the Kubernetes envelope: `kind: Policy`, `metadata:`
 and `spec:`. The flat form, with `name:`, `desc:` and `egress:` at the top
-level, still parses until v0.6.0. Brig converts it into the envelope as it
+level, still parses until v0.7.0. Brig converts it into the envelope as it
 loads it.
 
 `brig policy check` prints a notice for each bound policy that a file still
@@ -372,7 +372,7 @@ writes in the flat form:
 
 ```
 brig: /home/you/.config/brig/policies/locked-down.yaml uses the flat policy form, which is now `kind: Policy` with `metadata:` and `spec:`
-  ↳ the old spelling is removed in v0.6.0
+  ↳ the old spelling is removed in v0.7.0
   → to print it in the new form:  brig policy show locked-down
 ```
 

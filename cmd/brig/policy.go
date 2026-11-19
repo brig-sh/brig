@@ -875,9 +875,10 @@ func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMod
 
 // flatPolicyGoesIn is the release that stops reading the flat policy form. The
 // form is retired in v0.5.0, and stability.md removes a spelling at least one
-// release after its first notice, so it outlives the spellings v0.5.0 removed
-// by one minor release.
-const flatPolicyGoesIn = "v0.6.0"
+// release after its first notice. It was set to v0.6.0, and v0.6.0 shipped
+// with the form still read, so the removal moved one release on rather than
+// shipping a notice that names a release already out.
+const flatPolicyGoesIn = "v0.7.0"
 
 // warnFlat prints the retired-spelling notice for each loaded policy in names
 // that a file still writes in the flat form. The command it names prints the
