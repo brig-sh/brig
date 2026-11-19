@@ -8,7 +8,7 @@ the credential. A route on the `aws` preset is the exception: it answers the
 guest with temporary AWS keys. See [Routes that vend](#routes-that-vend).
 
 `internal/broker` is the request handler, and `brig-broker` the process
-that hosts it. hull on `hvi` and nerdctl with
+that hosts it. hull on `hvi`, hull on Linux and nerdctl with
 urunc reach a route at `brig.internal`, and a route that vends at
 `169.254.170.2`. A run bound to a policy with routes on any other runtime is
 refused before boot. See [Transports](#transports).
@@ -952,8 +952,8 @@ broker:
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
-| `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>`, or `https://<route>.brig.internal` for a `host` route |
-| link-local | hull on `hvi`, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
+| `brig.internal` | hull on `hvi`, hull on Linux, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>`, or `https://<route>.brig.internal` for a `host` route |
+| link-local | hull on `hvi`, hull on Linux, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
@@ -967,7 +967,7 @@ broker through the sandbox's divert socket:
 
 | Runtime | Name | Port 443 | Other ports of the address |
 | --- | --- | --- | --- |
-| hull on `hvi` | a `--host` record of the gateway's address on `hull network-gateway` | a `--divert` of the address to the divert socket | reset. The gateway never dials its own address |
+| hull on `hvi` and hull on Linux | a `--host` record of the gateway's address on `hull network-gateway` | a `--divert` of the address to the divert socket | reset. The gateway never dials its own address |
 | nerdctl | a record the egress resolver answers with the bridge's address, whatever the policy | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table |
 
 The broker learns the address when Brig registers the sandbox. A diverted
@@ -1030,7 +1030,7 @@ states the bounds of the token that does cross.
 
 | Runtime | Port 80 | Other ports, and the rest of `169.254.0.0/16` |
 | --- | --- | --- |
-| hull on `hvi` | a `--divert` of the address to the divert socket | reset by the gateway |
+| hull on `hvi` and hull on Linux | a `--divert` of the address to the divert socket | reset by the gateway |
 | nerdctl | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table under a policy with a default |
 
 No `allow` rule is needed for the address, and Brig adds none under

@@ -135,8 +135,8 @@ credential for itself, so you must deliver each credential explicitly. See
 
 Nothing on the host can open a connection into the sandbox until you publish
 a port. To publish a port, use `--publish` on a run. On macOS, `brig network
-publish` also opens one on a sandbox that is up. On Linux a port can be
-published only when the sandbox is created. `brig network unpublish` closes
+publish` also opens one on a sandbox that is up, and so does hull on
+Linux. On nerdctl a port can be published only when the sandbox is created. `brig network unpublish` closes
 the port.
 
 **The port binds to loopback by default.** A published port binds to
@@ -1467,7 +1467,12 @@ An egress policy is enforced on that gateway, as on `hvi`. A run on
 refused `github.com` and `one.one.one.one`, and the gateway logged the
 refused queries. See
 [the measurement](manual-tests/egress-policy-hull-linux.md). A divert,
-`brig.internal` and a published port are still refused there.
+`brig.internal` and a published port ride the same gateway, as on `hvi`.
+The same run showed the gateway answering `brig.internal` with its own
+address, diverting its port 443 and `169.254.170.2:80` to their sockets,
+refusing a gateway port with no divert, and installing and withdrawing a
+published port through its API. See
+[the record](manual-tests/hull-linux-gateway-2026-11-18.md).
 
 The guarantee is about reachability, not resources. An isolated sandbox
 costs one more network on the host. `brig rm --all`
