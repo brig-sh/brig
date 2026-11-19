@@ -559,6 +559,10 @@ func findInHeader(m *matcher, h http.Header, kind string, rests map[string]strin
 // header the route sets. A tool can send the same token in two carriers of
 // one route. Another token, or the same one twice, is not taken out.
 func carrierRests(spec *v1alpha1.Route, h http.Header, tok string) map[string]string {
+	// A passthrough route reads no token, so no header is its carrier.
+	if spec.Passthrough {
+		return nil
+	}
 	in := spec.Inject
 	rests := map[string]string{}
 	auth := h.Get("Authorization")
