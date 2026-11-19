@@ -1270,6 +1270,10 @@ func checkPolicy(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
+	// A boot refuses it with the same words. See routeRefusal in internal/wrap.
+	if err := policy.RefusePassthroughEgress(loaded); err != nil {
+		return fmt.Errorf("brig refuses the run of %s before boot: %w", p.Name, err)
+	}
 	// A boot refuses a route that its run path cannot serve, so check says
 	// so before one is tried. A microVM or a container guest reaches an
 	// endpoint route at brig.internal on its own gateway. See routeRefusal in

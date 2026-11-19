@@ -367,6 +367,16 @@ stop an agent that encodes the text first. The rewrite guards against the
 model asking for a tool. It does not stop a process in the guest from
 running that tool itself.
 
+A passthrough route forwards a key that the guest holds. Its `request.allow`
+and `request.body` hold only while egress refuses the upstream to the guest.
+Otherwise the guest can send the same key to the upstream directly. Brig
+refuses a run whose merged egress would let the guest reach the upstream's
+host past the broker. It refuses one with no `spec.egress`, one under
+`default: allow`, one with an `allow` glob that covers the host, and one with
+any `allow` cidr. A pod on a node broker is not a Brig run, so its own
+network policy has to refuse the upstream. See [Passthrough
+routes](broker.md#passthrough-routes).
+
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
 A `claude` started without it, under `sudo -i`, `su -` or `env -i` for

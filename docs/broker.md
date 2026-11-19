@@ -616,9 +616,24 @@ list still applies, since it is a request rule and not a credential. A beta
 off the list, such as `mcp-client-2025-04-04`, is dropped before the request
 goes upstream.
 
-A policy that gives a pod a passthrough route still needs egress rules that
-refuse the upstream to the pod directly. Without them, the pod can send the
-same key past the broker.
+The request rules of a passthrough route hold only while egress refuses the
+upstream to the guest. Otherwise the guest can send the same key to the
+upstream directly. So Brig refuses a run, and `brig policy check` refuses the
+policies bound to it, when the run's merged egress would let the guest reach
+the upstream's host:
+
+- No bound policy has `spec.egress`.
+- The merged default is `allow`. A host `deny` under it is best effort,
+  because a connection sent straight to an address asks for no name.
+- An `allow` glob covers the host, and no `deny` glob does.
+- Any `allow` cidr is bound. Brig cannot resolve the host before the run, so
+  it cannot tell whether the cidr holds one of its addresses.
+
+A policy whose own `egress.allow` covers the upstream of its passthrough
+route is refused when it is read, with a message that names the host to
+remove. A pod on a node broker is not a Brig run, and Brig does not check its
+egress. Its network policy has to refuse the upstream, or the pod can send
+the same key past the broker.
 
 ## Session tokens
 

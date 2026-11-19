@@ -464,6 +464,8 @@ kind: Policy
 metadata:
   name: anthropic-checked
 spec:
+  egress:
+    default: deny
   routes:
     - name: anthropic
       preset: anthropic-api-key
@@ -482,6 +484,16 @@ spec:
 The preset still sets the upstream, `ANTHROPIC_BASE_URL` and the
 `Anthropic-Beta` allow list. It no longer sets `ANTHROPIC_API_KEY`, so the
 guest keeps its own.
+
+The egress has no `allow` for `api.anthropic.com`. The guest holds its own
+key, so an `allow` for the host would let it send the key there directly,
+past `request.body`. Brig refuses a policy that allows the upstream of its
+own passthrough route, and tells you to remove that `allow`. It also refuses
+a run whose merged egress would let the guest reach the upstream: with no
+`spec.egress`, under `default: allow`, with an `allow` from another bound
+policy that covers the host, or with any `allow` cidr. The starter from
+`brig policy create` allows `api.anthropic.com`, so remove that `allow`
+before you add a passthrough route to it.
 
 The route has no session token, so the broker serves it only for a request
 that arrived bound to the sandbox: on its divert socket, or from the address
@@ -1106,14 +1118,16 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-`check` does four checks:
+`check` does five checks:
 
 1. Is the profile `kind: shell` or `kind: gui`? Such a profile can never
    enforce a policy.
 2. Does every bound name still resolve to a policy that loaded?
 3. Can the routes of the bound policies apply together? See
    [Several policies with routes](#several-policies-with-routes).
-4. Can a run of the profile on this host enforce the egress rules? Where it
+4. Does the merged egress refuse the upstream of every passthrough route?
+   See [Passthrough routes](#passthrough-routes).
+5. Can a run of the profile on this host enforce the egress rules? Where it
    cannot, on `vz`, `qemu` or docker, `check` refuses them
    with exit status `7`, as the run does. An offline run passes, and with no
    runtime on the host this check is skipped.
@@ -1527,7 +1541,9 @@ The relay passes the bytes on unchanged, and never logs them.
 
 **`attach` and `check` do not inspect rules.** They refuse a `kind: shell`
 or `kind: gui` profile, and a name bound to nothing. They can tell you that
-the document parses, not that an `allow` glob matches what you meant.
+the document parses, not that an `allow` glob matches what you meant. The one
+exception is a passthrough route: `check` refuses egress that would let the
+guest reach its upstream.
 
 **Brig's merge applies no priority.** It concatenates the `allow` and `deny`
 lists from every bound policy. On `hvi`, the gateway orders deny, allow and

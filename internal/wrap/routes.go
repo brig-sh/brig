@@ -120,6 +120,11 @@ func (c *Config) routeRefusal() error {
 	if err := c.modeRefusal(); err != nil {
 		return err
 	}
+	// Ahead of the runtime: the egress the policies merge to is the same on
+	// every run path, and a passthrough route's rules hold only under it.
+	if err := policy.RefusePassthroughEgress(c.policyDocs); err != nil {
+		return err
+	}
 	if len(c.routes) == 0 || c.Runtime == nil {
 		return nil
 	}
