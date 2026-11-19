@@ -339,6 +339,118 @@ func TestAnAddressBelongsToOneSandbox(t *testing.T) {
 	}
 }
 
+// podSandbox is nodeSandbox with the UID of its pod.
+func podSandbox(id, address, uid string, routes ...injector.Route) injector.Sandbox {
+	sb := nodeSandbox(id, address, routes...)
+	sb.UID = uid
+	return sb
+}
+
+// The CNI gave the address of a pod that is gone to a new pod, and the shim
+// missed the removal of the first. The new pod's registration names another
+// UID, so it replaces the stale one: the old sandbox is removed, its tokens
+// stop working, and a request from the address is bound to the new sandbox.
+func TestANewPodReplacesTheStaleRegistrationOfItsAddress(t *testing.T) {
+	u := newUpstream(t)
+	logged := &lockedBuffer{}
+	r := startBrokerWith(t, nodeConfig(t, logged), u)
+	addedA, err := r.client.Add(podSandbox("brig-a", "127.0.0.1", "uid-a", inventoryRoute()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenA := r.mint(t, "brig-a", "inventory")
+	pod := nodeClient(listenAddr(r), caPool(t, addedA), nil)
+	if code, body := sendTLS(t, pod, http.MethodGet, "brig-a", "inventory", tokenA, "/v2/items/1"); code != http.StatusOK {
+		t.Fatalf("pod a with its own token got %d: %s", code, body)
+	}
+
+	if _, err := r.client.Add(podSandbox("brig-b", "::ffff:127.0.0.1", "uid-b", inventoryRoute())); err != nil {
+		t.Fatalf("the new pod of the address: %v", err)
+	}
+	if st, _ := r.client.Status(); !slices.Equal(st.Sandboxes, []string{"brig-b"}) {
+		t.Errorf("sandboxes = %v, want the stale brig-a gone", st.Sandboxes)
+	}
+	// A token of the old pod, presented from the address it had, is refused
+	// before it is read, on a connection opened before the replacement too.
+	if code, _ := sendTLS(t, pod, http.MethodGet, "brig-a", "inventory", tokenA, "/v2/items/1"); code != http.StatusNotFound {
+		t.Errorf("the old pod's token from its old address got %d, want 404", code)
+	}
+	fresh := nodeClient(listenAddr(r), caPool(t, addedA), nil)
+	if code, _ := sendTLS(t, fresh, http.MethodGet, "brig-a", "inventory", tokenA, "/v2/items/1"); code != http.StatusNotFound {
+		t.Errorf("the old pod's token on a new connection got %d, want 404", code)
+	}
+	if code, _ := sendTLS(t, fresh, http.MethodGet, "brig-b", "inventory", tokenA, "/v2/items/1"); code != http.StatusUnauthorized {
+		t.Errorf("the old pod's token on the new sandbox got %d, want 401", code)
+	}
+	if code, body := sendTLS(t, fresh, http.MethodGet, "brig-b", "inventory", r.mint(t, "brig-b", "inventory"),
+		"/v2/items/1"); code != http.StatusOK {
+		t.Errorf("the new pod with its own token got %d: %s", code, body)
+	}
+	if n := len(u.requests()); n != 2 {
+		t.Errorf("upstream saw %d requests, want one of each pod", n)
+	}
+	// The old sandbox's key is gone: registering its id again does not bring
+	// its tokens back.
+	if _, err := r.client.Add(podSandbox("brig-a", "10.255.0.1", "uid-a", inventoryRoute())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.client.Add(podSandbox("brig-a", "127.0.0.1", "uid-c", inventoryRoute())); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := sendTLS(t, fresh, http.MethodGet, "brig-a", "inventory", tokenA, "/v2/items/1"); code != http.StatusUnauthorized {
+		t.Errorf("the old pod's token after its id registered again got %d, want 401", code)
+	}
+	if !strings.Contains(logged.String(), "sandbox brig-b: the address 127.0.0.1 is now pod uid-b, so sandbox brig-a of pod uid-a is removed") {
+		t.Errorf("the broker log does not name the replacement:\n%s", logged.String())
+	}
+}
+
+// Without a UID on both registrations the broker cannot tell a stale one from
+// a live one, and the second registration is refused as before. The same UID
+// is the same pod, which may not hold two sandboxes on one address.
+func TestAnAddressWithoutTwoUIDsIsNotReplaced(t *testing.T) {
+	for name, uids := range map[string][2]string{
+		"neither":  {"", ""},
+		"old only": {"uid-a", ""},
+		"new only": {"", "uid-b"},
+		"same pod": {"uid-a", "uid-a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := startBrokerWith(t, nodeConfig(t, io.Discard), nil)
+			if _, err := r.client.Add(podSandbox("brig-a", "10.255.0.1", uids[0], inventoryRoute())); err != nil {
+				t.Fatal(err)
+			}
+			_, err := r.client.Add(podSandbox("brig-b", "10.255.0.1", uids[1], inventoryRoute()))
+			if ref := refusal(t, err); ref.Status != http.StatusConflict {
+				t.Errorf("the second registration got %d, want 409", ref.Status)
+			}
+			if st, _ := r.client.Status(); !slices.Equal(st.Sandboxes, []string{"brig-a"}) {
+				t.Errorf("sandboxes = %v, want brig-a alone", st.Sandboxes)
+			}
+		})
+	}
+}
+
+// A UID names the pod with the address, so it is refused without one, and one
+// that is not a UID's spelling is refused before the broker logs it.
+func TestABadPodUIDIsRefused(t *testing.T) {
+	r := startBrokerWith(t, nodeConfig(t, io.Discard), nil)
+	for _, sb := range []injector.Sandbox{
+		podSandbox("brig-a", "", "uid-a", inventoryRoute()),
+		podSandbox("brig-a", "10.255.0.1", "uid a", inventoryRoute()),
+		podSandbox("brig-a", "10.255.0.1", "uid\nsandbox brig-x", inventoryRoute()),
+		podSandbox("brig-a", "10.255.0.1", strings.Repeat("a", maxUID+1), inventoryRoute()),
+	} {
+		_, err := r.client.Add(sb)
+		if ref := refusal(t, err); ref.Status != http.StatusBadRequest {
+			t.Errorf("uid %q with address %q got %d, want 400", sb.UID, sb.Address, ref.Status)
+		}
+	}
+	if st, _ := r.client.Status(); len(st.Sandboxes) != 0 {
+		t.Errorf("sandboxes = %v after the refusals", st.Sandboxes)
+	}
+}
+
 // An address that cannot be a pod's, one with no --listen to reach it by, and
 // one combined with a divert socket's settings are refused at registration.
 func TestABadAddressIsRefused(t *testing.T) {

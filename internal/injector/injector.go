@@ -134,6 +134,13 @@ type Sandbox struct {
 	// and it cannot be combined with BrigInternal or Modes. The answer to the
 	// registration carries the CA to trust for brig.internal.
 	Address string `json:"address,omitempty"`
+	// UID is the Kubernetes UID of the sandbox's pod, or "". It is only for
+	// a sandbox with an Address. The CNI gives a pod's IP to another pod
+	// once the first is gone, and a shim can miss the removal of the first.
+	// A registration whose Address another sandbox holds under a different
+	// UID replaces that sandbox, whose tokens then stop working. Without a
+	// UID on both registrations, the second one is refused instead.
+	UID string `json:"uid,omitempty"`
 	// Modes holds the settings of the sandbox's routes in each route mode
 	// besides endpoint, by mode, or is nil. The broker refuses a route in
 	// such a mode without them, and hands them to the mode's divert handler.

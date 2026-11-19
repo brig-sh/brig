@@ -673,7 +673,7 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal, address}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports). `address` is the sandbox's own IP, for a broker started with `--listen`. The answer then carries the CA certificate and no divert socket. A second sandbox with the same address is refused with 409. See [Running the broker on a node](#running-the-broker-on-a-node) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal, address, uid}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports). `address` is the sandbox's own IP, for a broker started with `--listen`. The answer then carries the CA certificate and no divert socket. `uid` is the UID of the pod with that address. A second sandbox with the same address is refused with 409, unless both registrations carry a `uid` and the two differ. Then the second one replaces the first. See [Running the broker on a node](#running-the-broker-on-a-node) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
 | `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. `port` is 0 for a broker started with `--listen`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. A secret on a read-only store, see [Running the broker on a node](#running-the-broker-on-a-node), is never named, because no write is waiting. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
@@ -756,11 +756,11 @@ A pod does not need a divert socket. It resolves `brig.internal` to the
 listener, trusts the CA from the answer to its registration, and sends its
 requests to `https://brig.internal/<sandbox-id>/r/<route>`.
 
-The registration says which pod. `address` is the pod's own IP, which a
-Kubernetes shim knows from the pod:
+The registration says which pod. `address` is the pod's own IP, and `uid` is
+the pod's UID. A Kubernetes shim knows both from the pod:
 
 ```json
-{"id": "pod-7f3a", "profile": "inventory", "address": "10.244.1.17", "routes": []}
+{"id": "pod-7f3a", "profile": "inventory", "address": "10.244.1.17", "uid": "6f1c2a9e-4b7d-4e0a-9c2b-3d5e8f1a7b40", "routes": []}
 ```
 
 The broker normalizes the IP, so an IPv4-mapped IPv6 spelling reads as the
@@ -782,15 +782,32 @@ connection in place of the socket:
 | The peer IP is no sandbox's `address` | Closed at accept. A connection whose sandbox was removed while it stayed open gets 404, `check=arrival`, before any token is read |
 
 So a pod that holds the token of another sandbox cannot use it, and cannot
-tell another sandbox from one that does not exist. Two sandboxes may not
-register the same `address`: the second registration is refused with 409. The
-address goes back when its sandbox registers another one or is removed. The
-audit line carries the sandbox the address bound the request to in `arrived`.
+tell another sandbox from one that does not exist. The address goes back when
+its sandbox registers another one or is removed. The audit line carries the
+sandbox the address bound the request to in `arrived`.
+
+Two sandboxes may not register the same `address`. The CNI gives the IP of a
+pod that is gone to a new pod, and the shim can miss the removal of the
+first, after a crash or a lost watch event. `uid` tells the two pods apart:
+
+| Second registration of an `address` | What the broker does |
+| --- | --- |
+| Both carry a `uid`, and they differ | Removes the first sandbox and registers the second. The first sandbox's tokens stop working, and `broker.log` names both pods |
+| Both carry the same `uid` | Refuses the second with 409 |
+| Either has no `uid` | Refuses the second with 409. The first stays bound to the address until it is removed |
 
 The peer IP is what the network delivers, so the rule holds where the pod
-network does not rewrite or share source addresses. A pod network that puts
-several pods behind one address, or a pod with `hostNetwork`, cannot be told
-apart by it.
+network does not rewrite or share source addresses. These are its limits:
+
+- A pod network that puts several pods behind one address, such as SNAT, or
+  a pod with `hostNetwork`, cannot be told apart by it.
+- A registration has no lifetime, and a pod IP is reused. A shim that does
+  not send `uid` leaves a stale registration bound to the IP until it removes
+  the sandbox. A token of that sandbox works from the pod that has the IP
+  now, for as long as the token lives. The replacement above needs a shim
+  that sends `uid`.
+- A request carries no client identity besides its token. The TLS is
+  server-only, and the source IP is the only binding to the sandbox.
 
 ### The secret directory
 
@@ -856,7 +873,9 @@ The rest of the registration checks are the ones everywhere else. A route
 mode the build does not serve, `splice` for one, is refused with 400 and
 `route mode splice is not part of this build of brig`. A sandbox with
 `address` is refused when it also names `brigInternal` or `modes`, and when
-the broker has no `--listen`. A shared `address` is a 409.
+the broker has no `--listen`. `uid` is refused without `address`, or when it
+is not letters, digits and dashes, at most 64 of them. A shared `address` is
+a 409, unless both registrations carry different `uid` values.
 
 ## Routes that vend
 

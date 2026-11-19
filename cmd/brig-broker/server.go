@@ -163,6 +163,9 @@ type server struct {
 	// listener is bound to the sandbox registered with its peer IP.
 	addrs  map[string]string
 	byAddr map[string]string
+	// uids are the pod UIDs of the sandboxes registered with an address and
+	// a UID, by sandbox id.
+	uids map[string]string
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
 	vends    map[string]map[string]vendRoute
@@ -180,7 +183,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
-		addrs: map[string]string{}, byAddr: map[string]string{},
+		addrs: map[string]string{}, byAddr: map[string]string{}, uids: map[string]string{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
 		resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
@@ -486,7 +489,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
-	addr, err := s.sandboxAddr(req)
+	addr, uid, err := s.sandboxAddr(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
@@ -521,8 +524,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		broker.Sandbox
 		BrigInternal string
 		Address      string
+		UID          string
 		Settings     map[v1alpha1.RouteMode]json.RawMessage
-	}{sb, req.BrigInternal, addr, req.Modes})
+	}{sb, req.BrigInternal, addr, uid, req.Modes})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -555,11 +559,18 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One address binds the requests of one sandbox. The same sandbox
-	// registered again keeps its own.
+	// registered again keeps its own. Pod IPs are reused, so a sandbox whose
+	// pod has another UID than the one registering now held the address for
+	// a pod that is gone, and the new registration replaces it. Without both
+	// UIDs the broker cannot tell a stale registration from a live one.
+	var stale string
 	if other, ok := s.byAddr[addr]; addr != "" && ok && other != req.ID {
-		http.Error(w, fmt.Sprintf("sandbox %s: the address %s is registered by another sandbox", req.ID, addr),
-			http.StatusConflict)
-		return
+		if uid == "" || s.uids[other] == "" || s.uids[other] == uid {
+			http.Error(w, fmt.Sprintf("sandbox %s: the address %s is registered by another sandbox", req.ID, addr),
+				http.StatusConflict)
+			return
+		}
+		stale = other
 	}
 	if s.sandboxes[req.ID] == string(key) {
 		s.setVends(req.ID, vends)
@@ -618,7 +629,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
 			delete(s.vends, req.ID)
-			s.setAddress(req.ID, "")
+			s.setAddress(req.ID, "", "")
 			s.aws.forget(req.ID)
 			s.gcp.forget(req.ID)
 			untrack()
@@ -627,8 +638,15 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		s.diverts[req.ID] = l
 	}
+	if stale != "" {
+		// Its key goes with it, so its tokens stop working, and a request
+		// from the address is bound to the new sandbox from here on.
+		s.logger.Printf("sandbox %s: the address %s is now pod %s, so sandbox %s of pod %s is removed",
+			req.ID, addr, uid, stale, s.uids[stale])
+		s.forget(stale)
+	}
 	s.sandboxes[req.ID] = string(key)
-	s.setAddress(req.ID, addr)
+	s.setAddress(req.ID, addr, uid)
 	s.setVends(req.ID, vends)
 	for _, name := range tracked {
 		s.creds.recover(name)
@@ -731,35 +749,63 @@ func (s *server) refuseHostRoutes(sb broker.Sandbox) error {
 	return nil
 }
 
-// sandboxAddr reads the address of a registration: "" for none, or the
-// canonical spelling of one IP. A broker without --listen has no listener a
-// pod could reach, and a sandbox is bound by its address or by a divert
-// socket and not by both, so the registration is refused in those cases.
-func (s *server) sandboxAddr(req injector.Sandbox) (string, error) {
-	addr, err := canonicalAddr(req.Address, s.cfg.loopbackAddresses)
+// sandboxAddr reads the address of a registration and the UID of its pod:
+// "" for none, or the canonical spelling of one IP. A broker without --listen
+// has no listener a pod could reach, and a sandbox is bound by its address or
+// by a divert socket and not by both, so the registration is refused in those
+// cases. A UID names the pod that has the address, so it needs one.
+func (s *server) sandboxAddr(req injector.Sandbox) (addr, uid string, err error) {
+	addr, err = canonicalAddr(req.Address, s.cfg.loopbackAddresses)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	switch {
 	case addr == "":
+		if req.UID != "" {
+			return "", "", errors.New("it has a pod UID and no address")
+		}
 	case s.cfg.listen == "":
-		return "", errors.New("it has an address, and this broker runs without --listen, so no pod can reach it")
+		return "", "", errors.New("it has an address, and this broker runs without --listen, so no pod can reach it")
 	case req.BrigInternal != "" || len(req.Modes) > 0:
-		return "", errors.New("it has an address, and a sandbox on the address listener has no brig.internal " +
+		return "", "", errors.New("it has an address, and a sandbox on the address listener has no brig.internal " +
 			"address and no route mode besides endpoint")
 	}
-	return addr, nil
+	if !validUID(req.UID) {
+		return "", "", fmt.Errorf("the pod UID %q is not letters, digits and dashes, at most %d of them", req.UID, maxUID)
+	}
+	return addr, req.UID, nil
 }
 
-// setAddress records the address of sandbox id, or none, and releases the
-// one it had. s.mu is held.
-func (s *server) setAddress(id, addr string) {
+// maxUID bounds a pod UID. Kubernetes gives a pod a 36-character UUID.
+const maxUID = 64
+
+// validUID reports whether uid is "" or letters, digits and dashes, at most
+// maxUID of them. The broker log names the UID, so nothing else gets in.
+func validUID(uid string) bool {
+	if len(uid) > maxUID {
+		return false
+	}
+	for _, c := range uid {
+		if c != '-' && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// setAddress records the address of sandbox id and the UID of its pod, or
+// none, and releases the address it had. s.mu is held.
+func (s *server) setAddress(id, addr, uid string) {
 	if old := s.addrs[id]; old != "" {
 		delete(s.byAddr, old)
 	}
 	delete(s.addrs, id)
+	delete(s.uids, id)
 	if addr != "" {
 		s.addrs[id], s.byAddr[addr] = addr, id
+		if uid != "" {
+			s.uids[id] = uid
+		}
 	}
 }
 
@@ -794,9 +840,18 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	_, removed := s.sandboxes[id]
+	s.forget(id)
+	remaining := len(s.sandboxes)
+	s.mu.Unlock()
+	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
+}
+
+// forget removes sandbox id and what the broker holds for it. Its key goes,
+// so the tokens minted for it stop working. s.mu is held.
+func (s *server) forget(id string) {
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
-	s.setAddress(id, "")
+	s.setAddress(id, "", "")
 	delete(s.vends, id)
 	s.aws.forget(id)
 	s.gcp.forget(id)
@@ -804,9 +859,6 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 		l.close()
 		delete(s.diverts, id)
 	}
-	remaining := len(s.sandboxes)
-	s.mu.Unlock()
-	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
 }
 
 func (s *server) mint(w http.ResponseWriter, r *http.Request) {
