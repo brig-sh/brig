@@ -1,0 +1,34 @@
+{"kind": "meta", "key": "host", "value": "linux"}
+{"kind": "meta", "key": "host_os", "value": "linux"}
+{"kind": "meta", "key": "level", "value": "canary"}
+{"kind": "meta", "key": "run_note", "value": "LEVEL=canary: 100 execs each way, 3 claude-code boots, 3 ubuntu cycles."}
+{"kind": "meta", "key": "run_id", "value": "1000000001"}
+{"kind": "meta", "key": "run_url", "value": "https://github.com/brig-sh/brig/actions/runs/1000000001"}
+{"kind": "meta", "key": "source", "value": "GitHub Actions run 1000000001, attempt 1 (pull_request)"}
+{"kind": "meta", "key": "commit", "value": "3e5ae98b45ee5ecca94bc338ef451b92085dd75e"}
+{"kind": "meta", "key": "host_short", "value": "Linux"}
+{"kind": "meta", "key": "host_label", "value": "GitHub-hosted ubuntu-24.04, x64, bundle v0.1.0-rc9 (install.sh pin)"}
+{"kind": "meta", "key": "target", "value": "brig 3e5ae98 · bundle v0.1.0-rc9"}
+{"kind": "fact", "label": "brig version", "value": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, linux/amd64)", "url": ""}
+{"kind": "fact", "label": "runtime bundle (Linux)", "value": "v0.1.0-rc9 (install.sh pin)", "url": "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/v0.1.0-rc9"}
+{"kind": "fact", "label": "urunc (Linux)", "value": "0818ff1", "url": "https://github.com/urunc-dev/urunc/commit/0818ff104781087a12a75059062c3407a8b97c8a"}
+{"kind": "meta", "key": "host_detail", "value": "4 vCPUs, 15 GB, kernel 6.11.0-1018-azure, nested KVM. A rootless user install from install.sh at 3e5ae98."}
+{"kind": "check", "group": "Install", "name": "brig version names this commit", "status": "pass", "evidence": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, linux/amd64)"}
+{"kind": "check", "group": "Install", "name": "brig doctor", "status": "pass", "evidence": "exit 0: host virtual runtime boot verify profiles ok"}
+{"kind": "check", "group": "Leftovers", "name": "After home", "status": "pass", "evidence": "no sandbox, container, task, guest home or monitor process"}
+{"kind": "gate", "id": "home", "status": "pass", "note": "ubuntu:latest not in the store, then pulled by brig run (total: 39.7 M) with DOCKER_CONFIG unset. Booted in 7.18 s and answered."}
+{"kind": "gate", "id": "exec", "status": "pass", "note": "brig sh: 100/100 correct (0 empty, 0 wrong). nerdctl exec: 100/100 correct (0 empty, 0 wrong)."}
+{"kind": "sample", "metric": "claude-code boot", "seconds": 9.41}
+{"kind": "sample", "metric": "claude-code boot", "seconds": 8.87}
+{"kind": "sample", "metric": "claude-code boot", "seconds": 9.02}
+{"kind": "note", "metric": "claude-code boot", "text": "median of 3 runs of brig run -d claude, image already pulled"}
+{"kind": "gate", "id": "claude", "status": "pass", "note": "0 refusals naming .claude and 0 other failures in 3 boots. /root/.claude: 3 tmpfs."}
+{"kind": "gate", "id": "cpus", "status": "expected", "note": "Profile default (cpus: 2): nproc=1, cloud-hypervisor boot=1. --cpus 3: nproc=1, boot=1. Bundle v0.1.0-rc9."}
+{"kind": "gate", "id": "nosudo", "status": "pass", "note": "Stopped after 21.30 s with exit 1 and a 24-line block of commands for root, with no prompt. No bundle tarball appeared."}
+{"kind": "sample", "metric": "ubuntu boot", "seconds": 3.12}
+{"kind": "sample", "metric": "ubuntu boot", "seconds": 2.95}
+{"kind": "sample", "metric": "ubuntu boot", "seconds": 3.4}
+{"kind": "note", "metric": "ubuntu boot", "text": "median of 3 runs of brig run -d ubuntu, in boot, command and rm cycles"}
+{"kind": "check", "group": "Cycles", "name": "3 sequential ubuntu cycles", "status": "pass", "evidence": "boot, one command and rm, 3 times with no failure"}
+{"kind": "check", "group": "Network", "name": "A published port answers from the host", "status": "fail", "evidence": "curl: curl: (56) Recv failure: Connection reset by peer </script><b>not markup</b>; after rm: curl: (7) Failed to connect"}
+{"kind": "check", "group": "Boundary", "name": "The canary outside the project is unchanged", "status": "pass", "evidence": "sha256 over names, modes, inodes, mtimes and contents: 9f1c2a7e44b0d2c1... before and after"}
