@@ -148,9 +148,11 @@ error of that step, and the upstream is never dialed.
    checks the service's `request.allow` against the path after the
    service, and sends the request to the service's host. See [The gcp
    preset](policies.md#the-gcp-preset).
-8. Check `request.body` on a `POST /v1/messages`. A compressed body is a 415.
-   A body that is not JSON is a 400. A miss is a 403 in the Anthropic error
-   shape. No credential has been read yet.
+8. On a route with `request.body`, refuse any call but `POST /v1/messages`,
+   `GET /v1/models` and `GET /v1/models/{id}` with 403, and check the body of
+   a `POST /v1/messages`. A compressed body is a 415. A body that is not JSON
+   is a 400. A miss is a 403 in the Anthropic error shape. No credential has
+   been read yet.
 9. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached. A route with no `credential`, such as a
    [certificate-only](policies.md#client-certificates) route, skips this step.
@@ -486,7 +488,7 @@ changes:
 | 415 | The request body has a `Content-Encoding` other than gzip, x-gzip or deflate, more than one, does not decompress, or has bytes after its compressed stream. A `POST /v1/messages` body on a route with `request.body` is refused with 415 for any `Content-Encoding` other than identity | `content-encoding` |
 | 400 | `<rest>` is not in canonical form, or on a route with `services` its service segment holds an escape | `path` |
 | 403 | `request.allow` does not cover the request. On a `gcp` route the rule is `spec.routes[<route>].services[<service>].request.allow.<field>` | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
-| 403 | A `request.body` rule misses on a `POST /v1/messages`: the model, a tool, `max_tokens`, or a `toolResultDeny` match | `body` |
+| 403 | A `request.body` rule misses on a `POST /v1/messages`: the model, a tool, `max_tokens`, or a `toolResultDeny` match. On a route with `request.body`, any call but `POST /v1/messages`, `GET /v1/models` and `GET /v1/models/{id}`, with `reason=path` | `body` |
 | 403 | On a route with `services`, the path names no listed service | `request.services` |
 | 403 | On a route with `services`, the request has a header `X-HTTP-Method-Override`, `X-HTTP-Method` or `X-Method-Override`, or a query parameter `$httpMethod` or `httpMethod` in any case. The rule is `spec.routes[<route>]` | `request.method-override` |
 | 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
@@ -545,6 +547,9 @@ sandbox: brig-7f3a
 ## `request.body`
 
 `request.body` limits a `POST /v1/messages` on the Anthropic presets. The
+route serves that call, `GET /v1/models` and `GET /v1/models/{id}`, and
+refuses every other call with 403 and `reason=path`. The method of
+`POST /v1/messages` is read in any case, so `post` is checked too. The
 broker reads the request body for the model, the tools, `max_tokens` and the
 text of the tool results and user messages. A miss is a 403 in the Anthropic
 error shape, and the upstream is never dialed. No credential has been read.
@@ -559,8 +564,8 @@ The audit line carries the policy, the rule and the reason, with `check=body`:
 msg=broker sandbox=brig-7f3a route=anthropic method=POST path=/v1/messages status=403 check=body policy=claude-body rule=spec.routes[anthropic].request.body.models reason=model=gpt-4o
 ```
 
-The `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>` or
-`tool_result`. A `tool_result` reason never names the text that matched. A
+The `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`,
+`tool_result`, or `path` for a call the route does not serve. A `tool_result` reason never names the text that matched. A
 body that is not JSON, or is over 8 MiB, is a 400 with `check=body`, and the
 `reason` is `json` or `size`.
 
@@ -1549,7 +1554,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `dur` | The time from the request to the end of the response |
 | `check` | The check that refused the request. `body` is a `request.body` refusal or a body that is not JSON, and `tool_use` is a denied tool call that the broker rewrote in the answer |
 | `arrived` | The sandbox whose divert socket the request arrived on, or, on the address listener, the sandbox registered with the IP of its connection. A request on the loopback port has none, and so does one from an IP no sandbox registered |
-| `policy`, `rule`, `reason` | The refusal of a `request.allow` miss, and of a `request.body` refusal, which shares these three fields. A `request.body` refusal has `check=body`, and `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>` or `tool_result`. `check=tool_use` is written once per denied `tool_use` block that the broker rewrites, with `reason=tool=<name>` |
+| `policy`, `rule`, `reason` | The refusal of a `request.allow` miss, and of a `request.body` refusal, which shares these three fields. A `request.body` refusal has `check=body`, and `reason` is `model=<name>`, `max_tokens=<n>`, `tool=<name>`, `tool_result` or `path`. `check=tool_use` is written once per denied `tool_use` block that the broker rewrites, with `reason=tool=<name>` |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
 | `cert` | The fingerprint of the client certificate that the connection of the request presented, `sha256:` and 16 hex digits. Only on a route with `inject.tls.clientCertificate` |
 | `cert.notAfter` | The expiry of that certificate, in UTC. Written with `cert` |

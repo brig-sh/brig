@@ -20,30 +20,58 @@ import (
 // messagesPath is the Anthropic Messages API call that request.body reads.
 const messagesPath = "/v1/messages"
 
-// messagesCall reports whether a request is the call request.body reads. A
-// trailing slash, or a ;parameter on the last segment, is the same call to an
-// upstream that strips them, so neither takes the request past the rules.
-func messagesCall(method, rest string) bool {
-	if method != http.MethodPost {
-		return false
+// modelsPath lists the models. It and the call that describes one model are
+// the read calls a route with request.body passes unread: a GET there takes
+// no body the upstream reads and answers with no tool call.
+const modelsPath = "/v1/models"
+
+// bodyCall is what a route with request.body does with a request.
+type bodyCall int
+
+const (
+	// refuseCall is every call but the two below. /v1/chat/completions,
+	// /v1/complete and /v1/messages/batches take a model, tools and a
+	// prompt in shapes the rules do not read, and answer where the
+	// rewrite does not look, so a list of what to refuse would always
+	// trail the API.
+	refuseCall bodyCall = iota
+	// checkCall is POST /v1/messages, whose body the rules read.
+	checkCall
+	// readCall is GET /v1/models or GET /v1/models/{id}.
+	readCall
+)
+
+// callOf sorts a request on a route with request.body. A trailing slash, a
+// ;parameter on any segment, or a path in another case is the same call to
+// an upstream that strips or folds them, so none of them moves a request
+// from one kind to another. The method of the checked call is compared in
+// any case too: Go's server passes "post" on as sent, and an upstream may
+// serve it as POST.
+func callOf(method, rest string) bodyCall {
+	segs := strings.Split(rest, "/")
+	for i, s := range segs {
+		if j := strings.IndexAny(s, semicolons); j >= 0 {
+			segs[i] = s[:j]
+		}
 	}
-	if i := strings.IndexAny(rest, semicolons); i >= 0 {
-		rest = rest[:i]
+	path := strings.ToLower(strings.TrimRight(strings.Join(segs, "/"), "/"))
+	switch {
+	case strings.EqualFold(method, http.MethodPost) && path == messagesPath:
+		return checkCall
+	case method == http.MethodGet && path == modelsPath:
+		return readCall
+	case method == http.MethodGet && strings.HasPrefix(path, modelsPath+"/") &&
+		!strings.Contains(path[len(modelsPath)+1:], "/"):
+		return readCall
 	}
-	return strings.EqualFold(strings.TrimRight(rest, "/"), messagesPath)
+	return refuseCall
 }
 
-// messagesSibling reports whether a request is another call under
-// /v1/messages, such as /v1/messages/batches or /v1/messages/count_tokens.
-// Those carry the same fields the rules read, in shapes the rules do not
-// parse, or return answers the rewrite does not see, so a route with
-// request.body refuses them.
-func messagesSibling(rest string) bool {
-	if i := strings.IndexAny(rest, semicolons); i >= 0 {
-		rest = rest[:i]
-	}
-	rest = strings.TrimRight(rest, "/")
-	return len(rest) > len(messagesPath) && strings.EqualFold(rest[:len(messagesPath)+1], messagesPath+"/")
+// refusedCall is the message of a call that a route with request.body does
+// not serve.
+func refusedCall(method, rest string) string {
+	return "brig broker: a route with request.body serves POST /v1/messages, GET /v1/models " +
+		"and GET /v1/models/{id}; " + method + " " + rest + " is refused"
 }
 
 // bodyRules returns the request.body rules of a route, or nil.

@@ -374,9 +374,9 @@ refuses `tls` on a route with a `preset`.
 
 `request.body` limits a `POST /v1/messages` by its body, and the tool calls
 in its answer. Only the `claude-code` and `anthropic-api-key` presets take
-it. Brig refuses it on any other preset, and on a route with no preset. The
-rules apply to that path alone. A compressed body on that path is refused
-with 415, because the broker reads the body as plain JSON.
+it. Brig refuses it on any other preset, and on a route with no preset. A
+compressed body on that path is refused with 415, because the broker reads
+the body as plain JSON.
 
 In `models`, `*` is the only wildcard. It matches any run of characters,
 including none, and every other glob character is refused. `tools` names are
@@ -422,11 +422,16 @@ When the tool call was the only block of the answer, `drop` leaves the
 assistant turn empty, and the Messages API refuses an empty turn when the agent
 sends its history back. `refuse` is the default for that reason.
 
-A route with `request.body` checks `POST /v1/messages` and refuses the other
-calls under `/v1/messages`, such as `/v1/messages/batches` and
-`/v1/messages/count_tokens`, with 403. They carry the same fields in shapes the
-rules do not read, and batch results come back where the rewrite does not see
-them.
+A route with `request.body` serves three calls. It checks `POST
+/v1/messages`, and it passes `GET /v1/models` and `GET /v1/models/{id}`
+unread, because they take no body and answer with no tool call. It refuses
+every other call with 403, such as `/v1/messages/batches`,
+`/v1/messages/count_tokens`, `/v1/chat/completions` and `/v1/complete`. Those
+calls take a model, tools and a prompt in shapes the rules do not read, or
+answer where the rewrite does not look. The method of the checked call is
+read in any case, so `post` is checked as `POST`. A trailing slash, a
+`;parameter` or a path in another case does not change which call a request
+is.
 
 `inject` sets one of `headers.set` and `basicAuth`, unless `tls.clientCertificate`
 stands alone. `tls` may also sit beside one of them. Brig refuses a route that

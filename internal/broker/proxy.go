@@ -296,31 +296,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// request.body reads a POST /v1/messages after request.allow and before
-	// the credential is resolved, so a refused body never reads it. The other
-	// calls under /v1/messages carry the same fields where the rules cannot
-	// read them, so they are refused on such a route.
-	if body := bodyRules(&rt.spec); body != nil && messagesSibling(p.rest) {
-		a.check = "body"
-		a.policy, a.reason = rt.policy, "path"
-		writeAnthropicError(rec, http.StatusForbidden, "permission_error",
-			"brig broker: this route checks request bodies on /v1/messages only; "+p.rest+" is refused")
-		return
-	}
-	if body := bodyRules(&rt.spec); body != nil && messagesCall(r.Method, p.rest) {
-		// The held buffer is the body as sent: findPlaceholder inflates a copy
-		// for its scan alone. The rules would read compressed bytes, and the
-		// upstream the JSON inside them, so a compressed body is refused.
-		if encodedRequest(r.Header) {
-			a.check = "content-encoding"
-			http.Error(rec, "brig broker: a request to /v1/messages on a route with request.body rules is plain JSON, not compressed",
-				http.StatusUnsupportedMediaType)
-			return
-		}
-		if ref := checkBody(body, held); ref != nil {
+	// the credential is resolved, so a refused body never reads it. Every
+	// other call but a listed read is refused, so no path on the route takes
+	// a prompt or tools past the rules.
+	if body := bodyRules(&rt.spec); body != nil {
+		switch callOf(r.Method, p.rest) {
+		case refuseCall:
 			a.check = "body"
-			a.policy, a.rule, a.reason = rt.policy, ref.rule(p.route), ref.reason
-			writeAnthropicError(rec, ref.status(), ref.errorType(), ref.message)
+			a.policy, a.rule, a.reason = rt.policy, "spec.routes["+p.route+"].request.body", "path"
+			writeAnthropicError(rec, http.StatusForbidden, "permission_error", refusedCall(r.Method, p.rest))
 			return
+		case checkCall:
+			// The held buffer is the body as sent: findPlaceholder inflates a
+			// copy for its scan alone. The rules would read compressed bytes,
+			// and the upstream the JSON inside them, so a compressed body is
+			// refused.
+			if encodedRequest(r.Header) {
+				a.check = "content-encoding"
+				http.Error(rec, "brig broker: a request to /v1/messages on a route with request.body rules is plain JSON, not compressed",
+					http.StatusUnsupportedMediaType)
+				return
+			}
+			if ref := checkBody(body, held); ref != nil {
+				a.check = "body"
+				a.policy, a.rule, a.reason = rt.policy, ref.rule(p.route), ref.reason
+				writeAnthropicError(rec, ref.status(), ref.errorType(), ref.message)
+				return
+			}
 		}
 	}
 
@@ -521,7 +523,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 	in := rt.spec.Inject
 	trip := &upstreamTrip{h: h, route: rt, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
-	if body := bodyRules(&rt.spec); body != nil && body.ToolUse != nil && messagesCall(r.Method, p.rest) {
+	if body := bodyRules(&rt.spec); body != nil && body.ToolUse != nil && callOf(r.Method, p.rest) == checkCall {
 		trip.toolUse = body.ToolUse
 	}
 	// After the response has been copied: a transport that a rotation retired

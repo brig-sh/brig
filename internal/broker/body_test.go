@@ -315,14 +315,95 @@ func TestMatchStar(t *testing.T) {
 }
 
 func TestMessagesSiblingsAreRefusedOnABodyRoute(t *testing.T) {
-	for _, rest := range []string{"/v1/messages/batches", "/v1/messages/count_tokens", "/v1/messages/batches/b1/results", "/v1/Messages/batches/", "/v1/messages/batches;x=1"} {
-		if !messagesSibling(rest) {
-			t.Errorf("%q is not a sibling", rest)
+	for _, tc := range []struct {
+		method, rest string
+		want         bodyCall
+	}{
+		{"POST", "/v1/messages", checkCall},
+		{"POST", "/v1/messages/", checkCall},
+		{"POST", "/v1/messages;x=1", checkCall},
+		{"POST", "/V1/Messages", checkCall},
+		{"post", "/v1/messages", checkCall},
+		{"Post", "/v1/messages", checkCall},
+		{"GET", "/v1/models", readCall},
+		{"GET", "/v1/models/", readCall},
+		{"GET", "/v1/models/claude-sonnet-4-5", readCall},
+		{"GET", "/v1/Models/claude-sonnet-4-5;x", readCall},
+		{"POST", "/v1/messages/batches", refuseCall},
+		{"POST", "/v1/messages/count_tokens", refuseCall},
+		{"GET", "/v1/messages/batches/b1/results", refuseCall},
+		{"POST", "/v1/Messages/batches/", refuseCall},
+		{"POST", "/v1/messages/batches;x=1", refuseCall},
+		// A parameter on an inner segment hides nothing from an upstream
+		// that strips it.
+		{"POST", "/v1/messages;x/batches", refuseCall},
+		{"POST", "/v1/messagesx", refuseCall},
+		{"POST", "/v1/chat/completions", refuseCall},
+		{"POST", "/v1/complete", refuseCall},
+		{"PUT", "/v1/messages", refuseCall},
+		{"DELETE", "/v1/messages", refuseCall},
+		{"GET", "/v1/messages", refuseCall},
+		{"POST", "/v1/models", refuseCall},
+		{"get", "/v1/models", refuseCall},
+		{"GET", "/v1/models/claude/x", refuseCall},
+		{"GET", "/api/oauth/usage", refuseCall},
+		{"GET", "/", refuseCall},
+	} {
+		if got := callOf(tc.method, tc.rest); got != tc.want {
+			t.Errorf("callOf(%q, %q) = %d, want %d", tc.method, tc.rest, got, tc.want)
 		}
 	}
-	for _, rest := range []string{"/v1/messages", "/v1/messages/", "/v1/messages;x=1", "/v1/models", "/v1/messagesx"} {
-		if messagesSibling(rest) {
-			t.Errorf("%q is a sibling", rest)
-		}
+}
+
+// A route with request.body serves the call it checks and the listed reads.
+// Any other call is refused before the credential is read, so a path that
+// takes a prompt where the rules do not look never goes upstream.
+func TestRequestBodyRefusesCallsOutsideTheAllowList(t *testing.T) {
+	for _, preset := range []v1alpha1.Preset{v1alpha1.PresetClaudeCode, v1alpha1.PresetAnthropicAPIKey} {
+		t.Run(string(preset), func(t *testing.T) {
+			r := newBodyRig(t, preset, &v1alpha1.RequestBody{
+				Models: []string{"claude-sonnet-4-5*"},
+				Tools:  &v1alpha1.ToolRules{Deny: []string{"Bash"}},
+			})
+			denied := `{"model":"claude-opus-4-1","max_tokens":1024,"tools":[{"name":"Bash"}],"messages":[{"role":"user","content":"hi"}]}`
+			for _, tc := range []struct{ method, path string }{
+				{"POST", "/v1/chat/completions"},
+				{"POST", "/v1/complete"},
+				{"PUT", "/v1/messages"},
+				{"DELETE", "/v1/messages"},
+				{"PATCH", "/v1/messages"},
+				{"GET", "/v1/messages"},
+				{"POST", "/v1/messages/batches"},
+				{"POST", "/v1/messages;x/batches"},
+				{"POST", "/v1/models"},
+				{"get", "/v1/models"},
+				{"POST", "/api/oauth/usage"},
+			} {
+				resp, body := r.do(tc.method, "/brig-a/r/anthropic"+tc.path, r.header(), denied)
+				wantAnthropicError(t, resp, body, http.StatusForbidden, "permission_error")
+				wantAudit(t, r.lastAudit(), "status=403", "check=body", "policy=test-anthropic",
+					"rule=spec.routes[anthropic].request.body ", "reason=path")
+				if !strings.Contains(body, "POST /v1/messages") {
+					t.Errorf("%s %s: the refusal does not say what the route serves: %s", tc.method, tc.path, body)
+				}
+			}
+			// A method in another case is the checked call, not a way past it.
+			for _, method := range []string{"post", "Post"} {
+				resp, body := r.do(method, "/brig-a/r/anthropic/v1/messages", r.header(), denied)
+				wantAnthropicError(t, resp, body, http.StatusForbidden, "permission_error")
+				wantAudit(t, r.lastAudit(), "check=body", "rule=spec.routes[anthropic].request.body.models")
+			}
+			r.wantNothingRead(t)
+
+			for _, path := range []string{"/v1/models", "/v1/models/claude-sonnet-4-5"} {
+				resp, _ := r.do("GET", "/brig-a/r/anthropic"+path, r.header(), "")
+				wantStatus(t, resp, http.StatusOK)
+				if got := r.up.last(t); got.path != path {
+					t.Errorf("the upstream got %s, want %s", got.path, path)
+				}
+			}
+			resp, _ := r.do("post", "/brig-a/r/anthropic/v1/messages", r.header(), userTurn("claude-sonnet-4-5", `"hi"`))
+			wantStatus(t, resp, http.StatusOK)
+		})
 	}
 }
