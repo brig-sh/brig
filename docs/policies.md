@@ -276,7 +276,7 @@ refuses a second one after `---`.
 ### The flat form
 
 Older policies leave out `kind` and put `name`, `desc` and `egress` at the
-top level. Brig still reads that form until v0.6.0. A key in the flat form
+top level. Brig still reads that form until v0.7.0. A key in the flat form
 matches its field without regard to case, as in `Egress:`. Brig refuses two
 spellings of one key, such as `name:` and `Name:`.
 `brig policy check` prints a notice for each bound policy that a file still

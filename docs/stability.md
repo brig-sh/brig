@@ -116,8 +116,9 @@ Two exceptions:
   output ([#335](https://github.com/brig-sh/brig/issues/335)). Its notice says
   so. When that lands, its notice will name a release at least one release
   ahead.
-- The flat form of a policy document is removed in v0.6.0. v0.5.0 is the
-  first release that prints its notice, from `brig policy check`. See
+- The flat form of a policy document is removed in v0.7.0. v0.5.0 is the
+  first release that prints its notice, from `brig policy check`. Its notice
+  named v0.6.0 until v0.6.0 moved the removal one release on. See
   [Policy documents](migration.md#policy-documents).
 
 ## Breaking changes
