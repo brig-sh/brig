@@ -4,9 +4,10 @@
 // brig is not a container runtime and does not want to be one. It adds
 // workspace-as-home, host-resolved credentials with per-exec forwarding, the
 // billing denylist and the git plumbing, and delegates every mechanical
-// operation -- boot this image, exec in it, stop it -- to hull on macOS and
-// nerdctl on Linux. Both sit behind this one interface, so the logic above it
-// is written once and neither OS gets a forked copy.
+// operation -- boot this image, exec in it, stop it -- to hull on macOS, and on
+// Linux to hull when a hull is on PATH and to nerdctl otherwise. Both sit
+// behind this one interface, so the logic above it is written once and neither
+// OS gets a forked copy.
 package runtime
 
 import (

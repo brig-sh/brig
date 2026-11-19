@@ -9,11 +9,12 @@
 # first `brig run` fails -- and cosign, which is what verifies the kernel,
 # initrd and guest agent every sandbox boots.
 #
-# On Linux the runtime is nerdctl over containerd with the urunc shim, none of
-# which is brig's to build, so this delegates to the bundle that packages it
-# (brig-standalone-linux). brig and brigd still come from the brig release: the
-# bundle's own copies are replaced with them, so the runtime and brig are
-# versioned separately.
+# On Linux the runtime is hull when a hull is on PATH, and nerdctl otherwise.
+# Both run over containerd with the urunc shim, which is not brig's to build,
+# so this delegates to the bundle that packages them (brig-standalone-linux),
+# which carries hull since v0.1.0-rc22. brig and brigd still come from the
+# brig release: the bundle's own copies are replaced with them, so the runtime
+# and brig are versioned separately.
 #
 # Homebrew is still the better path on macOS. It tracks upgrades, and it
 # installs the shell completions this script leaves in the archive for you

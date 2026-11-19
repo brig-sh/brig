@@ -26,8 +26,8 @@ spec:
   <img alt="The locked-down policy on hull's hvi backend. Every connection from the sandbox goes through its network gateway, which enforces the policy. api.anthropic.com and 10.0.0.0/8 are allowed. A name the policy does not allow does not resolve, and a connection to an address it does not allow does not open." src="../assets/egress-policy.svg" width="820">
 </p>
 
-Brig enforces a policy on Linux with nerdctl, and on macOS with the `hvi`
-backend. It refuses a policy-bound run anywhere else. See
+Brig enforces a policy on Linux with hull or nerdctl, and on macOS with the
+`hvi` backend. It refuses a policy-bound run anywhere else. See
 [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
 
 Create the policy, attach it to a profile, and check it:
@@ -969,8 +969,8 @@ bindings.
 
 `check` lists every policy that applies to one profile or, with `-n`, to one
 of its sessions. It covers inline, profile-level and session-level bindings.
-It also runs the same refusal as `attach`. On Linux with nerdctl, or on macOS
-with `BRIG_HYPERVISOR=hvi`:
+It also runs the same refusal as `attach`. On Linux with hull or nerdctl, or on
+macOS with `BRIG_HYPERVISOR=hvi`:
 
 ```console
 $ brig policy check claude-code

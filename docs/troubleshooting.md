@@ -52,7 +52,8 @@ brig: no runtime found on PATH: brig drives hull on macOS, and none was there.
 See https://github.com/brig-sh/brig/blob/main/docs/install.md, or point BRIG_RUNTIME_BIN at a build
 ```
 
-On Linux the runtime is `nerdctl`, and the message names it:
+On Linux the runtime is `hull` when a `hull` is on `PATH`, and `nerdctl`
+otherwise. So with neither on `PATH`, the message names nerdctl:
 
 ```
 brig: no runtime found on PATH: install nerdctl, or point BRIG_RUNTIME_BIN at one
@@ -823,8 +824,8 @@ The plan has no `REFUSED` row.
 
 ### Policy refused on Linux
 
-On Linux, only nerdctl can enforce an egress policy. With docker, the
-refusal says to use nerdctl or to detach the policy.
+On Linux, hull and nerdctl enforce an egress policy, and docker cannot. With
+docker, the refusal says to use nerdctl or to detach the policy.
 
 On nerdctl, when Brig cannot put the rules in place, the refusal reads
 `whether nerdctl on <shim> enforces the egress policy is unknown`. Then:

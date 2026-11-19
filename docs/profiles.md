@@ -773,7 +773,8 @@ cpus: 2
 Brig never modifies the image, and it runs as it does anywhere else. The
 profile is the same on macOS and Linux.
 
-On Linux it needs `nerdctl` and the urunc that the runtime bundle builds.
+On Linux it needs `hull` or `nerdctl`, and the urunc that the runtime bundle
+builds.
 Brig refuses docker up front. See
 [runtimes.md](runtimes.md#what-brig-requires-of-each).
 
