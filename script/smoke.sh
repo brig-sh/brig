@@ -2560,8 +2560,9 @@ echo "== hull on Linux: refusals and run line =="
 # networked sandbox there joins a hull network gateway, its own when it is
 # isolated, and never hull's CNI bridge, which every sandbox shares. A policy
 # boots on that gateway with its rules, once the gateway has been probed for
-# them, whatever BRIG_HYPERVISOR says. A routed policy (brig.internal) is
-# still refused before the runtime is asked to boot.
+# them, whatever BRIG_HYPERVISOR says. A routed policy (brig.internal) boots
+# on that gateway too, and a published port is installed on it before the
+# boot.
 # The unit tests hold each case; this holds that the binary reaches them from
 # the version string alone, and a control run shows the log would show a boot
 # if brig made one. brig asks the binary only on Linux, so on a Mac the stub is
@@ -2669,6 +2670,26 @@ YAML
     || ok "nothing reached hull on Linux for a routed policy offline"
   lh_brig policy detach lh-route claude-code > /dev/null 2>&1
 
+  # A published port rides the shared gateway and is installed before the
+  # boot, as on hvi. The stub's gateway opens no API socket, so it cannot
+  # publish: the run is refused before anything reaches hull, with the remedy
+  # of hull on Linux, and `brig rm --all`, the remedy it names, stops that
+  # gateway once hull lists no sandbox on it.
+  : > "$lh/argv.log"
+  lh_brig run claude --publish 3000 -d > "$lh/pub.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'brig rm --all' "$lh/pub.out" \
+    && ok "hull on Linux refuses a port its gateway cannot publish, naming brig rm --all" \
+    || bad "hull on Linux refuses a port its gateway cannot publish, naming brig rm --all -- got $rc: $(cat "$lh/pub.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot a port its gateway cannot publish" \
+    || ok "nothing reached hull on Linux for a port its gateway cannot publish"
+  lh_brig rm --all -y > /dev/null 2>&1
+  # ps is read into a file first, so the grep does not find its own argv.
+  ps -A -ww -o command= > "$lh/ps.out" 2>/dev/null
+  grep -qF -- "--socket $lh_shared" "$lh/ps.out" \
+    && bad "brig rm --all left the shared gateway that cannot publish on hull on Linux running" \
+    || ok "brig rm --all stops the shared gateway that cannot publish on hull on Linux"
+
   # The shipped profile sets network: isolated, which this section otherwise
   # never reads, since BRIG_NETWORK=shared is set for the whole run. It used
   # to be refused here. It boots on the sandbox's own gateway, as on hvi.
@@ -2739,8 +2760,8 @@ YAML
     && ok "the forwarded value reaches hull on Linux through its environment" \
     || bad "the forwarded value reaches hull on Linux through its environment -- got: $(grep '^env-gh:' "$lh/argv.log")"
   lh_brig rm --all -y > /dev/null 2>&1
-  # brig never stops the shared gateway on hull on Linux, which cannot see
-  # the guests on it, so the stub's outlives the rm.
+  # The rm stops the stub's shared gateway, which has no API socket, once hull
+  # lists no sandbox on it. This takes whatever a failed case left behind.
   pkill -f "$lh/gw/" > /dev/null 2>&1
 else
   echo "  --   not Linux, skipping hull on Linux"
