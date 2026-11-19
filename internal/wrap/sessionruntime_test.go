@@ -330,3 +330,49 @@ func TestOnMacOSASessionWithNoRecordedRuntimeIsHulls(t *testing.T) {
 		t.Errorf("ls on hull kept a session of its own whose sandbox it does not list: %q", got)
 	}
 }
+
+// On a Linux host with docker and no nerdctl, hull's refusal of an entry with
+// no runtime does not call nerdctl gone or point at brig rm --forget: the
+// nerdctl runtime booted it through docker, and the BRIG_RUNTIME=nerdctl it
+// names reaches it. Negative: an entry that records nerdctl still reads as
+// gone there, since docker does not see what nerdctl booted, and so does an
+// entry with no runtime on a host with neither.
+func TestTheRefusalOfAnUnrecordedSessionCountsDockerAsReachingIt(t *testing.T) {
+	readIndexAs(t, "linux")
+	for _, tt := range []struct {
+		name, recorded, bin string
+		onPath              bool
+	}{
+		{"no runtime, docker on PATH", "", "docker", true},
+		{"no runtime, nerdctl on PATH", "", "nerdctl", true},
+		{"no runtime, neither on PATH", "", "", false},
+		{"nerdctl recorded, docker on PATH", "nerdctl", "docker", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateState(t)
+			dir := t.TempDir()
+			if tt.bin != "" {
+				if err := os.WriteFile(filepath.Join(dir, tt.bin), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", dir)
+			if err := writeSessionIndex(map[string]sessionEntry{
+				"probe@old": {Home: "/ws/old", Sandbox: "brig-probe-old", Runtime: tt.recorded},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			c := &Config{VMName: "brig-probe-old", Runtime: &networkDefaultRuntime{kind: "hull"}}
+			var other *OtherRuntimeError
+			if err := c.runtimeRefusal(); !errors.As(err, &other) || other.Recorded != "nerdctl" {
+				t.Fatalf("hull: %v, want it refused as nerdctl's", err)
+			}
+			if other.OnPath != tt.onPath {
+				t.Errorf("OnPath = %v, want %v: %v", other.OnPath, tt.onPath, other)
+			}
+			if forget := strings.Contains(other.Error(), "--forget"); forget == tt.onPath {
+				t.Errorf("the refusal names --forget: %v: %v", forget, other)
+			}
+		})
+	}
+}
