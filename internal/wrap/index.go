@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strings"
 
@@ -119,8 +120,8 @@ const (
 // absent to hull: hull booted a second VM of the same name on the same home,
 // its `brig ls` pruned the entry, and its next run or `brig rm` deleted the
 // home under the VM still running on it. See runtimeRefusal. An entry without
-// it, from an older release or rewritten by one, belongs to whichever runtime
-// reads it, which is how every entry was read before.
+// it is from an older release or rewritten by one. See entryRuntime for the
+// runtime it is read as.
 //
 // The network posture is not here, although it is the same kind of fact. An
 // older release rewrites this file with the fields it knows, so a posture kept
@@ -427,15 +428,64 @@ func runtimeKind(rt runtime.Runtime) string {
 	return rt.Kind()
 }
 
-// recordedRuntime is the runtime the session index records for the sandbox
-// vmName, or "" when no entry names one.
-func recordedRuntime(vmName string) string {
-	for _, entry := range readSessionIndex() {
-		if entry.Sandbox == vmName && entry.Runtime != "" {
-			return entry.Runtime
-		}
+// hostOS is the host whose default decides what an entry that records no
+// runtime is read as, a variable so a test on one host can read the index as
+// the other does.
+var hostOS = goruntime.GOOS
+
+// unrecordedRuntime is the runtime that booted every entry that records none:
+// nerdctl on Linux, under either of its binaries, and "" on macOS, where such
+// an entry is the reader's. See entryRuntime.
+func unrecordedRuntime() string {
+	if hostOS == "darwin" {
+		return ""
 	}
-	return ""
+	return "nerdctl"
+}
+
+// entryRuntime is the runtime a reader on kind reads entry as: the one it
+// records, and for an entry that records none, the runtime that booted it.
+//
+// The index records the runtime only since 154f53e4. On macOS an entry from
+// before it belongs to whichever runtime reads it, as before: hull was the
+// default there then and is now. On Linux every such entry was booted on
+// nerdctl, the default then, or on docker through it. hull is now the Linux
+// default when a hull is on PATH, so an upgrade moves such a host under hull
+// with those entries in the index. Read as hull's, a run of one would boot a
+// second VM on the same guest home, hull's brig ls would prune it, and brig rm
+// would delete the home under the VM still running on nerdctl. So hull on
+// Linux reads it as nerdctl's and refuses it. The nerdctl runtime, under
+// either binary, reads it as its own.
+//
+// An entry that hull booted on Linux before 154f53e4, under BRIG_RUNTIME=hull,
+// records no runtime either, as does one that an older release rewrote. hull
+// refuses it as nerdctl's. The refusal boots and deletes nothing, and
+// brig rm --forget is the way past it.
+func entryRuntime(entry sessionEntry, kind string) string {
+	if entry.Runtime != "" {
+		return entry.Runtime
+	}
+	if on := unrecordedRuntime(); on != "" && kind == "hull" {
+		return on
+	}
+	return kind
+}
+
+// recordedEntry is the session index entry of the sandbox vmName, and false
+// when none names it. An entry that records a runtime wins over one that does
+// not.
+func recordedEntry(vmName string) (sessionEntry, bool) {
+	found, unrecorded := false, sessionEntry{}
+	for _, entry := range readSessionIndex() {
+		if entry.Sandbox != vmName {
+			continue
+		}
+		if entry.Runtime != "" {
+			return entry, true
+		}
+		found, unrecorded = true, entry
+	}
+	return unrecorded, found
 }
 
 // OtherRuntimeError is the refusal of a command on a sandbox that the session
@@ -484,15 +534,21 @@ func (c *Config) RuntimeRefusal() error { return c.runtimeRefusal() }
 // next run of this runtime deletes its home as one no session owns. The
 // refusal names the runtime that has it, which is the setting that reaches it.
 //
-// No runtime, as under brig plan with none installed, and no recorded runtime
-// refuse nothing.
+// No runtime, as under brig plan with none installed, and no entry refuse
+// nothing. An entry that records no runtime is read as entryRuntime says.
 func (c *Config) runtimeRefusal() error {
-	recorded := recordedRuntime(c.VMName)
-	if recorded == "" {
+	entry, ok := recordedEntry(c.VMName)
+	// An entry that records no runtime on macOS is the reader's, whichever it
+	// is, so the runtime is not asked its kind.
+	if !ok || (entry.Runtime == "" && unrecordedRuntime() == "") {
 		return nil
 	}
 	current := runtimeKind(c.Runtime)
-	if current == "" || recorded == current {
+	if current == "" {
+		return nil
+	}
+	recorded := entryRuntime(entry, current)
+	if recorded == current {
 		return nil
 	}
 	return &OtherRuntimeError{Sandbox: c.VMName, Recorded: recorded, Current: current,
@@ -523,18 +579,20 @@ type OtherRuntimeSession struct {
 // OtherRuntimeSessions lists the sessions the index records on a runtime other
 // than kind, in sandbox order. `brig ls` shows them: its runtime cannot list
 // their sandboxes, and without a row a session whose runtime is gone is one
-// the reader cannot find to forget.
+// the reader cannot find to forget. An entry that records no runtime is read
+// as entryRuntime says, so hull on Linux keeps and shows one of nerdctl's.
 func OtherRuntimeSessions(kind string) []OtherRuntimeSession {
 	var out []OtherRuntimeSession
 	for key, entry := range readSessionIndex() {
-		if entry.Runtime == "" || entry.Runtime == kind {
+		on := entryRuntime(entry, kind)
+		if on == kind {
 			continue
 		}
 		ref := key
 		if strings.HasPrefix(key, projectKeyPrefix) {
 			ref = ""
 		}
-		out = append(out, OtherRuntimeSession{Ref: ref, Sandbox: entry.Sandbox, Home: entry.Home, Runtime: entry.Runtime})
+		out = append(out, OtherRuntimeSession{Ref: ref, Sandbox: entry.Sandbox, Home: entry.Home, Runtime: on})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Sandbox < out[j].Sandbox })
 	return out

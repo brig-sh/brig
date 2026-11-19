@@ -12,8 +12,9 @@ import (
 )
 
 // ephemeralHost is removeHost with no BRIG_WORKSPACE, and an index that
-// records home as the ephemeral guest home of the faker session. It returns
-// home, created with a file in it.
+// records home as the ephemeral guest home of the faker session, on hull. On
+// Linux hull refuses an entry with no runtime as nerdctl's. It returns home,
+// created with a file in it.
 func ephemeralHost(t *testing.T, rt runtime.Runtime, home func(state string) string) string {
 	t.Helper()
 	removeHost(t, rt)
@@ -28,7 +29,7 @@ func ephemeralHost(t *testing.T, rt runtime.Runtime, home func(state string) str
 	if err := os.WriteFile(filepath.Join(dir, "agent-state"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	index := `{"faker": {"home": "` + dir + `", "sandbox": "brig-faker", "ephemeral": true}}`
+	index := `{"faker": {"home": "` + dir + `", "sandbox": "brig-faker", "ephemeral": true, "runtime": "hull"}}`
 	if err := os.WriteFile(filepath.Join(os.Getenv("BRIG_STATE_DIR"), "sessions.json"),
 		[]byte(index), 0o600); err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestRemoveRefNamesTheHomeOfAForgottenSession(t *testing.T) {
 				at = func(string) string { return filepath.Join(outside, "home") }
 			}
 			home := ephemeralHost(t, rt, at)
-			entry := map[string]any{"home": home, "sandbox": "brig-faker", "ephemeral": !tt.named}
+			entry := map[string]any{"home": home, "sandbox": "brig-faker", "ephemeral": !tt.named, "runtime": "hull"}
 			project := ""
 			if tt.project {
 				project = t.TempDir()

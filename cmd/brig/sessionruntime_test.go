@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -154,7 +155,8 @@ func TestForgetIsOnlyForASessionOnAnotherRuntime(t *testing.T) {
 
 // Negative: ls under one runtime keeps the session of a sandbox recorded on
 // another, which it cannot list. It still prunes its own runtime's session
-// whose sandbox is gone, and one with no runtime recorded, as before.
+// whose sandbox is gone. One with no runtime recorded is hull's on macOS, and
+// pruned as before. On Linux it was booted on nerdctl, and hull keeps it.
 func TestListingUnderOneRuntimeKeepsAnothersSession(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_STATE_DIR", dir)
@@ -171,10 +173,52 @@ func TestListingUnderOneRuntimeKeepsAnothersSession(t *testing.T) {
 	if got := wrap.WorkspaceOfSandbox("brig-probe-x1"); got != "/ws/x1" {
 		t.Errorf("ls on hull pruned the session nerdctl is running: %q", got)
 	}
-	for _, gone := range []string{"brig-probe-x2", "brig-probe-x3"} {
-		if got := wrap.WorkspaceOfSandbox(gone); got != "" {
-			t.Errorf("ls on hull kept %s, which it does not have: %q", gone, got)
+	if got := wrap.WorkspaceOfSandbox("brig-probe-x2"); got != "" {
+		t.Errorf("ls on hull kept brig-probe-x2, which it does not have: %q", got)
+	}
+	got := wrap.WorkspaceOfSandbox("brig-probe-x3")
+	if goruntime.GOOS == "darwin" && got != "" {
+		t.Errorf("ls on hull kept brig-probe-x3, which it does not have: %q", got)
+	}
+	if goruntime.GOOS != "darwin" && got != "/ws/x3" {
+		t.Errorf("ls on hull pruned the session with no runtime, which nerdctl booted: %q", got)
+	}
+}
+
+// Negative, on Linux: rm under hull of a session whose entry records no
+// runtime is refused as nerdctl's, and touches nothing. Every such entry was
+// booted on nerdctl, the default before hull, and hull reported its sandbox
+// absent: rm revoked its tokens and forgot its session, and the next run
+// deleted its home under the VM still on nerdctl. On macOS hull's rm reaches
+// it, as before. internal/wrap reads the index as each host on any host.
+func TestRemoveUnderHullOfASessionWithNoRecordedRuntime(t *testing.T) {
+	home := sessionOn(t, "")
+	pathWith(t, "nerdctl")
+	var revoked []string
+	swap(t, &revokeRoutes, func(name string) error {
+		revoked = append(revoked, name)
+		return nil
+	})
+	rt := &otherKindRuntime{existsRuntime: &existsRuntime{listRuntime: absent()}, kind: "hull"}
+	err := removeSandbox(&wrap.Config{VMName: "brig-probe-x1", Runtime: rt}, "probe@x1", false)
+	var other *wrap.OtherRuntimeError
+	if goruntime.GOOS == "darwin" {
+		if errors.As(err, &other) {
+			t.Fatalf("rm on hull on macOS: %v, want the session read as hull's", err)
 		}
+		return
+	}
+	if !errors.As(err, &other) || other.Recorded != "nerdctl" {
+		t.Fatalf("rm on hull: %v, want it refused as nerdctl's", err)
+	}
+	if len(revoked) != 0 || rt.removed || rt.stopped {
+		t.Errorf("rm acted on nerdctl's sandbox: revoked %v, removed %v, stopped %v", revoked, rt.removed, rt.stopped)
+	}
+	if got := wrap.WorkspaceOfSandbox("brig-probe-x1"); got != home {
+		t.Errorf("rm forgot the session of nerdctl's sandbox: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, "work")); err != nil {
+		t.Errorf("the guest home lost its work: %v", err)
 	}
 }
 

@@ -72,10 +72,20 @@ func TestASessionOnOneRuntimeIsRefusedOnAnother(t *testing.T) {
 	}
 }
 
-// An entry with no runtime, from a release before it was recorded, belongs to
-// whichever runtime reads it, as every entry did before.
+// readIndexAs reads the session index as brig does on goos for the rest of
+// the case. See entryRuntime.
+func readIndexAs(t *testing.T, goos string) {
+	t.Helper()
+	orig := hostOS
+	hostOS = goos
+	t.Cleanup(func() { hostOS = orig })
+}
+
+// On macOS an entry with no runtime, from a release before it was recorded,
+// belongs to whichever runtime reads it, as every entry did before.
 func TestASessionWithNoRecordedRuntimeIsAnyRuntimes(t *testing.T) {
 	isolateState(t)
+	readIndexAs(t, "darwin")
 	if err := writeSessionIndex(map[string]sessionEntry{
 		"probe@x1": {Home: "/ws", Sandbox: "brig-probe-x1"},
 	}); err != nil {
@@ -90,10 +100,11 @@ func TestASessionWithNoRecordedRuntimeIsAnyRuntimes(t *testing.T) {
 }
 
 // ls counts a sandbox recorded on another runtime as there, since its own
-// runtime cannot list it, and still prunes one of its own runtime, or of none,
-// that it does not list.
+// runtime cannot list it, and still prunes one of its own runtime, or of none
+// on macOS, that it does not list.
 func TestSandboxesOfOtherRuntimes(t *testing.T) {
 	isolateState(t)
+	readIndexAs(t, "darwin")
 	if err := writeSessionIndex(map[string]sessionEntry{
 		"probe@x1":  {Home: "/a", Sandbox: "brig-probe-x1", Runtime: "nerdctl"},
 		"probe@x2":  {Home: "/b", Sandbox: "brig-probe-x2", Runtime: "hull"},
@@ -170,5 +181,152 @@ func TestTheRefusalNamesForgetWhenTheRuntimeIsOffPath(t *testing.T) {
 	on := (&OtherRuntimeError{Sandbox: "brig-probe-x1", Recorded: "nerdctl", Current: "hull", OnPath: true}).Error()
 	if !strings.Contains(on, "set BRIG_RUNTIME=nerdctl ") || strings.Contains(on, "--forget") {
 		t.Errorf("on PATH: %q", on)
+	}
+}
+
+// unrecordedSession boots the profile's default session on nerdctl, puts work in
+// its guest home, and rewrites its entry as a release before 154f53e4 wrote
+// it, with no runtime. It returns the session's ref and home.
+func unrecordedSession(t *testing.T, p profile.Profile) (string, string) {
+	t.Helper()
+	first, _, err := bootOn(t, p, "nerdctl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := first.sessionRef()
+	index := readSessionIndex()
+	entry := index[ref]
+	entry.Runtime = ""
+	index[ref] = entry
+	if err := writeSessionIndex(index); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.Workspace, "work"), []byte("the agent's work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return ref, first.Workspace
+}
+
+// Negative: on Linux, hull refuses a session whose entry records no runtime,
+// as it refuses one recorded on nerdctl. Every such entry was booted on
+// nerdctl, the default before hull. Read as hull's, the run would boot a
+// second VM on the same guest home, and stop and rm would act on a sandbox
+// hull cannot see: they would revoke the tokens of the VM on nerdctl, and the
+// next run would delete its home under it.
+func TestOnLinuxHullRefusesASessionWithNoRecordedRuntime(t *testing.T) {
+	isolateState(t)
+	readIndexAs(t, "linux")
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	t.Setenv("BRIG_HYPERVISOR", "")
+	p := testProfile(t, "hypervisor: hvi\n")
+	ref, home := unrecordedSession(t, p)
+
+	c, rt, err := bootOn(t, p, "hull")
+	var other *OtherRuntimeError
+	if !errors.As(err, &other) || other.Recorded != "nerdctl" || other.Current != "hull" {
+		t.Fatalf("the run on hull: %v, want it refused as nerdctl's", err)
+	}
+	if rt.boots != 0 {
+		t.Error("hull booted a second VM of the session")
+	}
+
+	broker := &fakeBroker{}
+	c.broker, c.Err = broker, io.Discard
+	for verb, f := range map[string]func() error{"stop": c.Stop, "rm": c.Remove} {
+		if err := f(); !errors.As(err, &other) || other.Recorded != "nerdctl" {
+			t.Errorf("%s on hull: %v, want it refused as nerdctl's", verb, err)
+		}
+	}
+	if rt.stops != 0 || rt.removes != 0 || len(broker.forgotten) != 0 {
+		t.Errorf("acted on nerdctl's sandbox: %d stops, %d removes, tokens revoked for %v",
+			rt.stops, rt.removes, broker.forgotten)
+	}
+	if b, err := os.ReadFile(filepath.Join(home, "work")); err != nil || string(b) != "the agent's work" {
+		t.Errorf("the guest home lost its work: %q, %v", b, err)
+	}
+	if entry, ok := readSessionIndex()[ref]; !ok || entry.Runtime != "" {
+		t.Errorf("the refused commands dropped or rewrote the entry: %+v, %v", entry, ok)
+	}
+}
+
+// Negative: on Linux, hull's brig ls keeps a session whose entry records no
+// runtime, which it cannot list, and shows it on nerdctl. Its prune would
+// drop it, and the next run of the session would delete its home as one no
+// session owns. nerdctl, which can list it, still prunes it when it is gone.
+func TestOnLinuxListingUnderHullKeepsASessionWithNoRecordedRuntime(t *testing.T) {
+	isolateState(t)
+	readIndexAs(t, "linux")
+	if err := writeSessionIndex(map[string]sessionEntry{
+		"probe@old": {Home: "/ws/old", Sandbox: "brig-probe-old"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	others := OtherRuntimeSessions("hull")
+	if len(others) != 1 || others[0].Sandbox != "brig-probe-old" || others[0].Runtime != "nerdctl" ||
+		others[0].Ref != "probe@old" {
+		t.Fatalf("OtherRuntimeSessions(hull) = %+v, want the entry on nerdctl", others)
+	}
+	PruneSessions(SandboxesOfOtherRuntimes("hull"))
+	if got := WorkspaceOfSandbox("brig-probe-old"); got != "/ws/old" {
+		t.Fatalf("ls on hull pruned the session nerdctl booted: %q", got)
+	}
+
+	for _, kind := range []string{"nerdctl", "docker"} {
+		if got := OtherRuntimeSessions(kind); len(got) != 0 {
+			t.Errorf("OtherRuntimeSessions(%s) = %+v, want the entry read as %s's own", kind, got, kind)
+		}
+	}
+	PruneSessions(SandboxesOfOtherRuntimes("nerdctl"))
+	if got := WorkspaceOfSandbox("brig-probe-old"); got != "" {
+		t.Errorf("ls on nerdctl kept a session whose sandbox it does not list: %q", got)
+	}
+}
+
+// On Linux the nerdctl runtime, under nerdctl or docker, reads an entry with
+// no runtime as its own, since it booted every one of them. Its run reaches
+// the sandbox, and records nerdctl on the entry from then on.
+func TestOnLinuxNerdctlKeepsASessionWithNoRecordedRuntime(t *testing.T) {
+	isolateState(t)
+	readIndexAs(t, "linux")
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	t.Setenv("BRIG_HYPERVISOR", "")
+	p := testProfile(t, "hypervisor: hvi\n")
+	ref, _ := unrecordedSession(t, p)
+
+	for _, kind := range []string{"nerdctl", "docker"} {
+		c := &Config{VMName: readSessionIndex()[ref].Sandbox, Runtime: &networkDefaultRuntime{kind: kind}}
+		if err := c.runtimeRefusal(); err != nil {
+			t.Errorf("%s: %v", kind, err)
+		}
+	}
+	if _, _, err := bootOn(t, p, "nerdctl"); err != nil {
+		t.Fatalf("the run on nerdctl: %v", err)
+	}
+	if got := readSessionIndex()[ref].Runtime; got != "nerdctl" {
+		t.Errorf("the run on nerdctl recorded runtime %q, want nerdctl", got)
+	}
+}
+
+// On macOS an entry with no runtime still belongs to hull: hull's run, stop
+// and rm reach it, and its brig ls neither keeps it as another runtime's nor
+// shows it as one.
+func TestOnMacOSASessionWithNoRecordedRuntimeIsHulls(t *testing.T) {
+	isolateState(t)
+	readIndexAs(t, "darwin")
+	if err := writeSessionIndex(map[string]sessionEntry{
+		"probe@old": {Home: "/ws/old", Sandbox: "brig-probe-old"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{VMName: "brig-probe-old", Runtime: &networkDefaultRuntime{kind: "hull"}}
+	if err := c.runtimeRefusal(); err != nil {
+		t.Errorf("hull: %v", err)
+	}
+	if got := OtherRuntimeSessions("hull"); len(got) != 0 {
+		t.Errorf("OtherRuntimeSessions(hull) = %+v, want none", got)
+	}
+	PruneSessions(SandboxesOfOtherRuntimes("hull"))
+	if got := WorkspaceOfSandbox("brig-probe-old"); got != "" {
+		t.Errorf("ls on hull kept a session of its own whose sandbox it does not list: %q", got)
 	}
 }

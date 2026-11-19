@@ -120,7 +120,9 @@ func TestRemoveProfileRefusesForAStoppedSandbox(t *testing.T) {
 func TestRemoveProfileRefusesWhenTheIndexNamesTheSandbox(t *testing.T) {
 	rt := &removeRuntime{list: []runtime.Instance{{Name: "brig-mine-two", State: "running"}}}
 	dir := agentRmHost(t, rt, "mine", "mine-two")
-	index := `{"mine@two": {"home": "/ws/two", "sandbox": "brig-mine-two"}}`
+	// Recorded on hull, the runtime that lists it. On Linux hull reads an
+	// entry with no runtime as nerdctl's and refuses the rm.
+	index := `{"mine@two": {"home": "/ws/two", "sandbox": "brig-mine-two", "runtime": "hull"}}`
 	if err := os.WriteFile(filepath.Join(os.Getenv("BRIG_STATE_DIR"), "sessions.json"), []byte(index), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +364,8 @@ func TestRemoveProfileNamesTheBrigNameASandboxWasBootedWith(t *testing.T) {
 	rt := &removeRuntime{list: []runtime.Instance{{Name: "brig-custom-x", State: "running"}}}
 	dir := agentRmHost(t, rt, "mytool")
 	withRuntime(t, rt)
-	index := `{"mytool@x": {"home": "/ws/x", "sandbox": "brig-custom-x"}}`
+	// Recorded on hull, as above.
+	index := `{"mytool@x": {"home": "/ws/x", "sandbox": "brig-custom-x", "runtime": "hull"}}`
 	if err := os.WriteFile(filepath.Join(os.Getenv("BRIG_STATE_DIR"), "sessions.json"), []byte(index), 0o600); err != nil {
 		t.Fatal(err)
 	}

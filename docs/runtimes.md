@@ -350,6 +350,12 @@ sessions of the other runtimes, but it revokes every session token the
 credential broker holds, including those of sandboxes that run on another
 runtime.
 
+An older release recorded no runtime with a session. On Linux every such
+session was booted on nerdctl, the default then. So hull on Linux refuses it
+as a session of nerdctl, and its `brig ls` lists it as `on nerdctl`.
+`BRIG_RUNTIME=nerdctl` reaches it, and a run there records nerdctl with it.
+On macOS such a session belongs to whichever runtime reads it.
+
 `brig info <ref>` prints the runtime that Brig found, as
 `runtime hull (/opt/homebrew/bin/hull)`. `brig doctor` reports the version of
 the runtime.

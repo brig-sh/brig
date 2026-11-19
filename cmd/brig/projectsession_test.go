@@ -88,13 +88,15 @@ func seedProject(t *testing.T, rt *projectRuntime, root, target, session string)
 }
 
 // seedProfile gives the runtime your own claude-code session, with an
-// ephemeral home and its entry in sessions.json. It returns the home.
+// ephemeral home and its entry in sessions.json. The entry records hull, the
+// runtime it is on: on Linux hull refuses an entry with no runtime as
+// nerdctl's. It returns the home.
 func seedProfile(t *testing.T, rt *projectRuntime) string {
 	t.Helper()
 	state := os.Getenv("BRIG_STATE_DIR")
 	home := filepath.Join(state, "homes", "brig-claude-code")
 	writeGuestState(t, home)
-	index := `{"claude-code": {"home": "` + home + `", "sandbox": "brig-claude-code", "ephemeral": true}}`
+	index := `{"claude-code": {"home": "` + home + `", "sandbox": "brig-claude-code", "ephemeral": true, "runtime": "hull"}}`
 	if err := os.WriteFile(filepath.Join(state, "sessions.json"), []byte(index), 0o600); err != nil {
 		t.Fatal(err)
 	}
