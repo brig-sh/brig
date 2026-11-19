@@ -226,6 +226,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	s.logger = log.New(out, "brig-broker: ", log.LstdFlags)
 	s.aws = newAWSVendor(cfg.awsBin, cfg.now, s.logger)
 	s.gcp = newGCPMinter(cfg.gcloudBin, cfg.tokenInfoURL, cfg.now, s.logger)
+	s.gcp.node = s.nodeFlags()
 	var store secret.Store
 	if cfg.secretDir != "" {
 		// The operator chose this directory, so a file in it that cannot be
@@ -516,7 +517,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		sb.Routes = append(sb.Routes, broker.Route{Policy: rt.Policy, Route: expanded})
 	}
-	if err := s.refuseHostRoutes(sb); err != nil {
+	if err := s.refuseHostRoutes(r.Context(), sb); err != nil {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
@@ -723,20 +724,30 @@ func (s *server) setVends(id string, vends map[string]vendRoute) {
 	s.vends[id] = vends
 }
 
-// refuseHostRoutes refuses a registration whose routes need the host, when
-// the broker runs as a node daemon. A route that vends runs the host's aws
-// CLI against a profile there, and a node has neither. The error names the
-// route and says where the keys come from instead.
-func (s *server) refuseHostRoutes(sb broker.Sandbox) error {
-	var flags string
+// nodeFlags names the flags that make the broker a node daemon, or "" for a
+// broker on a workstation.
+func (s *server) nodeFlags() string {
 	switch {
 	case s.cfg.listen != "" && s.cfg.secretDir != "":
-		flags = "--listen and --secret-dir"
+		return "--listen and --secret-dir"
 	case s.cfg.listen != "":
-		flags = "--listen"
+		return "--listen"
 	case s.cfg.secretDir != "":
-		flags = "--secret-dir"
-	default:
+		return "--secret-dir"
+	}
+	return ""
+}
+
+// refuseHostRoutes refuses a registration whose routes need the host, when
+// the broker runs as a node daemon. A route that vends runs the host's aws
+// CLI against a profile there, and a node has neither. A gcp route whose
+// secret is a gcloud pointer runs the host's gcloud. A node has no user login
+// for it, and on GKE gcloud falls back to the node's own service account, an
+// identity nobody named for the sandbox. The error names the route and says
+// where the credential comes from instead.
+func (s *server) refuseHostRoutes(ctx context.Context, sb broker.Sandbox) error {
+	flags := s.nodeFlags()
+	if flags == "" {
 		return nil
 	}
 	for _, rt := range sb.Routes {
@@ -746,7 +757,28 @@ func (s *server) refuseHostRoutes(sb broker.Sandbox) error {
 				rt.Route.Name, flags)
 		}
 	}
+	wl := secret.Workload{Sandbox: sb.ID, Profile: sb.Profile}
+	for _, rt := range sb.Routes {
+		if len(rt.Route.Services) == 0 || rt.Route.Credential == nil {
+			continue
+		}
+		// A secret that does not resolve is left to the request, as
+		// checkMints leaves it. gcpMinter refuses a pointer on a node too, so
+		// a file that becomes one later still never reaches gcloud.
+		doc, err := s.creds.Resolve(ctx, rt.Route.Credential.SecretRef.Name, wl)
+		if err == nil && gcpcred.IsPointer(doc) {
+			return gcloudOnNode(rt.Route.Name, flags)
+		}
+	}
 	return nil
+}
+
+// gcloudOnNode is the refusal of a gcp route whose secret is a gcloud
+// pointer, on a broker started with flags.
+func gcloudOnNode(route, flags string) error {
+	return fmt.Errorf("route %s mints Google tokens through the host's gcloud CLI and login, and a broker "+
+		"started with %s has neither. On a node, gcloud would mint as the node's own service account. "+
+		"Store a token the platform mints for this workload instead of a gcloud pointer", route, flags)
 }
 
 // sandboxAddr reads the address of a registration and the UID of its pod:

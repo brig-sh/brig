@@ -869,6 +869,20 @@ state for the sandbox, and does not register its other routes. The platform
 gives a workload on a node its AWS keys by its own means, such as a role
 bound to the pod.
 
+A `gcp` route whose secret is a gcloud pointer is refused the same way, with
+400. It runs the host's `gcloud`, and a node has no user login for it. On
+GKE, `gcloud` there falls back to the node's own service account, an
+identity nobody named for the sandbox:
+
+```
+sandbox pod-7f3a: route gcp mints Google tokens through the host's gcloud CLI and login, and a broker started with --secret-dir has neither. On a node, gcloud would mint as the node's own service account. Store a token the platform mints for this workload instead of a gcloud pointer
+```
+
+A `gcp` route whose secret is a token is served. A mounted Secret can change
+while the broker runs, so a node broker also refuses a pointer at the
+request: the answer is 502, `broker.log` carries the error, and `gcloud` does
+not run.
+
 The rest of the registration checks are the ones everywhere else. A route
 mode the build does not serve, `splice` for one, is refused with 400 and
 `route mode splice is not part of this build of brig`. A sandbox with
@@ -991,7 +1005,8 @@ token or the pointer.
 A pointer is minted on a route with `services` alone. On any other route the
 broker answers 502 with `check=credential.gcponly` and sends nothing
 upstream, since the pointer names your gcloud configuration and service
-account.
+account. A broker started with `--listen` or `--secret-dir` mints no pointer.
+See [What a node broker refuses](#what-a-node-broker-refuses).
 
 ### Minting a token
 
