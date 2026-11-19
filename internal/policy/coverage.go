@@ -19,7 +19,7 @@ import (
 // it, and it is a claim about what brig does: the moment they disagree, one of
 // them is lying about the tool it belongs to. Typed into each instead, nothing
 // catches an edit that changes one and not the other.
-const EnforcementNote = "note: enforced on the hvi backend and on Linux with nerdctl, which give the " +
+const EnforcementNote = "note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the " +
 	"sandbox a network of its own; a run on any other backend is refused rather than left unenforced"
 
 // CheckCoverage reports whether an egress rule can be enforced against p at

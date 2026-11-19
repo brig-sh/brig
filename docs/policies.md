@@ -48,7 +48,7 @@ Linux with nerdctl, or on macOS with `BRIG_HYPERVISOR=hvi`, it prints:
 
 ```
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 Then run the agent as usual, with `brig run claude`. A sandbox that is
@@ -822,7 +822,7 @@ github-brig-sh
   route github  preset github-token  mode endpoint
     ...
 posture: isolated
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 A run with a route needs the `isolated` posture. The `posture:` line is that
@@ -942,10 +942,10 @@ They do not change the policy or the profile.
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down claude-code -n refactor
 attached locked-down to claude-code -n refactor
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -975,7 +975,7 @@ with `BRIG_HYPERVISOR=hvi`:
 ```console
 $ brig policy check claude-code
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
@@ -1098,7 +1098,7 @@ brig: no-net is recorded under "My Work", which no run reaches
   ↳ a session named "My Work" starts "my-work"
   → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 One gap remains. `attach -n` refuses a name that any reserved profile ends
@@ -1294,7 +1294,7 @@ refuses a hull that is too old to enforce the rules:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig run claude
 brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
