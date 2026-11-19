@@ -1,6 +1,7 @@
 # The runtimes Brig drives
 
-Brig boots a sandbox through a runtime: `hull` on macOS, `nerdctl` on Linux.
+Brig boots a sandbox through a runtime: `hull` on macOS. On Linux it drives
+`hull` when a `hull` is on `PATH`, and `nerdctl` otherwise.
 See [A container runtime or a VMM](non-goals.md#a-container-runtime-or-a-vmm)
 for the reason.
 
@@ -52,8 +53,8 @@ backend.
 | hull on `vz` | Virtualization.framework, through the `vz-runner` helper | macOS, when neither the profile nor `BRIG_HYPERVISOR` names a backend | yes. It is the only backend that can show a graphical console | refused |
 | hull on `hvi` | Hypervisor.framework directly, through the `hvi` microVM monitor | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | yes. It is the only backend that runs a network gateway of its own |
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
-| nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux | refused | yes. Brig creates a network for each sandbox |
-| hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, when `BRIG_RUNTIME=hull` | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
+| nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux, when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | refused | yes. Brig creates a network for each sandbox |
+| hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, by default when a `hull` is on `PATH`. brig-standalone-linux carries one from v0.1.0-rc22 | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
 
 The nine shipped profiles divide as follows on macOS:
 
@@ -600,6 +601,9 @@ there, run a root image.
 - A numeric non-root user joins the gateway as that user, and cannot write the
   gateway's socket. The guest boots with no network. hull warns, and Brig
   prints the warning after the boot.
+
+hull is the Linux default when a `hull` is on `PATH`. For an image these limits
+refuse, `BRIG_RUNTIME=nerdctl` runs it on nerdctl, which takes a named user.
 
 ## Swapping one out
 
