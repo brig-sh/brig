@@ -83,9 +83,12 @@ func TestLinuxHullStopsTheSharedGatewayNoGuestIsOn(t *testing.T) {
 }
 
 // Negative: the shared gateway on hull on Linux stays up while it lists a
-// guest, and while it cannot say whether one is on it, though hull lists no
-// instance on it. Stopping it would cut the network of every shared sandbox
-// still running.
+// guest, and while its answer fails, though hull lists no instance on it. A
+// failed answer says nothing about the guests. Stopping it would cut the
+// network of every shared sandbox still running. A gateway that will never
+// answer, with no /members or no API, is decided by hull's instances alone;
+// see TestLinuxHullNeverStopsASharedGatewayItCannotAsk and
+// TestLinuxHullStopsASharedGatewayThatCannotListItsGuests.
 func TestLinuxHullKeepsTheSharedGatewayAGuestMayBeOn(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -93,9 +96,7 @@ func TestLinuxHullKeepsTheSharedGatewayAGuestMayBeOn(t *testing.T) {
 		api  bool
 	}{
 		{"a guest is listed", []string{`BRIG_TEST_GATEWAY_MEMBERS=[{"transport":"qemu","joinedAt":"2026-11-16T12:00:00Z"}]`}, true},
-		{"no /members", nil, true},
 		{"/members fails", []string{"BRIG_TEST_GATEWAY_MEMBERS=[]", "BRIG_TEST_GATEWAY_MEMBERS_STATUS=503"}, true},
-		{"no API", nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sock := scratchSharedGateway(t)

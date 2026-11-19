@@ -125,17 +125,33 @@ func gatewayForwards(sock string) ([]gatewayForward, error) {
 // is read. A guest is listed from when the gateway takes its connection, so
 // a boot whose VMM has not connected yet is not. See hull.PruneSharedNetwork.
 func gatewayMembers(sock string) (n int, known bool) {
+	n, err := gatewayMemberCount(sock)
+	return n, err == nil
+}
+
+// gatewayMemberCount is gatewayMembers with the reason the gateway could not
+// say. An error that noForwardAPI accepts is one the gateway gives on every
+// call: its API socket is gone, or it predates /members and answers 404. Any
+// other error, such as a failure status or an answer that is not a list, is
+// one the next call need not repeat.
+func gatewayMemberCount(sock string) (int, error) {
 	body, status, err := gatewayAPI(gatewayAPISocket(sock), http.MethodGet, "/members", nil)
-	if err != nil || status != http.StatusOK {
-		return 0, false
+	if err != nil {
+		return 0, err
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("the gateway would not list its guests: %s", message(body, status))
 	}
 	// null decodes to a nil list with no error. The gateway answers [] when
 	// no guest is on it, never null, so a null is not taken for empty.
 	var members []json.RawMessage
-	if err := json.Unmarshal(body, &members); err != nil || members == nil {
-		return 0, false
+	if err := json.Unmarshal(body, &members); err != nil {
+		return 0, fmt.Errorf("the gateway's guests could not be read: %w", err)
 	}
-	return len(members), true
+	if members == nil {
+		return 0, errors.New("the gateway answered null for its guests")
+	}
+	return len(members), nil
 }
 
 // exposeForward publishes one port on a gateway, and unexposeForward takes it
@@ -272,6 +288,13 @@ func publicationOf(f gatewayForward, guestPort string) (Publication, error) {
 // sandbox that comes up with the envelope naming a port nothing is listening
 // on, and the person in front of it debugging their dev server.
 func reconcilePublications(sock, guestIP string, want []Publication) error {
+	return reconcilePublicationsWith(sock, guestIP, want, unpublishable)
+}
+
+// reconcilePublicationsWith is reconcilePublications with the refusal of a
+// gateway that cannot be asked about forwards. The two hulls need their own:
+// the remedy differs. See unpublishable and linuxUnpublishable.
+func reconcilePublicationsWith(sock, guestIP string, want []Publication, refuse func(error) error) error {
 	have, err := publishedOn(sock, guestIP)
 	if err != nil {
 		if len(want) == 0 {
@@ -287,7 +310,7 @@ func reconcilePublications(sock, guestIP string, want []Publication) error {
 			// kind.
 			return nil
 		}
-		return unpublishable(err)
+		return refuse(err)
 	}
 	for _, p := range have {
 		if !contains(want, p) {
@@ -307,7 +330,8 @@ func reconcilePublications(sock, guestIP string, want []Publication) error {
 }
 
 // unpublishable names a gateway that cannot be asked about forwards at all,
-// for the run that wanted one published.
+// for the run that wanted one published. It is the macOS hull's. hull on
+// Linux has linuxUnpublishable, because none of this advice works there.
 //
 // Two shapes reach here, and they have different fixes. A gateway that answers
 // 404 predates the /forwards endpoint, so the runtime needs an upgrade. A
@@ -337,6 +361,68 @@ func unpublishable(err error) error {
 			"withdraw the ports with `brig network unpublish`", err)
 	}
 	return err
+}
+
+// linuxUnpublishable is unpublishable for hull on Linux, where the macOS
+// remedies do not work. sock is the control socket of the gateway that
+// refused.
+//
+// An older brig is not a cause there: brig has passed --api since before
+// hull on Linux had a gateway. What reaches here is a gateway from a hull
+// without /forwards, which answers 404, or one whose API socket is gone.
+// Upgrading hull leaves a running gateway in place, so an upgrade alone is
+// never the fix.
+//
+// A shared gateway is reused by every boot on hull on Linux, which cannot
+// tell an unused one from one with guests (see ensureSharedGateway), so
+// stopping its sandboxes does not replace it. `brig rm --all` does:
+// PruneSharedNetwork stops a gateway that will never list its guests once
+// hull lists no instance on it.
+//
+// An isolated gateway is this sandbox's own, and its boot reuses it while it
+// serves the same network and rules. A publish on a running sandbox reaches
+// here too, and Stop takes the gateway with that sandbox. A boot reaches here
+// with no sandbox to stop: wrap removes a stopped one before the boot, and a
+// removal that worked took its gateway with it. So the refusal also names the
+// gateway's pid record. brig writes one beside the spec of every isolated
+// gateway it starts, and a reuse needs that spec. The refusal does not name
+// the sandbox for `brig stop`: that takes a ref, and the runtime has only the
+// sandbox's name, which is not one.
+func linuxUnpublishable(err error, sock string) error {
+	var why string
+	switch {
+	case errors.Is(err, ErrNoForwardAPI):
+		why = "the network gateway serving this sandbox cannot publish a port (%w). A hull " +
+			"without the /forwards API started it. Upgrade hull if the installed one is that " +
+			"old: a running gateway outlives the upgrade. "
+	case errors.Is(err, syscall.ENOENT), errors.Is(err, syscall.ECONNREFUSED):
+		why = "the network gateway serving this sandbox has no socket a port is published " +
+			"through (%w). "
+	default:
+		return err
+	}
+	if sandboxSocketName(sock) {
+		return fmt.Errorf(why+"It is this sandbox's own gateway, and its next boot reuses it. "+
+			"While the sandbox runs, `brig stop` of it stops that gateway with it. While it does "+
+			"not, stop the gateway process, whose pid is in %s. Then start this sandbox with "+
+			"`brig run --publish`. Or withdraw the ports with `brig network unpublish`",
+			err, gatewayPIDPath(sock))
+	}
+	return fmt.Errorf(why+"On hull on Linux every boot reuses the shared gateway it finds, so "+
+		"stopping the sandboxes on it does not replace it. `brig rm --all` removes every "+
+		"sandbox of this runtime, then stops that gateway once hull lists no sandbox on it, "+
+		"and the next `brig run --publish` starts one that publishes. Or withdraw the ports "+
+		"with `brig network unpublish`", err)
+}
+
+// unpublishableOn is the refusal of a gateway that cannot be asked about
+// forwards, in the words of the hull that asked. sock is that gateway's
+// control socket.
+func (h *hull) unpublishableOn(err error, sock string) error {
+	if h.linux {
+		return linuxUnpublishable(err, sock)
+	}
+	return unpublishable(err)
 }
 
 // noForwardAPI reports whether err means the gateway has no forward API at
