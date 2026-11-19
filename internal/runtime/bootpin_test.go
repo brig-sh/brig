@@ -126,7 +126,10 @@ printf kernel > "$out/` + bootKernelName() + `"; printf initrd > "$out/` + bootI
 	}
 	var rec struct {
 		Ref, Digest, VerifiedDigest string
-		Files                       map[string]struct{ SHA256 string }
+		Files                       map[string]struct {
+			SHA256 string
+			Size   int64
+		}
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatal(err)
@@ -138,6 +141,12 @@ printf kernel > "$out/` + bootKernelName() + `"; printf initrd > "$out/` + bootI
 	if rec.Files[bootKernelName()].SHA256 != sha256Hex([]byte("kernel")) ||
 		rec.Files[bootInitrdName].SHA256 != sha256Hex([]byte("initrd")) {
 		t.Errorf("the record does not list the files fetched: %+v", rec.Files)
+	}
+	// hull on Linux refuses a kernel whose size differs from the record's, and
+	// reads an absent size as zero.
+	if rec.Files[bootKernelName()].Size != int64(len("kernel")) ||
+		rec.Files[bootInitrdName].Size != int64(len("initrd")) {
+		t.Errorf("the record does not give the size of each file fetched: %+v", rec.Files)
 	}
 
 	if err := orasPull(dir, BootFetch{}, nil, nil); err != nil {
@@ -172,5 +181,63 @@ func TestAReplaceFetchesOnlyWhereBrigChoseTheDirectory(t *testing.T) {
 	t.Setenv("BRIG_BOOT_ASSETS", dir)
 	if _, _, err := replaceBootArtifacts(locate, fetch, true); err != nil || fetched != 1 {
 		t.Fatalf("a replace fetched over a directory BRIG_BOOT_ASSETS named (%d, %v)", fetched, err)
+	}
+}
+
+// A record a brig without sizes wrote is completed for the files that still
+// match it, so hull on Linux stops refusing the boot. A file that changed
+// keeps the record as it was: filling in its size would make hull accept it.
+func TestFillFetchRecordSizesCompletesOnlyMatchingFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(bootKernelName(), "kernel")
+	write(bootInitrdName, "initrd")
+	record := `{"ref":"r@sha256:aa","digest":"sha256:aa","verifiedDigest":"sha256:aa","files":{` +
+		`"` + bootKernelName() + `":{"sha256":"` + sha256Hex([]byte("kernel")) + `"},` +
+		`"` + bootInitrdName + `":{"sha256":"` + sha256Hex([]byte("other")) + `"}}}`
+	write(fetchRecordName, record)
+
+	fillFetchRecordSizes(dir)
+
+	raw, err := os.ReadFile(filepath.Join(dir, fetchRecordName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec struct {
+		Ref, Digest, VerifiedDigest string
+		Files                       map[string]struct {
+			SHA256 string
+			Size   *int64
+		}
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Ref != "r@sha256:aa" || rec.Digest != "sha256:aa" || rec.VerifiedDigest != "sha256:aa" {
+		t.Errorf("the record lost what it named: %s", raw)
+	}
+	if k := rec.Files[bootKernelName()]; k.Size == nil || *k.Size != int64(len("kernel")) {
+		t.Errorf("the matching kernel did not get its size: %s", raw)
+	}
+	if i := rec.Files[bootInitrdName]; i.Size != nil || i.SHA256 != sha256Hex([]byte("other")) {
+		t.Errorf("an initrd that differs from the record got a size: %s", raw)
+	}
+}
+
+// A directory with no record gets none: the fill completes a record, it never
+// writes one.
+func TestFillFetchRecordSizesWritesNoRecord(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, bootKernelName()), []byte("kernel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fillFetchRecordSizes(dir)
+	if _, err := os.Stat(filepath.Join(dir, fetchRecordName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a record appeared where there was none: %v", err)
 	}
 }
