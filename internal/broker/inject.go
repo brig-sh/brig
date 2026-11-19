@@ -237,8 +237,8 @@ func fold(name string) string {
 // transport asks for none, forward asks for identity.
 //
 // On a passthrough route, Authorization and every other header that carries
-// the guest's own credential go upstream. The route has no inject, and the
-// other drops still apply.
+// the guest's own credential go upstream. The route's inject holds at most
+// headers.allow, which still filters, and the other drops still apply.
 //
 // ReverseProxy has already removed the hop-by-hop headers and the ones
 // Connection named.
@@ -318,8 +318,8 @@ func filterValues(h http.Header, a v1alpha1.HeaderAllow) int {
 
 // injectCredential sets the route's headers with value in place of {value},
 // or Authorization: Basic for a basicAuth route. A set header replaces any
-// guest header of the same name. A passthrough route has no inject, and
-// nothing is set.
+// guest header of the same name. A passthrough route sets nothing: its
+// inject is nil, or holds only headers.allow.
 func injectCredential(in *v1alpha1.Inject, h http.Header, value string) {
 	if in == nil {
 		return

@@ -155,7 +155,12 @@ func (r *Route) validate(expanded bool) error {
 		}
 	}
 
-	if r.Inject != nil {
+	if r.Passthrough && r.Inject != nil {
+		// validatePassthrough left only headers.allow, which carries nothing.
+		if err := r.Inject.Headers.validate(false); err != nil {
+			return err
+		}
+	} else if r.Inject != nil {
 		if err := r.Inject.validate(complete, expanded); err != nil {
 			return err
 		}
@@ -201,8 +206,12 @@ func (r *Route) validatePassthrough() error {
 	if r.Credential != nil {
 		return fmt.Errorf("a passthrough route takes no credential; the guest sends its own")
 	}
-	if r.Inject != nil {
-		return fmt.Errorf("a passthrough route takes no inject; the guest's credential goes upstream as sent")
+	// headers.allow is a request rule, and stays. The rest of inject says
+	// where the broker's credential goes.
+	if in := r.Inject; in != nil && (in.Headers == nil || len(in.Headers.Set) > 0 || len(in.Headers.Remove) > 0 ||
+		in.BasicAuth != nil || in.TLS != nil) {
+		return fmt.Errorf("a passthrough route takes no inject but inject.headers.allow; " +
+			"the guest's credential goes upstream as sent")
 	}
 	if r.Guest != nil {
 		for name, value := range r.Guest.Env {

@@ -98,8 +98,9 @@ type Route struct {
 	Upstream string `json:"upstream,omitempty"`
 	// Passthrough is optional. A passthrough route holds no credential: the
 	// guest sends its own, and the broker forwards it with the request after
-	// the request rules. It takes no credential and no inject, and only the
-	// claude-code and anthropic-api-key presets, or none.
+	// the request rules. It takes no credential, no inject but
+	// inject.headers.allow, and only the claude-code and anthropic-api-key
+	// presets, or none.
 	Passthrough bool `json:"passthrough,omitempty"`
 	// Credential is required unless the route is passthrough. It names the
 	// secret that the broker injects.

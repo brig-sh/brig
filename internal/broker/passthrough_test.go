@@ -173,6 +173,51 @@ func TestPassthroughDropsTheGuestRoutingHeaders(t *testing.T) {
 	}
 }
 
+// The preset's Anthropic-Beta list still applies on a passthrough route. The
+// mcp-client beta would let the upstream call MCP servers that the body named,
+// on hosts the sandbox's egress refuses, past request.body.tools.
+func TestPassthroughKeepsTheBetaAllowList(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{passthroughRoute(t, up.URL, &v1alpha1.RequestPolicy{
+		Body: &v1alpha1.RequestBody{Tools: &v1alpha1.ToolRules{Allow: []string{"Read"}}},
+	})}, arrivedAs("brig-a"))
+	h := guestHeader()
+	h.Set("Anthropic-Beta", "mcp-client-2025-04-04,claude-code-20250219")
+	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", h, userTurn("claude-sonnet-4-5", `"hi"`))
+	wantStatus(t, resp, http.StatusOK)
+	got := up.last(t)
+	if v := got.header.Values("Anthropic-Beta"); len(v) != 1 || v[0] != "claude-code-20250219" {
+		t.Errorf("upstream Anthropic-Beta = %q, want only the reviewed value", v)
+	}
+	if v := got.header.Get("X-Api-Key"); v != guestKey {
+		t.Errorf("upstream X-Api-Key = %q, want the guest's key", v)
+	}
+	wantAudit(t, r.lastAudit(), "dropped.anthropic-beta=1")
+}
+
+// On the claude-code preset the guest's own OAuth token is its Authorization,
+// so a passthrough route keeps that header while it filters Anthropic-Beta.
+func TestClaudeCodePassthroughKeepsAuthorization(t *testing.T) {
+	up := newUpstream(t, nil)
+	rt, err := policy.ExpandRoute(v1alpha1.Route{Name: "anthropic", Preset: v1alpha1.PresetClaudeCode, Passthrough: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Upstream = up.URL
+	r := newRig(t, up, []Route{{Policy: "test-claude-code", Route: rt}}, arrivedAs("brig-a"))
+	h := http.Header{"Content-Type": {"application/json"}, "Authorization": {"Bearer " + guestKey},
+		"Anthropic-Beta": {"oauth-2025-04-20,mcp-client-2025-04-04"}}
+	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", h, userTurn("claude-sonnet-4-5", `"hi"`))
+	wantStatus(t, resp, http.StatusOK)
+	got := up.last(t)
+	if v := got.header.Get("Authorization"); v != "Bearer "+guestKey {
+		t.Errorf("upstream Authorization = %q, want the guest's", v)
+	}
+	if v := got.header.Values("Anthropic-Beta"); len(v) != 1 || v[0] != "oauth-2025-04-20" {
+		t.Errorf("upstream Anthropic-Beta = %q, want only the reviewed value", v)
+	}
+}
+
 // A route that is not passthrough still never forwards the guest's
 // Authorization, which carries its session token.
 func TestCredentialRouteStillDropsAuthorization(t *testing.T) {

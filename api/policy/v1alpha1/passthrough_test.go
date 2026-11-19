@@ -41,6 +41,16 @@ func TestPassthroughRouteRefusals(t *testing.T) {
 		{"an inject", func(r *Route) {
 			r.Inject = &Inject{Headers: &HeaderInject{Remove: []string{"Authorization"}}}
 		}, "takes no inject"},
+		{"an inject that sets a header", func(r *Route) {
+			r.Inject = &Inject{Headers: &HeaderInject{Set: []Header{{Name: "X-Api-Key", Value: PlaceholderValue}},
+				Allow: []HeaderAllow{{Name: "Anthropic-Beta", Values: []string{"claude-code-20250219"}}}}}
+		}, "takes no inject"},
+		{"an inject with basicAuth", func(r *Route) {
+			r.Inject = &Inject{BasicAuth: &BasicAuth{Username: "x"}}
+		}, "takes no inject"},
+		{"an inject with tls", func(r *Route) {
+			r.Inject = &Inject{TLS: &TLSInject{CA: &CertificateRef{SecretRef: SecretRef{Name: "ca"}}}}
+		}, "takes no inject"},
 		{"a session token in the guest", func(r *Route) {
 			r.Guest.Env["MODELS_TOKEN"] = PlaceholderSessionToken
 		}, "has no session token"},
@@ -64,6 +74,17 @@ func TestPassthroughRouteRefusals(t *testing.T) {
 				t.Fatalf("Validate = %v, want an error with %q", err, c.want)
 			}
 		})
+	}
+}
+
+// inject.headers.allow is a request rule, not a credential, so a passthrough
+// route keeps it.
+func TestPassthroughRouteTakesHeadersAllow(t *testing.T) {
+	r := passthrough()
+	r.Inject = &Inject{Headers: &HeaderInject{
+		Allow: []HeaderAllow{{Name: "Anthropic-Beta", Values: []string{"claude-code-20250219"}}}}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a passthrough route with inject.headers.allow was refused: %v", err)
 	}
 }
 

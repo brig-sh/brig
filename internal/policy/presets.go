@@ -208,11 +208,21 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 
 // dropBrokerCredential removes from a preset's route what carries the
 // broker's credential, for a passthrough route: the credential with its
-// lifecycle, the inject, and each guest.env variable that holds the session
-// token. The upstream, the mode and the rest of guest.env stay. base is the
-// caller's own copy, decoded for this expansion.
+// lifecycle, inject.headers.set and remove, basicAuth and tls, and each
+// guest.env variable that holds the session token. The upstream, the mode
+// and the rest of guest.env stay. base is the caller's own copy, decoded for
+// this expansion.
+//
+// inject.headers.allow stays. It is a request rule, not a credential: the
+// Anthropic-Beta list keeps out the betas, such as mcp-client, that would let
+// the upstream reach hosts that request.body does not read.
 func dropBrokerCredential(base *v1alpha1.Route) {
-	base.Credential, base.Inject = nil, nil
+	base.Credential = nil
+	if in := base.Inject; in != nil && in.Headers != nil && len(in.Headers.Allow) > 0 {
+		base.Inject = &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{Allow: in.Headers.Allow}}
+	} else {
+		base.Inject = nil
+	}
 	if base.Guest == nil {
 		return
 	}
@@ -378,7 +388,9 @@ func setDefaults(r *v1alpha1.Route) {
 	if r.Mode == "" {
 		r.Mode = v1alpha1.ModeEndpoint
 	}
-	if r.Inject == nil {
+	// On a passthrough route the guest's Authorization carries its own
+	// credential, which goes upstream.
+	if r.Inject == nil || r.Passthrough {
 		return
 	}
 	// Copied before the change, because r can share these structs with the

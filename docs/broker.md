@@ -239,9 +239,9 @@ Before the request goes upstream, the broker removes:
 
 The names are compared in lower case.
 
-A passthrough route has no `inject`, so the broker keeps `Authorization` and
-every other header that carries the guest's own credential. It removes the
-rest of the list above.
+A passthrough route has no `inject.headers.set` or `remove`, so the broker
+keeps `Authorization` and every other header that carries the guest's own
+credential. It removes the rest of the list above.
 
 `inject.headers.allow` then keeps only the listed values of its header. A
 header that holds a comma-separated list is filtered item by item, and the
@@ -594,11 +594,12 @@ own, and the broker forwards it after the request rules. Use it when the
 guest already holds the key, and the broker is there to apply `request.allow`
 and `request.body`, not to keep the key from the guest.
 
-A passthrough route takes no `credential` and no `inject`, and its
-`guest.env` never holds `{session.token}`. On the `anthropic-api-key` and
-`claude-code` presets, the guest gets the route URL in `ANTHROPIC_BASE_URL`
-and keeps its own `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. The other
-presets need a credential of the broker's, and refuse `passthrough`.
+A passthrough route takes no `credential`, and no `inject` but
+`inject.headers.allow`. Its `guest.env` never holds `{session.token}`. On
+the `anthropic-api-key` and `claude-code` presets, the guest gets the route
+URL in `ANTHROPIC_BASE_URL` and keeps its own `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN`. The other presets need a credential of the
+broker's, and refuse `passthrough`.
 
 A passthrough route has no session token, so only where its request arrived
 binds it to the sandbox. The broker serves it for a request on the
@@ -610,8 +611,10 @@ the host can send a request there.
 The rest of the request path applies as on any route: the arrival, the
 canonical path, `request.allow`, `request.body`, the rewrite of denied tool
 calls in the answer, and the audit line. The response is not redacted, since
-the broker put no credential on the request. `Anthropic-Beta` values are not
-filtered, since that list is part of the preset's `inject`.
+the broker put no credential on the request. The preset's `Anthropic-Beta`
+list still applies, since it is a request rule and not a credential. A beta
+off the list, such as `mcp-client-2025-04-04`, is dropped before the request
+goes upstream.
 
 A policy that gives a pod a passthrough route still needs egress rules that
 refuse the upstream to the pod directly. Without them, the pod can send the

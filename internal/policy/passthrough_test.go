@@ -1,13 +1,15 @@
 package policy
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 )
 
-// A passthrough route on an Anthropic preset keeps the preset's upstream and
-// base URL, and none of what carries the broker's credential.
+// A passthrough route on an Anthropic preset keeps the preset's upstream,
+// base URL and Anthropic-Beta allow list, and none of what carries the
+// broker's credential.
 func TestExpandRouteDropsTheBrokerCredentialOfAPassthroughRoute(t *testing.T) {
 	for _, c := range []struct {
 		preset   v1alpha1.Preset
@@ -25,8 +27,17 @@ func TestExpandRouteDropsTheBrokerCredentialOfAPassthroughRoute(t *testing.T) {
 			if !out.Passthrough {
 				t.Error("the expanded route is not passthrough")
 			}
-			if out.Credential != nil || out.Inject != nil {
-				t.Errorf("the expanded route has credential %+v and inject %+v", out.Credential, out.Inject)
+			if out.Credential != nil {
+				t.Errorf("the expanded route has credential %+v", out.Credential)
+			}
+			in := out.Inject
+			if in == nil || in.Headers == nil || in.BasicAuth != nil || in.TLS != nil ||
+				len(in.Headers.Set) > 0 || len(in.Headers.Remove) > 0 {
+				t.Fatalf("the expanded route has inject %+v, want headers.allow alone", in)
+			}
+			if len(in.Headers.Allow) != 1 || in.Headers.Allow[0].Name != "Anthropic-Beta" ||
+				!slices.Contains(in.Headers.Allow[0].Values, "claude-code-20250219") {
+				t.Errorf("inject.headers.allow = %+v, want the preset's Anthropic-Beta list", in.Headers.Allow)
 			}
 			if out.Upstream != "https://api.anthropic.com" {
 				t.Errorf("upstream %q, want the preset's", out.Upstream)
