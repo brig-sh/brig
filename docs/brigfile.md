@@ -466,7 +466,6 @@ It may describe the guest. It may not reach your host or weaken the sandbox:
 | `network: shared` | It puts the sandbox on a network it shares with other sandboxes. A repository profile may ask for `isolated` or `offline` |
 | `hypervisor` | It names a hypervisor on your host, and that decides which network the sandbox can get |
 | an `image` that starts with `-` | The runtime would read it as a flag |
-| an MCP server without `preset`, in a policy | It sets its own `url`, so it would choose where one of your secrets goes. A repository policy may attach an MCP server only through a preset, such as `preset: nofire`. A policy in your own policy directory is not limited this way |
 
 A profile or a policy from `file:` or `inline:` also may not hold a control
 character in any string, a newline and a tab included. Its strings appear in
@@ -531,6 +530,16 @@ secret and the git URLs that the route takes over.
 
 A policy in your own policy directory is held to neither rule. There you can
 put a mirror in front of `github.com`.
+
+A repository policy names a secret in your store, never its source, and it
+may not choose where an MCP server sends that secret:
+
+| Field | Why it is refused |
+| --- | --- |
+| an MCP server without `preset`, or `url` or `inject` beside one | It would choose where one of your secrets goes. A repository policy may attach an MCP server only through a preset, such as `preset: nofire`, whose address is fixed. A policy in your own policy directory is not limited this way |
+
+A repository policy may still name any secret in your store. The plan and
+the approval show the name of each, with the server it goes to.
 
 ## Where Brig looks
 

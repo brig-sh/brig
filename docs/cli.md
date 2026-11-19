@@ -385,6 +385,9 @@ plan fails the same way.
 
 With no policy bound, `POLICY` reads `(none)` and `noPolicy` is `true`.
 
+A run with [MCP servers](policies.md#mcp-servers) has a `BROKER` row for
+each one, with its upstream, the name of its secret and its tools.
+
 #### Plan a Brigfile target
 
 `brig plan --target <name> [--session <name>] [-f <path>]` plans a target of
@@ -519,6 +522,7 @@ changed.
 | `noPolicy` | bool | `true` when no policy is bound |
 | `egress` | object, omitted when no policy is bound | `default` (`allow` or `deny`), and the `allow` and `deny` lists. Each rule has a `host` or a `cidr` |
 | `broker` | object, omitted for a run with no route | the `broker` of `brig info --json`, less what only a running broker knows: whether it runs, its pid and port, and the state of its refreshes. The text form prints it as the `BROKER` row, with `refused: see REFUSED` in place of that state |
+| `mcp` | list, omitted for a run with no MCP server | one entry per MCP server, sorted by name, below |
 | `credentials` | list | one entry per credential, below |
 | `argvExposed` | list of strings, omitted when empty | the variables whose values `BRIG_ENV_ARGV=1` puts on the runtime's command line, by name, sorted |
 | `limits` | object | `mem` in MB and `cpus` |
@@ -539,6 +543,17 @@ route, sorted by name.
 | `vends` | `true` when the route gives the guest AWS keys |
 | `gitInsteadOf` | the URL prefixes that git in the guest rewrites to the route. Omitted when there are none |
 | `guestEnv` | the names of the guest variables that the route sets. Omitted when there are none |
+
+Each entry of `mcp` has:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the server name |
+| `policy` | where the policy that declares the server comes from |
+| `preset` | the preset, omitted when the server has none |
+| `url` | where the broker sends calls |
+| `secrets` | the names of the secrets in your store that the broker reads for the server |
+| `tools` | `tools.allow` as the policy wrote it. `*` means every tool |
 
 #### The target object
 
@@ -920,6 +935,9 @@ See what is bound to a run, and whether Brig can enforce it:
 ```bash
 brig policy check claude
 ```
+
+`check` also lists each [MCP server](policies.md#what-check-and-plan-print-for-mcp-servers)
+of a policy, and warns for a server that allows every tool.
 
 [Policies](policies.md) covers the document format and what each network
 posture means.
