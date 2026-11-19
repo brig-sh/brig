@@ -220,3 +220,40 @@ func TestForgetAllRemovesMCP(t *testing.T) {
 		t.Errorf("calls = %v, want %v", p, want)
 	}
 }
+
+// ForgetMCP removes the MCP servers of a sandbox and never its routes or its
+// memory, so the tokens another exec's agent holds for those stay valid. It
+// stops the broker only when nothing is left, and a broker older than MCP,
+// which answers 404, has nothing to revoke.
+func TestForgetMCPKeepsRoutesAndMemory(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		remaining string
+		want      []string
+	}{
+		{200, "1", []string{"DELETE /mcp/sandboxes/brig-a"}},
+		{200, "0", []string{"DELETE /mcp/sandboxes/brig-a", "POST /stop"}},
+		{404, "", []string{"DELETE /mcp/sandboxes/brig-a"}},
+	} {
+		dir, calls := fakeControl(t, func(method, path string) (int, string) {
+			if path == "/stop" {
+				return 200, `{"stopping":true}`
+			}
+			if tc.status != 200 {
+				return tc.status, "404 page not found"
+			}
+			return 200, `{"removed":true,"remaining":` + tc.remaining + `}`
+		})
+		if err := ForgetMCP(dir, "brig-a"); err != nil {
+			t.Fatal(err)
+		}
+		if got := paths(calls()); !slices.Equal(got, tc.want) {
+			t.Errorf("status %d remaining %s: calls = %v, want %v", tc.status, tc.remaining, got, tc.want)
+		}
+	}
+	dir, _ := fakeControl(t, func(method, path string) (int, string) { return 500, "the mcp registry is broken" })
+	var ref *RefusedError
+	if err := ForgetMCP(dir, "brig-a"); !errors.As(err, &ref) || ref.Status != 500 {
+		t.Errorf("ForgetMCP = %v, want the 500 refusal", err)
+	}
+}

@@ -51,6 +51,13 @@ type fakeBroker struct {
 	memoryCA string
 	// routesForgotten are the sandboxes whose routes alone were removed.
 	routesForgotten []string
+	// mcp are the MCP registrations it holds, by sandbox. mcpRegistered,
+	// mcpMinted and mcpForgotten are the registrations, the MCP tokens and
+	// the removals of MCP alone asked for, in order.
+	mcp           map[string]injector.MCPSandbox
+	mcpRegistered []injector.MCPSandbox
+	mcpMinted     []injector.MCPMintRequest
+	mcpForgotten  []string
 }
 
 const fakeBrokerPort = 47821
@@ -91,6 +98,7 @@ func (f *fakeBroker) Forget(id string) error {
 	f.forgotten = append(f.forgotten, id)
 	f.calls = append(f.calls, "forget "+id)
 	delete(f.memory, id)
+	delete(f.mcp, id)
 	return nil
 }
 
@@ -132,6 +140,45 @@ func (f *fakeBroker) MintMemory(r injector.MemoryMintRequest) (string, error) {
 	}
 	f.memMinted = append(f.memMinted, r)
 	return "memory-token-" + r.Sandbox, nil
+}
+
+func (f *fakeBroker) RegisterMCP(s injector.MCPSandbox) (injector.AddResponse, error) {
+	if f.registerErr != nil {
+		return injector.AddResponse{}, f.registerErr
+	}
+	f.mcpRegistered = append(f.mcpRegistered, s)
+	f.calls = append(f.calls, "register-mcp "+s.ID)
+	f.running = true
+	if f.mcp == nil {
+		f.mcp = map[string]injector.MCPSandbox{}
+	}
+	f.mcp[s.ID] = s
+	var added injector.AddResponse
+	dir, err := injector.Dir()
+	if err != nil {
+		return added, err
+	}
+	if added.DivertSocket, err = injector.DivertSocket(dir, s.ID); err != nil {
+		return added, err
+	}
+	added.CA = cmp.Or(f.ca, testBrigCA())
+	return added, nil
+}
+
+// MintMCP mints only for a sandbox it holds, as the broker does.
+func (f *fakeBroker) MintMCP(r injector.MCPMintRequest) (string, error) {
+	if _, ok := f.mcp[r.Sandbox]; !ok {
+		return "", errors.New("the credential broker refused: sandbox " + r.Sandbox + " is not registered for mcp")
+	}
+	f.mcpMinted = append(f.mcpMinted, r)
+	return "mcp-token-" + r.Sandbox, nil
+}
+
+func (f *fakeBroker) ForgetMCP(id string) error {
+	f.mcpForgotten = append(f.mcpForgotten, id)
+	f.calls = append(f.calls, "forget-mcp "+id)
+	delete(f.mcp, id)
+	return nil
 }
 
 func (f *fakeBroker) Status() (injector.Status, bool) {

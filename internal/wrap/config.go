@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,8 +262,9 @@ type Config struct {
 	routes      []v1alpha1.Route
 	routePolicy map[string]string
 	routesErr   error
-	// routeSkipped are the secrets the routes inject, which stay on the
-	// host whether or not the profile would have delivered them.
+	// routeSkipped are the secrets the routes inject and the MCP servers'
+	// credentials name, which stay on the host whether or not the profile
+	// would have delivered them.
 	routeSkipped []string
 	// routeDecls are the profile's secret declarations before the routed
 	// ones were dropped, for the command a refusal of a missing one names.
@@ -276,9 +278,17 @@ type Config struct {
 	// memoryVars are what serveMemory got for this exec: the memory token
 	// and what goes with it. See memory.go.
 	memoryVars []runtime.Var
-	// brigCA is the brig CA certificate the broker handed serveRoutes or
-	// serveMemory for a guest that reaches brig.internal, in PEM, or "". It
-	// is checked to be one certificate and no key. See briginternal.go.
+	// mcp are the MCP servers of the policies bound to this run, expanded,
+	// with the policy that declares each, and mcpErr is why they could not
+	// be merged. mcpVars are what serveMCP got for this exec: the MCP token
+	// and what goes with it. See mcp.go.
+	mcp     []policy.MCPEntry
+	mcpErr  error
+	mcpVars []runtime.Var
+	// brigCA is the brig CA certificate the broker handed serveRoutes,
+	// serveMemory or serveMCP for a guest that reaches brig.internal, in
+	// PEM, or "". It is checked to be one certificate and no key. See
+	// briginternal.go.
 	brigCA string
 	// routeSetup is the sandbox setup the route modes besides endpoint asked
 	// serveRoutes for, which the boot hands the runtime. See routemode.go.
@@ -783,11 +793,17 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			}
 		}
 	}
+	// MCP servers take the posture as routes do: the guest reaches them on
+	// the broker's own address. A secret an MCP server's credential names
+	// stays on the host as a route's does.
+	mcp, mcpErr := policy.MCPServers(bound)
 	var routeSkipped []string
 	var routeDecls []profile.SecretDecl
-	if routesErr == nil && len(routes) > 0 {
+	if (routesErr == nil && len(routes) > 0) || (mcpErr == nil && len(mcp) > 0) {
 		routeDecls = t.Secrets
-		t, bindings, routeSkipped = withRoutes(t, bindings, routes)
+		brokered := brokeredSecrets(routes)
+		maps.Copy(brokered, brokeredMCPSecrets(mcp))
+		t, bindings, routeSkipped = withBrokered(t, bindings, brokered)
 		if network != NetOffline {
 			network = NetIsolated
 		}
@@ -875,6 +891,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		routesErr:      routesErr,
 		routeSkipped:   routeSkipped,
 		routeDecls:     routeDecls,
+		mcp:            mcp,
+		mcpErr:         mcpErr,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		RuntimePolicy:  runtimePolicy(env),

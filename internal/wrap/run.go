@@ -135,6 +135,9 @@ func (c *Config) sessionRefusal() error {
 	if err := c.memoryRefusal(); err != nil {
 		return err
 	}
+	if err := c.mcpRefusal(); err != nil {
+		return err
+	}
 	// Load also serves info, stop and rm. An unavailable inspector must not
 	// prevent those commands from reporting or removing a legacy sandbox.
 	if c.netRecovery == networkUnknown && !c.netExplicit {
@@ -300,19 +303,29 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// request, and the tokens of this exec are minted here. With no
 			// route left, a policy was detached from the running sandbox,
 			// and its registration goes, so the tokens its agent holds are
-			// refused. Its memory stays registered: removing it would
-			// refuse the memory token of an agent another exec started.
+			// refused. Its memory and its MCP servers stay registered:
+			// removing them would refuse the tokens of an agent another
+			// exec started. With no MCP server left, a policy that
+			// declared one was detached, and its MCP registration goes,
+			// so its MCP tokens are refused; the routes and the memory
+			// stay, for the same reason.
 			if len(c.routes) == 0 {
-				if c.memoryKey == "" {
+				if c.memoryKey == "" && len(c.mcp) == 0 {
 					c.forgetRoutes()
 				} else {
 					c.forgetRoutesOnly()
 				}
 			}
+			if len(c.mcp) == 0 && (len(c.routes) > 0 || c.memoryKey != "") {
+				c.forgetMCPOnly()
+			}
 			if err := c.serveRoutes(set); err != nil {
 				return err
 			}
 			if err := c.serveMemory(); err != nil {
+				return err
+			}
+			if err := c.serveMCP(); err != nil {
 				return err
 			}
 			// The guest has confirmed this workspace, so record it. Nothing has
@@ -363,7 +376,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// when it serves no other, rather than leave it registered for nothing.
 	booted := false
 	defer func() {
-		if err != nil && !booted && (len(c.routes) > 0 || c.memoryKey != "") {
+		if err != nil && !booted && (len(c.routes) > 0 || c.memoryKey != "" || len(c.mcp) > 0) {
 			c.forgetRoutes()
 		}
 	}()
@@ -408,11 +421,21 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err := c.serveMemory(); err != nil {
 		return err
 	}
+	if err := c.serveMCP(); err != nil {
+		return err
+	}
 	// Said once, at boot, as the image verification is: an exec has the store
 	// the sandbox booted with, and under brigd a line on every ensure would
 	// warn on every answer.
 	if c.memoryKey != "" {
 		c.warnf("memory: %s", c.memoryLabel)
+	}
+	if len(c.mcp) > 0 {
+		names := make([]string, len(c.mcp))
+		for i, e := range c.mcp {
+			names[i] = e.Server.Name
+		}
+		c.warnf("mcp: %s", strings.Join(names, ", "))
 	}
 
 	// The share below is a path, and the runtime resolves it again on its own
@@ -1065,7 +1088,8 @@ const projectVar = "BRIG_PROJECT"
 //
 // The route variables come last, so a route value replaces a profile value of
 // the same name, as the spec of guest.env says. The memory variables follow
-// them, so the memory token is the one brig minted whatever else names it.
+// them, and the MCP variables follow those, so each token is the one brig
+// minted whatever else names it.
 //
 // BRIG_PROJECT is where the project is mounted, set only when one is. A
 // process the sandbox did not start through brig -- an SSH session, whose
@@ -1076,7 +1100,7 @@ const projectVar = "BRIG_PROJECT"
 // (withoutProjectVar); the filter here is what holds the promise for a set
 // built any other way.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
-	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+len(c.memoryVars)+1)
+	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+len(c.memoryVars)+len(c.mcpVars)+1)
 	for _, v := range set.Vars {
 		if v.Name != projectVar {
 			vars = append(vars, v)
@@ -1088,6 +1112,7 @@ func (c *Config) guestEnv(set creds.Set) []runtime.Var {
 		}
 	}
 	vars = append(vars, c.memoryVars...)
+	vars = append(vars, c.mcpVars...)
 	if c.GuestProject != "" {
 		vars = append(vars, runtime.Var{Name: projectVar, Value: c.GuestProject})
 	}

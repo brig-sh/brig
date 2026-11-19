@@ -1274,7 +1274,7 @@ rm -rf "$ep_state"
 # Agent memory on hvi, with no route. The gateway answers brig.internal and
 # diverts its port 443 to the broker's socket, and nothing else: no
 # link-local address. The guest gets its memory token in the environment,
-# never on a command line, and an MCP configuration at /brig/memory/mcp.json
+# never on a command line, and an MCP configuration at /brig/mcp/mcp.json
 # that names the token's variable and holds no token. The broker serves the
 # store to that token over the socket and refuses another with 401. brig rm
 # --all removes the sandbox and its socket, and keeps the store.
@@ -1309,7 +1309,7 @@ memrc=$?
 memgw="$(grep '^argv: network-gateway --socket' "$STUB_LOG")"
 memaddr="$(printf '%s' "$memgw" | sed -n 's/.*--host brig\.internal=\([0-9.]*\).*/\1/p')"
 memsock="$(printf '%s' "$memgw" | sed -n "s/.*--divert ${memaddr}:443=\\([^ ]*\\).*/\\1/p")"
-memcfg="$STUB_STATE.fed._brig_memory_mcp.json"
+memcfg="$STUB_STATE.fed._brig_mcp_mcp.json"
 memtoken="$(sed -n 's/^env-memory-token://p' "$STUB_LOG" | head -1)"
 memwant='{"mcpServers":{"brig-memory":{"type":"http","url":"https://brig.internal/brig-claude-code/memory","headers":{"Authorization":"Bearer ${BRIG_MEMORY_TOKEN}"}}}}'
 if [ "$memrc" != 0 ]; then
@@ -1323,7 +1323,7 @@ elif [ -z "$memtoken" ] || [ "$memtoken" = "<unset>" ]; then
 elif grep '^argv:' "$STUB_LOG" | grep -qF -- "$memtoken" || grep -qF -- "$memtoken" "$WORK/mem-on.out"; then
   bad "the memory token was on a command line or in the run's output"
 elif [ "$(cat "$memcfg" 2>/dev/null)" != "$memwant" ]; then
-  bad "the guest did not get the MCP configuration at /brig/memory/mcp.json: $(cat "$memcfg" 2>&1)"
+  bad "the guest did not get the MCP configuration at /brig/mcp/mcp.json: $(cat "$memcfg" 2>&1)"
 elif ! grep -q '^env-auto-memory:1$' "$STUB_LOG" || ! grep -q '^env-node-ca:/brig/ca/brig.pem$' "$STUB_LOG"; then
   bad "the guest of a memory run is missing CLAUDE_CODE_DISABLE_AUTO_MEMORY or the CA: $(grep '^env-auto-memory\|^env-node-ca' "$STUB_LOG")"
 elif ! grep -q '^brig: memory: team$' "$WORK/mem-on.out"; then

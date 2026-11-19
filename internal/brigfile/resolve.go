@@ -114,6 +114,9 @@ func (l *Loaded) resolve(root *os.Root) error {
 		if err := refuseRepositoryRoutes(pol.Spec.Routes); err != nil {
 			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
 		}
+		if err := refuseMCPWithoutPreset(pol); err != nil {
+			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
+		}
 		l.Policies[alias] = ResolvedPolicy{Alias: alias, Source: src, Policy: pol, Doc: doc}
 	}
 	for _, alias := range sortedKeys(l.Project.Profiles) {

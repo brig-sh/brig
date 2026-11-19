@@ -282,6 +282,8 @@ needs that is not in your store.
 - the egress rules
 - each route: where it sends requests, which secrets in your store it uses,
   and whether it hands the guest cloud keys
+- each MCP server: where it sends calls, which secret in your store it uses,
+  and which tools it allows
 - the image reference, and whether a digest pins it
 - the memory and the vCPUs
 - the network that a flag or a setting asked for, and the network the
@@ -464,6 +466,7 @@ It may describe the guest. It may not reach your host or weaken the sandbox:
 | `network: shared` | It puts the sandbox on a network it shares with other sandboxes. A repository profile may ask for `isolated` or `offline` |
 | `hypervisor` | It names a hypervisor on your host, and that decides which network the sandbox can get |
 | an `image` that starts with `-` | The runtime would read it as a flag |
+| an MCP server without `preset`, in a policy | It sets its own `url`, so it would choose where one of your secrets goes. A repository policy may attach an MCP server only through a preset, such as `preset: nofire`. A policy in your own policy directory is not limited this way |
 
 A profile or a policy from `file:` or `inline:` also may not hold a control
 character in any string, a newline and a tab included. Its strings appear in

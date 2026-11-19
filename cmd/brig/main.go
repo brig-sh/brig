@@ -900,10 +900,11 @@ func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 // what that program says. So a target gets the flag only when the Brigfile
 // runs the claude-code brig ships, and only for a session with a name.
 //
-// For a run with memory it adds --mcp-config with the path of the file that
-// points Claude Code at its store, under the same rule. The flag adds the
-// file's servers to the user's own. The file names the token's variable, so
-// the token stays in the environment. The flag and path are one argument
+// For a run with memory or an MCP server it adds --mcp-config with the path
+// of the one file that points Claude Code at its store and its servers,
+// under the same rule. The flag adds the file's servers to the user's own.
+// The file names the tokens' variables, so the tokens stay in the
+// environment. The flag and path are one argument
 // because --mcp-config reads every later word as a file until the next flag,
 // prompt included.
 func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
@@ -915,7 +916,7 @@ func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
 		return tail
 	}
 	var head []string
-	if path := cfg.MemoryMCPConfig(); path != "" {
+	if path := cfg.MCPConfig(); path != "" {
 		head = append(head, "--mcp-config="+path)
 	}
 	if name != "" {
