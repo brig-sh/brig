@@ -62,14 +62,14 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc22 is the pin. It carries hull, built from a pinned
-# commit, and the urunc that reads hull's gateway annotations, so a sandbox on
-# hull on Linux joins a network gateway; its kernel and initrd are the
+# asset it wanted. rc23 is the pin. It carries hull v0.2.0, built from its
+# tagged commit, and the urunc that reads hull's gateway annotations, so a
+# sandbox on hull on Linux joins a network gateway; its kernel and initrd are the
 # hull-assets release signed for that urunc, and its hvi fails the boot when it
 # cannot use the gateway socket, where the one before booted the guest with no
 # network. It records the sha256 of its kernel and initrd, and keeps that
 # record with the release's signed checksums.txt where brig checks it before a
-# boot. Its guest kernel is the 6.18 LTS with Landlock,
+# boot. Its guest kernel is 6.18.64, the 6.18 LTS with Landlock,
 # its amd64 kernel brings up every vCPU --cpus asks for, and its urunc boots
 # arm64 guests under cloud-hypervisor. Its cloud-hypervisor is v54.0, which
 # keeps the virtio-net offloads off by default. It ships hvi, the monitor brig
@@ -80,7 +80,7 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 # model is. A user install makes the host packages and the subuid range itself
 # when the user has sudo.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc22
+RUNTIME_VERSION=v0.1.0-rc23
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
