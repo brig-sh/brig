@@ -56,7 +56,7 @@ flags:
                 with render-cilium: a rule to the EKS Pod Identity agent, and
                 a rule to every pod and node of the cluster
       --broker-address ADDR, --dns-search DOMAIN
-                with render-cilium: the node broker's address or CIDR
+                with render-cilium: the node broker's address
                 (default: 169.254.171.1), and a search domain of the pod's
                 resolver beyond cluster.local (repeatable)
   -n, --name    with attach/detach/check: one session by name, not every run

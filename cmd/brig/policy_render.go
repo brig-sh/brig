@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/internal/policy/cilium"
+	"github.com/brig-sh/brig/internal/wrap"
+	"sigs.k8s.io/yaml"
 )
 
 // renderCiliumPolicy prints the CiliumNetworkPolicy for the egress section of
@@ -62,10 +64,21 @@ func renderCiliumPolicy(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := cilium.RenderYAML(&p, o)
+	np, err := cilium.Render(&p, o)
 	if err != nil {
 		return err
 	}
-	_, err = os.Stdout.Write(out)
-	return err
+	out, err := yaml.Marshal(np)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stdout.Write(out); err != nil {
+		return err
+	}
+	// Cilium joins the allow rules of every policy that selects a pod, so
+	// another policy that allows the host lets it through.
+	for _, h := range np.DroppedDenyHosts() {
+		wrap.Stderr.Say(fmt.Sprintf("deny host %q is left out: the object denies it only by not allowing it, so it stays denied only while no other CiliumNetworkPolicy for these pods allows it", h))
+	}
+	return nil
 }

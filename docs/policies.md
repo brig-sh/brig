@@ -1225,8 +1225,9 @@ rule to the cluster entity, every pod and node of the cluster on every port.
 A brig policy's egress names the hosts a sandbox reaches outside. A pod on a
 cluster also talks to the services beside it, a database or a queue, which
 the policy does not name. Without the flag a deny default cuts those off.
-`--broker-address` takes the node broker's address or CIDR, when it is not
-`169.254.171.1`. `--dns-search` is repeatable and adds a search domain of
+`--broker-address` takes the node broker's address, when it is not
+`169.254.171.1`. A range is refused, because the rule would open port 443 to
+all of it. `--dns-search` is repeatable and adds a search domain of
 the pod's resolver, as described below. A flag value Kubernetes or Cilium
 would not take is refused as a usage error.
 
@@ -1238,14 +1239,22 @@ The mapping:
 | `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
 | allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. Cilium's `*` does not cross a dot, so a leading `*.` becomes `**.` and then `*.`, `*.*.` and so on, up to five labels. See below |
 | allow `cidr` | `toCIDR`, masked. An IPv4-mapped CIDR such as `::ffff:10.0.0.0/104` is written as the IPv4 CIDR it names, `10.0.0.0/8`, as brig's enforcer reads it |
-| deny `cidr` | `egressDeny` with `toCIDR`, written the same way |
-| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host. It is refused under `--cluster`, because the cluster rule lets through any pod or node the host may name, such as one under `*.svc.cluster.local` |
+| deny `cidr` | `egressDeny` with `toCIDR`, written the same way. Refused under `--cluster`, because no CIDR rule takes back what the cluster rule lets through. See below |
+| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied, and stderr names it. See below. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host. It is refused under `--cluster`, because the cluster rule lets through any pod or node the host may name, such as one under `*.svc.cluster.local` |
 | `spec.routes` | a rule to the broker's address (`169.254.171.1/32`, or `--broker-address`) on port 443, where the node broker serves `brig.internal`. A CIDR rule, not the `host` entity: the address has link scope on the node and Cilium does not count it as the host |
 
 Cilium does not apply a CIDR rule to the address of a pod or a node of the
 cluster. A deny `cidr` that covers them does not block them, as brig's
 enforcer would. Under an allow default or `--cluster` the pod still reaches
 them. An allow `cidr` does not open them either; `--cluster` does.
+
+A dropped deny host stays denied only while no other CiliumNetworkPolicy
+that selects the same pods allows it. Cilium joins the allow rules of every
+policy that selects a pod, and a denial here is only the absence of an allow
+rule. brig applies `deny` over `allow` across every bound policy, and it
+refuses every name on an address it denies for one name. Neither holds once
+the objects are applied side by side. Render one object for the policies
+bound to a set of pods, or keep the deny host out of the others' allows.
 
 The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
 makes `toFQDNs` work. Under an allow default the rule answers every lookup.
