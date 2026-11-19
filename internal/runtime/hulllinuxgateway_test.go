@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
@@ -107,18 +108,66 @@ func TestTwoIsolatedSandboxesOnLinuxHullShareNoGateway(t *testing.T) {
 }
 
 // Negative: `brig rm --all` never stops a shared gateway on hull on Linux
-// that it cannot ask for its guests, as it cannot ask one from a hull older
-// than GET /members. The process table does not show them there (see
-// PruneSharedNetwork), so stopping it would take the network of every shared
+// that it cannot ask for its guests while hull lists an instance on it, or
+// cannot say whether one is. It cannot ask a gateway from a hull older than
+// GET /members, nor one whose API socket is gone, and the process table does
+// not show the guests there (see PruneSharedNetwork). hull's instances are
+// then all that stands between the prune and the network of every shared
 // sandbox still running.
 func TestLinuxHullNeverStopsASharedGatewayItCannotAsk(t *testing.T) {
-	sock := scratchSharedGateway(t)
-	pid := startHelperGateway(t, sock, true, false)
-	if noInstancesHull(t).PruneSharedNetwork() {
-		t.Error("PruneSharedNetwork reported the shared gateway stopped")
+	for _, c := range []struct {
+		name string
+		api  bool
+		env  []string
+	}{
+		{"no /members", true, nil},
+		{"no API socket", true, []string{"BRIG_TEST_GATEWAY_DEAF=1"}},
+		{"started without --api", false, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sock := scratchSharedGateway(t)
+			pid := runHelperGateway(t, sock, c.api, c.env...)
+			for why, h := range map[string]*hull{
+				"an instance is running on it": instancesHull(t, []string{"brig-a running"},
+					map[string]string{"brig-a": inspectRecord("brig-a", "gateway", sock)}),
+				"hull cannot list its instances": instancesHull(t, nil, nil),
+			} {
+				if h.PruneSharedNetwork() {
+					t.Errorf("%s: PruneSharedNetwork reported the shared gateway stopped", why)
+				}
+				if !ownsGateway(pid, sock) || !gatewayReachable(sock) {
+					t.Fatalf("%s: the shared gateway was stopped under the guests it may still serve", why)
+				}
+			}
+		})
 	}
-	if !ownsGateway(pid, sock) || !gatewayReachable(sock) {
-		t.Error("the shared gateway was stopped under the guests it may still serve")
+}
+
+// `brig rm --all` on hull on Linux stops a shared gateway that will never
+// list its guests once hull lists no instance on it: one from a hull older
+// than GET /members, and one whose API socket is gone. Kept, it was there for
+// good, since a boot there reuses any gateway that answers, and a run that
+// publishes through it was refused with no remedy that worked.
+func TestLinuxHullStopsASharedGatewayThatCannotListItsGuests(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		api  bool
+		env  []string
+	}{
+		{"no /members", true, nil},
+		{"no API socket", true, []string{"BRIG_TEST_GATEWAY_DEAF=1"}},
+		{"started without --api", false, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sock := scratchSharedGateway(t)
+			pid := runHelperGateway(t, sock, c.api, c.env...)
+			if !noInstancesHull(t).PruneSharedNetwork() {
+				t.Error("PruneSharedNetwork kept a shared gateway hull lists no instance on")
+			}
+			if !gatewayGone(pid, sock) {
+				t.Error("the shared gateway is still up")
+			}
+		})
 	}
 }
 
@@ -281,5 +330,63 @@ func TestLinuxHullBootsAPolicyOnItsOwnGateway(t *testing.T) {
 				t.Errorf("the sandbox joined %s, want a gateway of its own (sandbox-*.sock)", sock)
 			}
 		})
+	}
+}
+
+// The refusal hull on Linux gives for a gateway that cannot publish names a
+// remedy that works there, per cause and per posture. A gateway from a hull
+// without /forwards needs hull upgraded and the gateway stopped, since the
+// upgrade leaves it running. A shared gateway is stopped by `brig rm --all`,
+// and a sandbox's own gateway by `brig stop` or by its pid. An error of
+// another kind is returned as it came.
+func TestTheLinuxRefusalOfAGatewayThatCannotPublishNamesWhatWorks(t *testing.T) {
+	scratchSharedGateway(t)
+	shared, err := gatewaySocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := mustSocket(t, "brig-s")
+	tooOld := errors.Join(errors.New("wrapped"), ErrNoForwardAPI)
+	noSocket := &os.PathError{Op: "dial", Path: "gw.api", Err: syscall.ECONNREFUSED}
+	for _, c := range []struct {
+		name  string
+		err   error
+		sock  string
+		want  []string
+		never []string
+	}{
+		{"shared, no /forwards", tooOld, shared,
+			[]string{"cannot publish a port", "Upgrade hull", "outlives the upgrade", "`brig rm --all`"},
+			[]string{"`brig stop", "Upgrade the runtime"}},
+		{"shared, no API socket", noSocket, shared,
+			[]string{"has no socket", "`brig rm --all`", "does not replace it"},
+			[]string{"Upgrade", "older brig", "`brig stop"}},
+		{"isolated, no /forwards", tooOld, own,
+			[]string{"Upgrade hull", "`brig stop` of it", gatewayPIDPath(own), "`brig run --publish`"},
+			[]string{"`brig rm --all`", "shared gateway"}},
+		{"isolated, no API socket", noSocket, own,
+			[]string{"this sandbox's own gateway", "`brig stop` of it", gatewayPIDPath(own)},
+			[]string{"Upgrade", "older brig", "shared gateway"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := linuxUnpublishable(c.err, c.sock)
+			if !errors.Is(got, c.err) {
+				t.Errorf("the gateway's error was lost: %v", got)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(got.Error(), want) {
+					t.Errorf("the refusal does not say %q: %s", want, got)
+				}
+			}
+			for _, not := range c.never {
+				if strings.Contains(got.Error(), not) {
+					t.Errorf("the refusal says %q: %s", not, got)
+				}
+			}
+		})
+	}
+	other := errors.New("something else")
+	if got := linuxUnpublishable(other, shared); got != other {
+		t.Errorf("an unrelated error was rewritten: %v", got)
 	}
 }

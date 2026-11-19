@@ -778,8 +778,10 @@ func (h *hull) runLinux(spec RunSpec) error {
 		// rather than leaving a sandbox up with an envelope naming a hole
 		// nothing is listening on. The gateway forwards to an address, and the
 		// guest need not be up yet for the listener to exist. See
-		// gatewayapi.go.
-		if err := reconcilePublications(gatewaySock, addrOf(gatewayCidr), spec.Publish); err != nil {
+		// gatewayapi.go. A gateway that cannot publish is refused with the
+		// remedy of hull on Linux; see linuxUnpublishable.
+		refuse := func(err error) error { return linuxUnpublishable(err, gatewaySock) }
+		if err := reconcilePublicationsWith(gatewaySock, addrOf(gatewayCidr), spec.Publish, refuse); err != nil {
 			withdrawPublications(spec.Name)
 			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
 		}
@@ -1580,7 +1582,7 @@ func (h *hull) Publish(name string, p Publication) error {
 	// another sandbox's port off the shared gateway.
 	live, err := publishedOn(sock, guestIP)
 	if err != nil {
-		return unpublishable(err)
+		return h.unpublishableOn(err, sock)
 	}
 	// An identical forward is already serving this publication. The gateway
 	// keys one by protocol and local address, so asking for it again comes
@@ -1648,7 +1650,7 @@ func (h *hull) Unpublish(name string, p Publication) error {
 				"brig cannot rule out that it holds the forward. A forward it holds "+
 				"stays until that gateway stops", p, name, err)
 		}
-		return unpublishable(err)
+		return h.unpublishableOn(err, sock)
 	}
 	for _, q := range live {
 		if q.Same(p) {
@@ -1796,14 +1798,23 @@ func (h *hull) PruneNetworks(inUse []string) int {
 // hull on Linux asks two more things, because the process table cannot show
 // the guests there: urunc binds the socket into hvi's root, so hvi's argv
 // names a path inside it that every gateway guest shares, never the socket on
-// the host. The gateway's GET /members must list no guest, and a gateway that
-// cannot answer it, one from a hull older than /members, is never stopped.
-// And no instance hull lists may be on the gateway; see onSharedGateway. A
-// guest is listed by the gateway only once its VMM has connected, which can
-// be after `hull run` returns and the boot's lease is gone, while hull lists
-// the instance from then on. Stopping a gateway nobody appears to use would
-// take the network of every shared sandbox still running. Kept, it costs one
-// idle process.
+// the host. The gateway's GET /members must list no guest. And no instance
+// hull lists may be on the gateway; see onSharedGateway. A guest is listed by
+// the gateway only once its VMM has connected, which can be after `hull run`
+// returns and the boot's lease is gone, while hull lists the instance from
+// then on. Stopping a gateway nobody appears to use would take the network of
+// every shared sandbox still running. Kept, it costs one idle process.
+//
+// A gateway that will never answer GET /members, because its API socket is
+// gone or it is from a hull older than /members, is decided by hull's
+// instances alone. Kept, it was there for good: a boot on hull on Linux
+// reuses whatever gateway answers (see ensureSharedGateway), so a gateway
+// that cannot publish a port was the one every later boot found, and no
+// command stopped it. `brig rm --all` is the remedy linuxUnpublishable names
+// for it. What that gives up is a guest hull does not list, such as one
+// booted from another hull store, which only GET /members would show. A
+// gateway whose answer fails in any other way is still kept: that failure
+// says nothing about whether it was ever able to answer.
 func (h *hull) PruneSharedNetwork() bool {
 	sock, err := gatewaySocket()
 	if err != nil {
@@ -1820,7 +1831,8 @@ func (h *hull) PruneSharedNetwork() bool {
 		return false
 	}
 	if h.linux {
-		if guests, known := gatewayMembers(sock); !known || guests > 0 {
+		guests, err := gatewayMemberCount(sock)
+		if err == nil && guests > 0 || err != nil && !noForwardAPI(err) {
 			return false
 		}
 		if h.onSharedGateway(sock) {

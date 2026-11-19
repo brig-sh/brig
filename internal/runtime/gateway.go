@@ -34,8 +34,9 @@ import (
 //     the shared network. It is host-wide: every brig state dir and every
 //     session on this host uses the same socket, so whether anything is on it
 //     is read from the process table on macOS (see sharedGatewayProcs), and
-//     from the gateway's guest list and hull's instances on hull on Linux
-//     (see hull.PruneSharedNetwork).
+//     from the gateway's guest list and hull's instances on hull on Linux,
+//     or from the instances alone for a gateway too old to list its guests
+//     or whose API socket is gone (see hull.PruneSharedNetwork).
 //   - isolated: a gateway per sandbox, each on a /30 of its own out of the
 //     same space. No other sandbox is on that network, whatever the backend
 //     would have done with a shared one.
@@ -277,9 +278,11 @@ func ensureGateway(bin string) (string, func(), error) { return ensureSharedGate
 // argv names the socket. On hull on Linux it does not: urunc binds the socket
 // into hvi's root and hvi names it there, at a path every gateway guest
 // shares. With no way to tell an unused gateway from one with guests, an old
-// one is reused rather than stopped. An old one reused there may serve no
-// /forwards API, and a run that publishes through it is refused by
-// unpublishable, which names the upgrade.
+// one is reused rather than stopped, and an upgrade of hull leaves it running.
+// One reused there may serve no /forwards API, or have lost its API socket,
+// and a run that publishes through it is refused by linuxUnpublishable. That
+// refusal names `brig rm --all`, because PruneSharedNetwork stops such a
+// gateway once hull lists no instance on it, and a boot here never does.
 func ensureSharedGateway(bin string, membersSeen bool) (string, func(), error) {
 	sock, err := gatewaySocket()
 	if err != nil {
@@ -608,7 +611,8 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 	//
 	// Every hull release takes --api: network-gateway has had it since
 	// v0.1.0-rc3, the first tag. What a hull before rc29 lacks is the
-	// /forwards endpoint behind it, and unpublishable names that.
+	// /forwards endpoint behind it, and unpublishable and linuxUnpublishable
+	// name that.
 	args = append(args, "--api", gatewayAPISocket(sock))
 	args = append(args, policy.args()...)
 	// gatewayIP is one brig derived. Were it not an address, a divert of it

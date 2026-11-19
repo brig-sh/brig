@@ -395,8 +395,10 @@ On an old build, Brig drops one feature at a time:
   the addresses on those networks. Guests on one shared gateway can reach
   each other. `brig rm --all` stops the shared gateway once no guest is on
   it. On Linux the process table does not show the guests, so Brig asks the
-  gateway (`GET /members`) and checks that hull lists no instance on it. It
-  keeps a gateway from a hull too old to answer, and one it cannot check.
+  gateway (`GET /members`) and checks that hull lists no instance on it. A
+  gateway from a hull too old to answer, or one whose API socket is gone,
+  goes once hull lists no instance on it. Brig keeps a gateway whose answer
+  fails, and one it cannot check.
   On Linux, hvi joins the gateway as the image's user, and only the user
   who runs Brig may write to the gateway's socket. A guest whose image user
   maps to another host user boots with no network. On a rootless install
@@ -413,11 +415,20 @@ binary beside hull, a working gateway and the boot bundle.
 `BRIG_HYPERVISOR=vz` with `BRIG_NETWORK=shared` moves those profiles to
 `vz`, and overrides the isolation that `vz` cannot provide.
 
-<details><summary>A gateway started by an older Brig</summary>
+<details><summary>A gateway that cannot publish a port</summary>
 
 A gateway that an older Brig started has no API socket, so it cannot publish
-a port. The next boot replaces that gateway when no sandbox is on it and no
-other boot is starting on it.
+a port. On macOS, the next boot replaces that gateway when no sandbox is on
+it and no other boot is starting on it.
+
+On Linux, a boot reuses the shared gateway that it finds, and an upgrade of
+hull leaves a running gateway in place. A gateway there that cannot publish
+is one from a hull without the `/forwards` API, or one whose API socket is
+gone. `brig rm --all` removes every sandbox of the runtime, then stops that
+gateway once hull lists no instance on it. The next boot starts a new one.
+An isolated sandbox has a gateway of its own, which `brig stop` stops with
+the sandbox. With no sandbox running, stop the gateway process. Its pid is in
+`sandbox-<name>.pid` beside the gateway socket. The refusal names the path.
 
 </details>
 
