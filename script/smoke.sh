@@ -129,6 +129,7 @@ case "$verb" in
     printf 'env-nocert-token:%s\n' "${NOCERT_TOKEN:-<unset>}" >> "$STUB_LOG"
     printf 'env-memory-token:%s\n' "${BRIG_MEMORY_TOKEN:-<unset>}" >> "$STUB_LOG"
     printf 'env-auto-memory:%s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY:-<unset>}" >> "$STUB_LOG"
+    printf 'env-mcp-token:%s\n' "${BRIG_MCP_TOKEN:-<unset>}" >> "$STUB_LOG"
     ;;
   exec)
     # Everything after -- is the guest command. /bin/true is the readiness
@@ -1392,6 +1393,169 @@ else
   ok "rm --all removes a memory sandbox and its socket, and keeps its store"
 fi
 rm -rf "$mem_state"
+
+# An MCP server on hvi, through the nofire preset. The plan names the server,
+# its fixed upstream, the secret it reads and the tools it may call, and
+# never the secret's value. The guest gets its MCP token in the environment
+# and an MCP configuration at /brig/mcp/mcp.json that names the variable and
+# holds neither the token nor the secret. A tools/call for a tool the policy
+# does not name is answered by the broker with a JSON-RPC error: the upstream
+# is mcp.nofire.ai, which the test never reaches, so a call that was
+# forwarded would come back as a gateway error instead. The upstream is not
+# stubbed because the preset fixes its address; the forwarding itself is
+# covered by the Go tests against a stub server.
+cat > "$WORK/policies/nofire-mcp.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: nofire-mcp
+spec:
+  mcp:
+    - name: nofire
+      preset: nofire
+      credential:
+        secretRef: { name: nofire-mcp-secret }
+      tools:
+        allow: [nofire_search_entities]
+YAML
+"$WORK/brig" policy attach nofire-mcp claude-code > /dev/null 2>&1
+mcp_state="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+mcp_env=(BRIG_STATE_DIR="$mcp_state" BRIG_HYPERVISOR=hvi BRIG_BROKER_BIN="$WORK/brig-broker-helper"
+  BRIG_TEST_SECRETS="claude-credentials nofire-mcp-secret")
+mcp_plan="$(env "${mcp_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
+case "$mcp_plan" in
+  *"mcp nofire to https://mcp.nofire.ai/mcp with your secret nofire-mcp-secret, tools nofire_search_entities, from nofire-mcp"*)
+    ok "brig plan names the MCP server, its upstream, its secret and its tools" ;;
+  *) bad "brig plan names the MCP server, its upstream, its secret and its tools -- got: $mcp_plan" ;;
+esac
+: > "$STUB_LOG"
+rm -f "$STUB_STATE".fed.*
+env "${mcp_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/mcp-on.out" 2>&1
+mcprc=$?
+mcpgw="$(grep '^argv: network-gateway --socket' "$STUB_LOG")"
+mcpaddr="$(printf '%s' "$mcpgw" | sed -n 's/.*--host brig\.internal=\([0-9.]*\).*/\1/p')"
+mcpsock="$(printf '%s' "$mcpgw" | sed -n "s/.*--divert ${mcpaddr}:443=\\([^ ]*\\).*/\\1/p")"
+mcpcfg="$STUB_STATE.fed._brig_mcp_mcp.json"
+mcptoken="$(sed -n 's/^env-mcp-token://p' "$STUB_LOG" | head -1)"
+mcpwant='{"mcpServers":{"nofire":{"type":"http","url":"https://brig.internal/brig-claude-code/mcp/nofire","headers":{"Authorization":"Bearer ${BRIG_MCP_TOKEN}"}}}}'
+if [ "$mcprc" != 0 ]; then
+  bad "a run with an MCP server on hvi failed: $(cat "$WORK/mcp-on.out")"
+elif [ -z "$mcptoken" ] || [ "$mcptoken" = "<unset>" ]; then
+  bad "the guest of an MCP run got no BRIG_MCP_TOKEN: $(grep '^env-mcp' "$STUB_LOG")"
+elif grep '^argv:' "$STUB_LOG" | grep -qF -- "$mcptoken" || grep -qF -- "$mcptoken" "$WORK/mcp-on.out"; then
+  bad "the MCP token was on a command line or in the run's output"
+elif [ "$(cat "$mcpcfg" 2>/dev/null)" != "$mcpwant" ]; then
+  bad "the guest did not get an MCP configuration without a token at /brig/mcp/mcp.json: $(cat "$mcpcfg" 2>&1)"
+elif grep -qF -- "$mcptoken" "$mcpcfg" || grep -q 'nofire-mcp-secret-value' "$mcpcfg"; then
+  bad "the MCP configuration holds a token or a secret: $(cat "$mcpcfg")"
+else
+  ok "an MCP run on hvi hands the guest its token in the environment and an MCP configuration without it"
+fi
+mcp_rpc='import socket, ssl, sys
+sock, addr, ca, token = sys.argv[1:5]
+s = socket.socket(socket.AF_UNIX); s.connect(sock)
+s.sendall(("BRIG-DIVERT/1 %s 443 198.18.1.2 40000\n" % addr).encode())
+t = ssl.create_default_context(cafile=ca).wrap_socket(s, server_hostname="brig.internal")
+body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"nofire_delete_everything\",\"arguments\":{}}}"
+t.sendall(("POST /brig-claude-code/mcp/nofire HTTP/1.1\r\nHost: brig.internal\r\nAuthorization: Bearer %s\r\n"
+           "Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n"
+           "Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (token, len(body), body)).encode())
+data = b""
+while True:
+    try:
+        chunk = t.recv(4096)
+    except ssl.SSLError:
+        break
+    if not chunk:
+        break
+    data += chunk
+text = data.decode(errors="replace")
+print(text.split("\r\n")[0] + " | " + text.split("\r\n\r\n", 1)[-1])'
+if [ -S "$mcpsock" ] && [ -n "$mcptoken" ]; then
+  denied="$(python3 -c "$mcp_rpc" "$mcpsock" "$mcpaddr" "$STUB_STATE.fed._brig_ca_brig.pem" "$mcptoken" 2>&1)"
+  forged="$(python3 -c "$mcp_rpc" "$mcpsock" "$mcpaddr" "$STUB_STATE.fed._brig_ca_brig.pem" "not-a-minted-token" 2>&1)"
+  case "$denied|$forged" in
+    "HTTP/1.1 200 "*'"error"'*'|HTTP/1.1 401 '*) ok "brig.internal answers a call to a tool the policy does not name with a JSON-RPC error, and a token it never minted with 401" ;;
+    *) bad "an MCP call over the divert socket -- denied tool: $denied; forged token: $forged" ;;
+  esac
+fi
+env "${mcp_env[@]}" "$WORK/brig" rm --all -y > /dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -e "$mcp_state/host/broker/broker.pid" ] || break
+  sleep 0.3
+done
+if [ -n "$mcpsock" ] && [ -e "$mcpsock" ]; then
+  bad "rm --all left the divert socket of an MCP run ($mcpsock)"
+else
+  ok "rm --all removes an MCP sandbox and its socket"
+fi
+# The server's secret is not in the store. The run is refused before boot
+# with exit 6, naming the policy and the server, and neither the broker nor
+# the runtime is asked. The plan says the same, on its BROKER row.
+rm -rf "$mcp_state"; mcp_state="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+mcp_env=(BRIG_STATE_DIR="$mcp_state" BRIG_HYPERVISOR=hvi BRIG_BROKER_BIN="$WORK/brig-broker-helper"
+  BRIG_TEST_SECRETS=claude-credentials)
+: > "$STUB_LOG"
+env "${mcp_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/mcp-nosecret.out" 2>&1
+rc=$?
+[ "$rc" = 6 ] && grep -q 'policy nofire-mcp (mcp nofire) .*missing secret "nofire-mcp-secret"' "$WORK/mcp-nosecret.out" \
+  && ok "an MCP run whose secret is not in the store is refused before boot with exit 6, naming the policy and the server" \
+  || bad "an MCP run whose secret is not in the store is refused before boot with exit 6 -- got $rc: $(cat "$WORK/mcp-nosecret.out")"
+[ -e "$mcp_state/host/broker/broker.pid" ] \
+  && bad "an MCP run refused for its secret started the credential broker" \
+  || ok "an MCP run refused for its secret starts no credential broker"
+grep -q '^argv: run\|^argv: network-gateway --socket' "$STUB_LOG" \
+  && bad "the runtime was asked to boot an MCP run refused for its secret" \
+  || ok "nothing reached the runtime for an MCP run refused for its secret"
+out="$(env "${mcp_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
+printf '%s\n' "$out" | grep -q '^REFUSED .*policy nofire-mcp (mcp nofire)' \
+  && printf '%s\n' "$out" | grep -q '^BROKER .*kept on the host: nofire-mcp-secret; not in brig.s secret store: nofire-mcp-secret, so the run is refused' \
+  && ok "brig plan refuses an MCP run whose secret is not in the store, and its BROKER row says why" \
+  || bad "brig plan refuses an MCP run whose secret is not in the store, and its BROKER row says why -- got: $out"
+"$WORK/brig" policy detach nofire-mcp claude-code > /dev/null 2>&1
+rm -f "$WORK/policies/nofire-mcp.yaml"
+rm -rf "$mcp_state"
+
+# A server that allows every tool: check names it and warns, since "*"
+# admits tools the author never read. show prints the server as written,
+# without the url and inject the preset fills in, so its output loads back
+# as the same policy: printed in full, brig would refuse to load it.
+cat > "$WORK/policies/nofire-all.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: nofire-all
+spec:
+  mcp:
+    - name: nofire
+      preset: nofire
+      credential:
+        secretRef: { name: nofire-mcp-secret }
+      tools:
+        allow: ["*"]
+YAML
+"$WORK/brig" policy attach nofire-all claude-code > /dev/null 2>&1
+out="$(BRIG_HYPERVISOR=hvi "$WORK/brig" policy check claude-code 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"mcp nofire  https://mcp.nofire.ai/mcp  tools: all (*)"*"warning: mcp nofire allows every tool"*)
+    ok "policy check names an MCP server that allows every tool and warns about it" ;;
+  *) bad "policy check names an MCP server that allows every tool and warns about it -- got $rc: $out" ;;
+esac
+"$WORK/brig" policy detach nofire-all claude-code > /dev/null 2>&1
+shown="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+"$WORK/brig" policy show nofire-all > "$shown/nofire-all.yaml" 2>"$WORK/mcp-show.err"; rc=$?
+back="$(BRIG_POLICY_DIR="$shown" "$WORK/brig" policy show nofire-all 2>&1)"; backrc=$?
+if [ "$rc" != 0 ] || [ "$backrc" != 0 ]; then
+  bad "policy show of a preset MCP server loads back -- got $rc then $backrc: $(cat "$WORK/mcp-show.err") $back"
+elif grep -q 'url:\|inject:' "$shown/nofire-all.yaml"; then
+  bad "policy show printed the url or inject a preset fills in: $(cat "$shown/nofire-all.yaml")"
+elif [ "$back" != "$(cat "$shown/nofire-all.yaml")" ]; then
+  bad "policy show of a preset MCP server loads back as another policy: $back"
+else
+  ok "policy show of a preset MCP server loads back as the same policy"
+fi
+rm -rf "$shown"
+rm -f "$WORK/policies/nofire-all.yaml"
 
 # A route with a client certificate. The broker presents inventory-client to
 # an upstream that requires one, and the upstream logs its subject. A route
@@ -3916,6 +4080,28 @@ case "$rc:$out" in
     ok "plan refuses a repository route that takes over git for another host" ;;
   *) bad "plan refuses a repository route that takes over git for another host -- got $rc: $out" ;;
 esac
+# A repository policy may attach an MCP server only through a preset, whose
+# address is fixed: with its own url, or a url beside the preset, it would
+# choose where one of your secrets goes. Both are refused when the file is
+# read, by config and by plan.
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: "builtin:claude-code"}\npolicies:\n  m:\n    inline:\n      apiVersion: brig.sh/v1alpha1\n      kind: Policy\n      metadata: {name: m}\n      spec:\n        mcp:\n          - {name: other, url: "https://mcp.example.com/mcp", transport: http, inject: {headers: {set: [{name: Authorization, value: "Bearer {value}"}]}}, credential: {secretRef: {name: nofire-mcp-secret}}, tools: {allow: [search]}}\ntargets:\n  dev: {profile: c, policies: [m]}\n' \
+  > "$WORK/bf-mcp-url"
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: "builtin:claude-code"}\npolicies:\n  m:\n    inline:\n      apiVersion: brig.sh/v1alpha1\n      kind: Policy\n      metadata: {name: m}\n      spec:\n        mcp:\n          - {name: nofire, preset: nofire, url: "https://mcp.example.com/mcp", credential: {secretRef: {name: nofire-mcp-secret}}, tools: {allow: [search]}}\ntargets:\n  dev: {profile: c, policies: [m]}\n' \
+  > "$WORK/bf-mcp-preset-url"
+for verb in config plan; do
+  out="$(cd "$proj" && "$WORK/brig" "$verb" --target dev -f "$WORK/bf-mcp-url" 2>&1)"; rc=$?
+  case "$rc:$out" in
+    "1:"*"declares mcp server other without a preset"*"only through a preset"*)
+      ok "$verb refuses a repository MCP server without a preset" ;;
+    *) bad "$verb refuses a repository MCP server without a preset -- got $rc: $out" ;;
+  esac
+  out="$(cd "$proj" && "$WORK/brig" "$verb" --target dev -f "$WORK/bf-mcp-preset-url" 2>&1)"; rc=$?
+  case "$rc:$out" in
+    "1:"*"mcp nofire: the nofire preset sets url"*)
+      ok "$verb refuses a repository MCP server that sets a url beside its preset" ;;
+    *) bad "$verb refuses a repository MCP server that sets a url beside its preset -- got $rc: $out" ;;
+  esac
+done
 [ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
   && ok "the Brigfile verbs ran nothing" \
   || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"

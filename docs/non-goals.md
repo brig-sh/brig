@@ -45,7 +45,11 @@ which are the ones an agent performs:
 
 - `git push`
 - a vendor CLI that refreshes its token
-- an MCP server that holds its own connection
+- a `stdio` MCP server, which runs in the guest, or an MCP server that
+  signs in with OAuth
+
+Brig does broker a remote MCP server over HTTP that takes a static token.
+See [MCP servers](policies.md#mcp-servers).
 
 The proxy also has a cost on the host. A process that terminates TLS for the
 guest holds every credential in cleartext, on the host, for the life of the
