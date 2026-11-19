@@ -41,8 +41,8 @@ func (p *Policy) Validate() error {
 	if strings.ContainsAny(p.Metadata.Description, "\r\n") {
 		return fmt.Errorf("metadata.description is one line")
 	}
-	if p.Spec.Egress == nil && len(p.Spec.Routes) == 0 {
-		return fmt.Errorf("a policy needs spec.egress, spec.routes or both")
+	if p.Spec.Egress == nil && len(p.Spec.Routes) == 0 && len(p.Spec.MCP) == 0 {
+		return fmt.Errorf("a policy needs spec.egress, spec.routes or both, or spec.mcp")
 	}
 	if p.Spec.Egress != nil {
 		if err := p.Spec.Egress.Validate(); err != nil {
@@ -59,6 +59,17 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("route %q is declared twice", r.Name)
 		}
 		seen[r.Name] = true
+	}
+	seenMCP := map[string]bool{}
+	for i := range p.Spec.MCP {
+		s := &p.Spec.MCP[i]
+		if err := s.validateWritten(); err != nil {
+			return err
+		}
+		if seenMCP[s.Name] {
+			return fmt.Errorf("mcp server %q is declared twice", s.Name)
+		}
+		seenMCP[s.Name] = true
 	}
 	return nil
 }

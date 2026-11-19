@@ -371,20 +371,31 @@ func setDefaults(r *v1alpha1.Route) {
 	r.Inject = &in
 }
 
-// Expand returns p with every route expanded by ExpandRoute.
+// Expand returns p with every route expanded by ExpandRoute and every MCP
+// server by ExpandMCP.
 func Expand(p Policy) (Policy, error) {
-	if len(p.Spec.Routes) == 0 {
-		return p, nil
-	}
-	routes := make([]v1alpha1.Route, 0, len(p.Spec.Routes))
-	for _, r := range p.Spec.Routes {
-		e, err := ExpandRoute(r)
-		if err != nil {
-			return Policy{}, err
+	if len(p.Spec.Routes) > 0 {
+		routes := make([]v1alpha1.Route, 0, len(p.Spec.Routes))
+		for _, r := range p.Spec.Routes {
+			e, err := ExpandRoute(r)
+			if err != nil {
+				return Policy{}, err
+			}
+			routes = append(routes, e)
 		}
-		routes = append(routes, e)
+		p.Spec.Routes = routes
 	}
-	p.Spec.Routes = routes
+	if len(p.Spec.MCP) > 0 {
+		servers := make([]v1alpha1.MCPServer, 0, len(p.Spec.MCP))
+		for _, s := range p.Spec.MCP {
+			e, err := ExpandMCP(s)
+			if err != nil {
+				return Policy{}, err
+			}
+			servers = append(servers, e)
+		}
+		p.Spec.MCP = servers
+	}
 	return p, nil
 }
 

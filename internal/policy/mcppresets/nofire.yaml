@@ -1,0 +1,10 @@
+# The nofire MCP preset: the NOFire AI MCP server, reached with a bearer
+# token. A preset fixes where the credential goes. It never carries tools,
+# a credential or a name, which only a policy chooses.
+transport: http
+url: https://mcp.nofire.ai/mcp
+inject:
+  headers:
+    set:
+      - name: Authorization
+        value: "Bearer {value}"

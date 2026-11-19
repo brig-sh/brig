@@ -2509,6 +2509,48 @@ func TestShowPolicyCommentsTheRouteNotLookalikeMetadata(t *testing.T) {
 	}
 }
 
+// A server with a preset may not set url or inject, so show leaves out what
+// the preset fills in. Printed in full, the output is a policy brig refuses
+// to load.
+func TestShowPolicyOutputWithAnMCPPresetLoadsBack(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "mcp", mcpCheckBody)
+	entries, err := policy.LoadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := policy.Expand(entries["mcp"].Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asJSON := range []bool{false, true} {
+		args := []string{"mcp"}
+		if asJSON {
+			args = append(args, "--json")
+		}
+		out, err := captureStdout(t, func() error { return showPolicy(args) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		back := t.TempDir()
+		if err := os.WriteFile(filepath.Join(back, "mcp.yaml"), []byte(out), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := policy.LoadAll(back)
+		if err != nil {
+			t.Fatalf("show %v does not load back: %v\n%s", args, err, out)
+		}
+		got, err := policy.Expand(loaded["mcp"].Policy)
+		if err != nil {
+			t.Fatalf("show %v does not expand back: %v\n%s", args, err, out)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("show %v loads back as another policy:\n got %+v\nwant %+v", args, got, want)
+		}
+	}
+}
+
 // githubAPIPolicy writes the github-api route as a policy does: a preset and
 // no mode, which the preset file supplies.
 func githubAPIPolicy() policy.Policy {
@@ -2630,5 +2672,104 @@ func TestCheckRefusesEgressTheRunCannotEnforce(t *testing.T) {
 					err, exitCode(err), exitCapability, c.want)
 			}
 		})
+	}
+}
+
+// The starter's first line points an editor at the policy schema, and the
+// path after the branch is a file in this repository: a schema that moved
+// would leave every starter pointing an editor at nothing.
+func TestCreatePolicyWritesTheSchemaModeline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	stubEditor(t, `true`)
+	if err := createPolicy([]string{"no-net"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "no-net.yaml")
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(blob), "\n")
+	if want := "# yaml-language-server: $schema=" + starterPolicySchemaURL; first != want {
+		t.Errorf("first line %q, want %q", first, want)
+	}
+	if _, err := readPolicyFile(path); err != nil {
+		t.Errorf("the starter does not parse and validate: %v", err)
+	}
+	_, rel, ok := strings.Cut(starterPolicySchemaURL, "/brig-sh/brig/main/")
+	if !ok {
+		t.Fatalf("starterPolicySchemaURL %q is not a file on main of this repository", starterPolicySchemaURL)
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(rel))); err != nil {
+		t.Errorf("the schema the starter names is not in the repository: %v", err)
+	}
+}
+
+const mcpCheckBody = "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  name: mcp\nspec:\n  mcp:\n" +
+	"    - name: nofire\n      preset: nofire\n      credential:\n        secretRef:\n          name: tok\n" +
+	"      tools:\n        allow: [a, b]\n" +
+	"    - name: wide\n      transport: http\n      url: https://mcp.example.com/mcp\n" +
+	"      credential:\n        secretRef:\n          name: tok2\n" +
+	"      inject:\n        headers:\n          set:\n            - name: X-Key\n              value: \"{value}\"\n" +
+	"      tools:\n        allow: [\"*\"]\n"
+
+// A policy that grants an MCP server is read before a run, so check says where
+// each server goes and which tools it allows; a wildcard gets a warning,
+// because it admits tools the author never saw.
+func TestPolicyCheckPrintsMCP(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "mcp", mcpCheckBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"mcp", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	note := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.TrimSpace(out) != "mcp" {
+		t.Errorf("stdout is not just the policy names: %q", out)
+	}
+	for _, want := range []string{
+		"mcp nofire  https://mcp.nofire.ai/mcp  tools: a, b",
+		"mcp wide  https://mcp.example.com/mcp  tools: all (*)",
+		"warning: mcp wide allows every tool",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("check output lacks %q:\n%s", want, note)
+		}
+	}
+}
+
+// Each policy loads alone, so a server name that two bound policies share is
+// only visible to check when it looks at them together, as a run does.
+func TestPolicyCheckRefusesAnMCPClashBetweenPolicies(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "mcp-one", strings.Replace(mcpCheckBody, "name: mcp\n", "name: mcp-one\n", 1))
+	writePolicyFile(t, dir, "mcp-two", strings.Replace(mcpCheckBody, "name: mcp\n", "name: mcp-two\n", 1))
+	loadTestProfiles(t)
+	for _, name := range []string{"mcp-one", "mcp-two"} {
+		if err := attachPolicy([]string{name, "claude-code"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var err error
+	captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	})
+	if err == nil {
+		t.Fatal("check accepted two policies that declare the same MCP server")
+	}
+	for _, want := range []string{"mcp-one", "mcp-two", "nofire"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %q: %v", want, err)
+		}
 	}
 }
