@@ -24,11 +24,17 @@ type backend struct {
 	// hypervisor goes into the profile and into BRIG_HYPERVISOR. It is empty
 	// on Linux, where the containerd shim decides and brig ignores both.
 	hypervisor string
+	// brigRuntime is the BRIG_RUNTIME brig runs with, over the shell's, or ""
+	// to keep the shell's. brig takes the runtime from BRIG_RUNTIME before it
+	// reads BRIG_RUNTIME_BIN. Unset on Linux, that is hull when a hull is on
+	// PATH, and brig refuses the nerdctl in BRIG_RUNTIME_BIN as the other
+	// runtime, so every case failed on a host that carries both.
+	brigRuntime string
 }
 
 var backends = map[string]backend{
 	"hvi":     {runtime: "hull", hypervisor: "hvi"},
-	"nerdctl": {runtime: "nerdctl"},
+	"nerdctl": {runtime: "nerdctl", brigRuntime: "nerdctl"},
 }
 
 // backendNames lists the backends this runner boots, for a refusal to name.

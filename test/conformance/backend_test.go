@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -108,6 +109,76 @@ func TestOnlyHviAsksForAHypervisor(t *testing.T) {
 			}
 			if p["genericBoot"] != true {
 				t.Errorf("the profile does not boot the image as it is: %v", p)
+			}
+		})
+	}
+}
+
+// brigRuntimeOf is every BRIG_RUNTIME value in env, in order.
+func brigRuntimeOf(env []string) []string {
+	var got []string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "BRIG_RUNTIME="); ok {
+			got = append(got, v)
+		}
+	}
+	return got
+}
+
+// Negative: the nerdctl backend runs brig with BRIG_RUNTIME=nerdctl once,
+// whatever the shell exported. brig takes the runtime from BRIG_RUNTIME before
+// BRIG_RUNTIME_BIN, and unset it is hull on a Linux host with hull on PATH.
+// brig then refused the suite's nerdctl as the other runtime, and every case
+// failed. A BRIG_RUNTIME=hull in the shell did the same.
+func TestTheNerdctlBackendNamesNerdctlToBrig(t *testing.T) {
+	for name, inherited := range map[string][]string{
+		"none in the shell":    nil,
+		"hull in the shell":    {"BRIG_RUNTIME=hull"},
+		"nerdctl in the shell": {"BRIG_RUNTIME=nerdctl"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, s := nerdctlSuite(t)
+			s.env = append(s.env, inherited...)
+			run(t, s)
+			n := 0
+			for i, c := range f.calls {
+				if c[0] != "brig" || c[1] == "version" {
+					continue
+				}
+				n++
+				if got := brigRuntimeOf(f.envs[i]); len(got) != 1 || got[0] != "nerdctl" {
+					t.Fatalf("brig %s ran with BRIG_RUNTIME %q, want nerdctl alone", c[1], got)
+				}
+			}
+			if n == 0 {
+				t.Fatal("brig never ran")
+			}
+		})
+	}
+}
+
+// The hvi backend names no runtime of its own: brig picks hull on macOS
+// without one, and a BRIG_RUNTIME the shell exported still reaches brig, as
+// before.
+func TestTheHviBackendKeepsTheShellsRuntime(t *testing.T) {
+	for name, tt := range map[string]struct {
+		inherited []string
+		want      []string
+	}{
+		"none in the shell": {nil, nil},
+		"hull in the shell": {[]string{"BRIG_RUNTIME=hull"}, []string{"hull"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			s := newSuite(t, f)
+			s.env = append(s.env, tt.inherited...)
+			root := t.TempDir()
+			env, err := s.prepare(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := brigRuntimeOf(env); !slices.Equal(got, tt.want) {
+				t.Errorf("brig runs with BRIG_RUNTIME %q, want %q", got, tt.want)
 			}
 		})
 	}

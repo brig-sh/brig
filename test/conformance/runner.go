@@ -342,7 +342,8 @@ func lastLine(s string) string {
 // before brig runs: BRIG_NETWORK=offline left in the shell would refuse every
 // denied case for the policy, and the controls would be the only thing to
 // notice. BRIG_RUNTIME_BIN is not kept from the shell. prepare sets it to the
-// runtime whose version the record names.
+// runtime whose version the record names. BRIG_RUNTIME is kept unless the
+// backend names its own. See backend.brigRuntime.
 var keptSettings = map[string]bool{
 	"BRIG_RUNTIME": true, "BRIG_BOOT_ASSETS": true, "BRIG_BOOT_ASSETS_REF": true,
 	"BRIG_GATEWAY_SOCK": true, "BRIG_GATEWAY_DIR": true,
@@ -402,13 +403,22 @@ func (s *suite) prepare(root string) ([]string, error) {
 			return nil, err
 		}
 	}
+	// The backend's BRIG_RUNTIME replaces the shell's rather than following
+	// it, so brig sees one value. See backend.brigRuntime.
+	brigRuntime := backends[s.backend].brigRuntime
 	var env []string
 	for _, kv := range s.env {
 		k, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(k, "BRIG_") && !keptSettings[k] {
 			continue
 		}
+		if k == "BRIG_RUNTIME" && brigRuntime != "" {
+			continue
+		}
 		env = append(env, kv)
+	}
+	if brigRuntime != "" {
+		env = append(env, "BRIG_RUNTIME="+brigRuntime)
 	}
 	env = append(env,
 		"BRIG_PROFILE_DIR="+dirs["profiles"],
