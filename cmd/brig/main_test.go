@@ -395,9 +395,11 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	t.Setenv("BRIG_STATE_DIR", dir)
 
 	index := filepath.Join(dir, "sessions.json")
+	// Recorded on hull, the runtime that lists them. On Linux hull reads an
+	// entry with no runtime as nerdctl's and keeps it.
 	body := `{` +
-		`"claude-code@kept": {"home": "/ws/kept", "sandbox": "brig-claude-code-kept"},` +
-		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone"}}`
+		`"claude-code@kept":{"home": "/ws/kept", "sandbox": "brig-claude-code-kept", "runtime": "hull"},` +
+		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone", "runtime": "hull"}}`
 	if err := os.WriteFile(index, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

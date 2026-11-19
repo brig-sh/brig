@@ -32,6 +32,10 @@ func (r *listRuntime) List() ([]runtime.Instance, error) {
 	return r.instances, r.listErr
 }
 
+// Kind is hull. rm asks it to read whose a recorded session is, and on Linux
+// to read an entry that records no runtime. See wrap.RuntimeRefusal.
+func (r *listRuntime) Kind() string { return "hull" }
+
 func (r *listRuntime) Stop(string) error           { r.stopped = true; return nil }
 func (r *listRuntime) Remove(string) error         { r.removed = true; return nil }
 func (r *listRuntime) Logs(runtime.LogsSpec) error { r.logged = true; return nil }
@@ -114,8 +118,10 @@ func TestRemoveSandboxKeepsTheIndexOnMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_STATE_DIR", dir)
 	sessions := filepath.Join(dir, "sessions.json")
+	// Recorded on hull, the runtime that rm asks. On Linux hull reads an entry
+	// with no runtime as nerdctl's and refuses the rm.
 	if err := os.WriteFile(sessions,
-		[]byte(`{"claude@refactor":{"home":"/ws","sandbox":"brig-claude-code"}}`), 0o600); err != nil {
+		[]byte(`{"claude@refactor":{"home":"/ws","sandbox":"brig-claude-code","runtime":"hull"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,8 +257,9 @@ func lostSession(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("BRIG_STATE_DIR", dir)
 	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	// Recorded on hull, as above.
 	if err := os.WriteFile(filepath.Join(dir, "sessions.json"),
-		[]byte(`{"claude@refactor":{"home":"/ws","sandbox":"brig-claude-code"}}`), 0o600); err != nil {
+		[]byte(`{"claude@refactor":{"home":"/ws","sandbox":"brig-claude-code","runtime":"hull"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "slug-claims.json"),
