@@ -42,6 +42,10 @@ DENIED_IP=1.1.1.1
 # live under it.
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
+# systemctl --user finds the user manager on the session bus, which the
+# runner service does not name either.
+DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+export DBUS_SESSION_BUS_ADDRESS
 
 # Where a user install of the bundle puts its tree and its launchers. These
 # are the paths install.sh's install_runtime uses.
