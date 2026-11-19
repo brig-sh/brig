@@ -495,6 +495,9 @@ policy that covers the host, or with any `allow` cidr. The starter from
 `brig policy create` allows `api.anthropic.com`, so remove that `allow`
 before you add a passthrough route to it.
 
+A policy from a Brigfile may not declare a passthrough route. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
 The route has no session token, so the broker serves it only for a request
 that arrived bound to the sandbox: on its divert socket, or from the address
 it registered on a node broker. See [Passthrough

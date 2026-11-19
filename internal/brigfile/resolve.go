@@ -190,8 +190,13 @@ func repository(alias string, src Source, doc []byte) (ResolvedProfile, error) {
 	return ResolvedProfile{Alias: alias, Source: src, Profile: p, Policies: own, Doc: doc}, nil
 }
 
-// refuseRepositoryRoutes holds the routes of a repository policy to two
+// refuseRepositoryRoutes holds the routes of a repository policy to three
 // rules that a policy the reader wrote is not held to.
+//
+// A route may not be passthrough. The broker forwards the credential the
+// guest sends on it, and a repository would name where that credential goes.
+// Its request rules also hold only under egress that refuses the upstream,
+// which is the reader's to set, not the repository's.
 //
 // A route may take over git in the guest only for its own upstream's host.
 // The rewrites decide which of the guest's git requests go through the
@@ -210,6 +215,13 @@ func repository(alias string, src Source, doc []byte) (ResolvedProfile, error) {
 // fills it in, so writing out what the preset already says is not refused.
 func refuseRepositoryRoutes(routes []v1alpha1.Route) error {
 	for _, r := range routes {
+		// Ahead of the preset rules, which would read the missing inject as
+		// a change to how the secret is sent.
+		if r.Passthrough {
+			return fmt.Errorf("route %s: passthrough: a repository policy may not declare a passthrough route, "+
+				"since the broker would forward the guest's own credential to an upstream the repository names; "+
+				"declare it in a policy of your own", r.Name)
+		}
 		got, err := policy.ExpandRoute(r)
 		if err != nil {
 			return err

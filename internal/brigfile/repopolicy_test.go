@@ -202,3 +202,40 @@ func TestARepositoryPolicyMayUseEveryPresetAsItShips(t *testing.T) {
 		}
 	}
 }
+
+// A repository policy may not declare a passthrough route, with or without a
+// preset. The refusal names passthrough, not the inject a preset would have
+// set, and the same route in the reader's own policy still parses.
+func TestARepositoryPolicyMayNotDeclareAPassthroughRoute(t *testing.T) {
+	for name, route := range map[string]string{
+		"on a preset": "    - name: r\n      preset: anthropic-api-key\n      passthrough: true\n",
+		"with no preset": "    - name: r\n      upstream: https://llm.example.com\n      passthrough: true\n" +
+			"      guest: {env: {LLM_URL: \"{route.url}\"}}\n",
+	} {
+		if _, err := policy.Parse([]byte(repoPolicy(route))); err != nil {
+			t.Fatalf("%s: the fixture is refused as a policy, before the rule is asked: %v", name, err)
+		}
+		for form, err := range loadRepoPolicy(t, repoPolicy(route)) {
+			t.Run(name+"/"+form, func(t *testing.T) {
+				if err == nil {
+					t.Fatal("Load accepted a passthrough route in a repository policy")
+				}
+				for _, want := range []string{"policies.gh", "route r", "passthrough",
+					"repository policy may not declare a passthrough route", "a policy of your own"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the error does not say %q: %v", want, err)
+					}
+				}
+				if strings.Contains(err.Error(), "says how the secret is sent") {
+					t.Errorf("the error reads the passthrough route as a changed inject: %v", err)
+				}
+			})
+		}
+	}
+	// The same preset route without passthrough is unchanged.
+	for form, err := range loadRepoPolicy(t, repoPolicy(preset("anthropic-api-key", ""))) {
+		if err != nil {
+			t.Errorf("anthropic-api-key as it ships, %s: Load: %v", form, err)
+		}
+	}
+}

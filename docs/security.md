@@ -1043,6 +1043,11 @@ sends to.** A prefix under `guest.git.insteadOf` that names another host is
 refused, so git that the agent addresses to one host does not go, with the
 route's secret, to another.
 
+**A repository policy may not declare a passthrough route.** The broker
+would forward the guest's own credential to an upstream that the repository
+names. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
 **A repository policy may not change how a preset sends its secret.** It
 names the secret. It may move `github-token` to another host, and the
 preset's git rewrites move with it. It may not move a preset that the guest

@@ -467,7 +467,15 @@ A profile Brig ships through `builtin:` is not limited this way.
 ## What a repository policy may not set
 
 A policy from `file:` or `inline:` comes from whoever wrote the repository.
-Its routes are held to two rules.
+Its routes are held to three rules.
+
+**A route may not be passthrough.** On a [passthrough
+route](policies.md#passthrough-routes) the broker forwards the credential
+that the guest sends, so a repository would name where your key goes. Its
+request rules also hold only under egress that refuses the upstream, and
+that egress is yours to set. A repository policy with `passthrough: true` is
+refused, with or without a preset. Declare the route in a policy of your
+own.
 
 **A route may take over git only for the host it sends to.** Each prefix
 under `guest.git.insteadOf` must be a URL on the route's own upstream:
@@ -519,8 +527,9 @@ To send to another upstream some other way, a repository writes the route in
 full, with no `preset`. The plan row of every route names the upstream, the
 secret and the git URLs that the route takes over.
 
-A policy in your own policy directory is held to neither rule. There you can
-put a mirror in front of `github.com`.
+A policy in your own policy directory is held to none of these rules. There
+you can put a mirror in front of `github.com`, or declare a passthrough
+route.
 
 ## Where Brig looks
 

@@ -251,6 +251,7 @@ the guest has none.
 | "`brig target ls` and `brig config` write nothing, and `brig init` writes only the Brigfile." | Brigfile targets | `go:TestBrigfileVerbsTouchNothing` |
 | "None of them looks for a runtime, opens your secret store or starts a sandbox." | Brigfile targets | `go:TestBrigfileVerbsTouchNothing` `smoke:the Brigfile verbs ran nothing` |
 | "A route of a repository policy may take over git only for the host it sends to." | Brigfile targets | `go:TestARepositoryRouteTakesGitOnlyForItsOwnUpstream` `go:TestARepositoryRouteMayTakeGitForItsOwnUpstream` `go:TestAPolicyOfYourOwnIsNotHeldToTheRepositoryRules` `smoke:config refuses a repository route that takes over git for another host` `smoke:plan refuses a repository route that takes over git for another host` |
+| "A repository policy may not declare a passthrough route." | Brigfile targets | `go:TestARepositoryPolicyMayNotDeclareAPassthroughRoute` |
 | "A repository policy may not change how a preset sends its secret." | Brigfile targets | `go:TestARepositoryPolicyKeepsAPresetAsItShips` `go:TestARepositoryPolicyMayUseEveryPresetAsItShips` |
 | "the preset's git rewrites move with it" (`github-token` on another host) | Brigfile targets | `go:TestAPresetsGitRewritesFollowItsUpstream` |
 | "The row lists the git URLs that the route takes over and the guest variables that it sets." | Brigfile targets | `go:TestTheRouteRowSaysWhatPutsTrafficOnTheRoute` `go:TestPlanRoutesCarryTheGuestWiring` `smoke:plan --target says which git URLs a route takes over, and that a preset was moved` |
