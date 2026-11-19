@@ -154,8 +154,11 @@ var cases = []testCase{
 	{id: "metadata", policy: denyPolicy, title: "169.254.169.254",
 		args: []string{"tcp", "169.254.169.254:80"}, want: expectDeny, mode: connectRefused,
 		unprovenWhy: "a host outside a cloud has no metadata service",
+		// hull on Linux puts its guest behind the same gateway as hvi, so
+		// the same reset is its reason too.
 		unprovenOn: map[string]string{
-			"hvi": "hull's gateway resets every connection to 169.254.0.0/16, with a policy or without one",
+			"hvi":        "hull's gateway resets every connection to 169.254.0.0/16, with a policy or without one",
+			"hull-linux": "hull's gateway resets every connection to 169.254.0.0/16, with a policy or without one",
 		}},
 
 	{id: "allow/allowed-name", policy: allowPolicy, title: "a name no rule denies",

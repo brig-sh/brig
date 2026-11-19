@@ -82,7 +82,7 @@ func TestNerdctlRunIsFiledUnderTheBundle(t *testing.T) {
 // A profile that named one would read as if it chose something. On hvi both
 // still name it, since that is what picks the backend there.
 func TestOnlyHviAsksForAHypervisor(t *testing.T) {
-	for backend, want := range map[string]string{"hvi": "hvi", "nerdctl": ""} {
+	for backend, want := range map[string]string{"hvi": "hvi", "nerdctl": "", "hull-linux": ""} {
 		t.Run(backend, func(t *testing.T) {
 			f := newFake(t)
 			s := newSuite(t, f)
@@ -426,7 +426,7 @@ func TestRecordTableHoldsWhatTheBundleSays(t *testing.T) {
 }
 
 func TestBackendNamesReadAsAList(t *testing.T) {
-	if got := backendNames(); got != "hvi and nerdctl" {
+	if got := backendNames(); got != "hull-linux, hvi and nerdctl" {
 		t.Errorf("%q", got)
 	}
 }

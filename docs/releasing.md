@@ -297,7 +297,7 @@ pass.
 
 There is one record for each backend that enforces a policy, and one for each
 version of what it runs on: hull for `hvi`, the Linux runtime bundle for
-nerdctl.
+nerdctl and for hull on Linux.
 
 1. Use a host with that runtime:
 
@@ -308,6 +308,9 @@ nerdctl.
      `~/.local/share/brig/data/bin` and then `/var/lib/brig/data/bin`. The
      nerdctl that boots has to be the one that bundle ships: the run fails,
      and writes no record, when it is not.
+   - For hull on Linux, the same host. The bundle has to ship hull, and the
+     hull that boots has to be built from the commit the bundle pins. The run
+     fails, and writes no record, when it is not, and when there is no bundle.
 
 2. Run the script:
 
@@ -323,12 +326,24 @@ nerdctl.
    without `-rootless`: the two bundles share a version and reach the network
    on different paths, so each has a record of its own.
 
+   For hull on Linux, name the backend:
+
+   ```bash
+   script/egress-conformance.sh -backend hull-linux
+   ```
+
+   The script asks the bundle's environment for its hull rather than its
+   nerdctl. It writes
+   `docs/manual-tests/egress-conformance-hull-linux-<bundle version>-rootless.md`.
+   The record is filed under the bundle's version, not hull's. The bundle
+   builds hull from a commit, so hull's own version names no release.
+
 3. Read the record:
 
    | Result | Meaning | What to do |
    | --- | --- | --- |
    | `FAIL` | The egress claims in [docs/policies.md](policies.md) and [docs/security.md](security.md) do not hold on that runtime, or the run proved nothing for a case. | Read the reason. Then fix the claims, run the script again or hold the release. |
-   | `unproven` | The case is no evidence for the claim: the guest got no further without a policy. | Only `metadata` can end there: on `hvi` hull resets every connection to 169.254.0.0/16, and on Linux a host outside a cloud has no metadata service. Any other `unproven` case fails the run. |
+   | `unproven` | The case is no evidence for the claim: the guest got no further without a policy. | Only `metadata` can end there: on `hvi` and on hull on Linux, hull's gateway resets every connection to 169.254.0.0/16, and on nerdctl a host outside a cloud has no metadata service. Any other `unproven` case fails the run. |
 
 4. Commit the record.
 

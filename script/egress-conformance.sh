@@ -7,16 +7,32 @@
 # docs/manual-tests/egress-conformance-<backend>-<runtime version>.md, with
 # -rootless after the version for the rootless Linux bundle.
 #
-#   script/egress-conformance.sh [-image REF] [-record PATH]
+#   script/egress-conformance.sh [-backend hull-linux] [-image REF] [-record PATH]
 #
 # On macOS 15 or newer it boots hvi, with hull on PATH or BRIG_RUNTIME_BIN
 # naming it. On Linux it boots nerdctl from the runtime bundle install.sh
 # installs, with brig-ctl on PATH, and the record is filed under the bundle's
-# version. With no runtime the run fails. It never skips, because
-# docs/releasing.md reads the result. See test/conformance for the cases and
-# the verdict rules.
+# version. With -backend hull-linux it boots the bundle's hull instead, and
+# that record is filed under the bundle's version too. With no runtime the
+# run fails. It never skips, because docs/releasing.md reads the result. See
+# test/conformance for the cases and the verdict rules.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# The backend, read from the arguments the way the runner's flags read it.
+# The bundle's environment below depends on it, and the runner gets the
+# arguments as they are.
+backend=""
+prev=""
+for a in "$@"; do
+  case "$prev" in -backend | --backend) backend=$a ;; esac
+  case "$a" in -backend=* | --backend=*) backend=${a#*=} ;; esac
+  prev=$a
+done
+if [ "$backend" = hull-linux ] && [ "$(uname -s)" != Linux ]; then
+  echo "egress-conformance: hull-linux boots the Linux runtime bundle's hull, and this host is not Linux" >&2
+  exit 2
+fi
 
 BIN="$(mktemp -d)"
 trap 'rm -rf "$BIN"' EXIT
@@ -60,8 +76,18 @@ fi
 if [ "$(uname -s)" = Linux ] && [ -z "${CONTAINERD_ADDRESS:-}" ]; then
   if [ -z "$ctl" ]; then
     echo "egress-conformance: no brig-ctl, so no runtime bundle to boot." >&2
-    echo "Install it with install.sh, or set CONTAINERD_ADDRESS and BRIG_RUNTIME_BIN for a nerdctl of your own" >&2
+    if [ "$backend" = hull-linux ]; then
+      echo "Install it with install.sh: hull on Linux is measured as the bundle ships it" >&2
+    else
+      echo "Install it with install.sh, or set CONTAINERD_ADDRESS and BRIG_RUNTIME_BIN for a nerdctl of your own" >&2
+    fi
     exit 1
+  fi
+  # brig-env.sh points BRIG_RUNTIME_BIN at the runtime BRIG_RUNTIME names, and
+  # at nerdctl when it names none. hull is asked for here, so the hull the
+  # runner checks against the bundle's pins is the bundle's own.
+  if [ "$backend" = hull-linux ]; then
+    export BRIG_RUNTIME=hull
   fi
   # Two steps, because eval returns its own status: a brig-ctl env that
   # failed inside it would not stop the script under set -e, and the suite
@@ -76,9 +102,9 @@ go build -o "$BIN/conformance" ./test/conformance
 
 # The brig-ctl found above goes to the runner, which would otherwise take the
 # first one on PATH, and the pins it reads name that bundle. The runner then
-# checks the nerdctl that boots is the one those pins ship. A flag of the
-# caller's own comes later and wins. The array expansion is written for bash
-# 3.2, where an empty one is an unbound variable under set -u.
+# checks the nerdctl or hull that boots is the one those pins ship. A flag of
+# the caller's own comes later and wins. The array expansion is written for
+# bash 3.2, where an empty one is an unbound variable under set -u.
 ctl_args=()
 [ -n "$ctl" ] && ctl_args=(-brig-ctl "$ctl")
 "$BIN/conformance" -brig "$BIN/brig" -probe "$BIN/netprobe/linux-$arch/netprobe" ${ctl_args[@]+"${ctl_args[@]}"} "$@"

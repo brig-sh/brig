@@ -21,10 +21,15 @@ documents unchanged. When this was measured that runner booted `hvi` only,
 so the cases were run by hand. It now boots nerdctl too:
 `script/egress-conformance.sh` on a Linux host with the runtime bundle
 writes `egress-conformance-nerdctl-<bundle version>.md` beside this file,
-with `-rootless` after the version for the rootless bundle. The guest image
-was `ghcr.io/brig-sh/claude-code-stock:root`, which carries curl and a CA
-bundle, and the probe was `test/netprobe`, as the suite uses them. Each case
-ran under its policy and again in a sandbox with no policy.
+with `-rootless` after the version for the rootless bundle.
+`script/egress-conformance.sh -backend hull-linux` runs the same cases on
+the bundle's hull, and writes
+`egress-conformance-hull-linux-<bundle version>.md`. That run measures
+hull's gateway, not the nftables table this file measures. In the run by
+hand, the guest image was `ghcr.io/brig-sh/claude-code-stock:root`, which
+carries curl and a CA bundle, and the probe was `test/netprobe`, as the
+suite uses them. Each case ran under its policy and again in a sandbox with
+no policy.
 
 `conformance-deny`, `default: deny`:
 

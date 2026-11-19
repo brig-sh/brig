@@ -51,6 +51,12 @@ func recordPath(backend, version, variant string) string {
 // on Linux, since that is what install.sh pins and a release ships, and the
 // runtime's own everywhere else. A nerdctl the bundle did not install falls
 // back to its own version, and the record says there was no bundle.
+//
+// hull on Linux is filed under the bundle too. The bundle builds hull from a
+// commit, not a tag, so hull reports the pseudo-version Go gives that commit,
+// which names no release. The bundle's tag names it, and the urunc, hvi and
+// kernel the boot went through with it. A hull with no bundle gets no record:
+// see hullLinuxStack.
 func (r *report) version() string {
 	if r.bundle != "" {
 		return r.bundle

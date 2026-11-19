@@ -35,6 +35,11 @@ type backend struct {
 var backends = map[string]backend{
 	"hvi":     {runtime: "hull", hypervisor: "hvi"},
 	"nerdctl": {runtime: "nerdctl", brigRuntime: "nerdctl"},
+	// hull on Linux boots its guest through urunc, which picks the monitor,
+	// so the profile names none. The gateway that enforces a policy is hull's
+	// own, as on hvi. The bundle's brig-env.sh sets BRIG_RUNTIME=nerdctl unless
+	// the shell said hull first, so the backend names hull.
+	"hull-linux": {runtime: "hull", brigRuntime: "hull"},
 }
 
 // backendNames lists the backends this runner boots, for a refusal to name.
@@ -90,16 +95,60 @@ func (s *suite) bundleMismatch(runtimeLine string, pins map[string]string) strin
 	if got := strings.TrimPrefix(versionOf(runtimeLine), "v"); got != pinned {
 		return fmt.Sprintf("the runtime that boots reports nerdctl %q and the bundle %s names pins nerdctl %q: that bundle is not the one under test", got, s.brigCtl, pinned)
 	}
-	// The record's name carries the variant, and only ROOTLESS=true gave it
-	// one: a missing key, or any other value, filed the run under the plain
-	// bundle's name. Both pins the bundle writes are true or false, so
-	// anything else is a pins.env this runner does not know how to read.
+	return s.rootlessMismatch(pins)
+}
+
+// rootlessMismatch says why pins cannot tell which build of the bundle this
+// is, or "" when they can. The record's name carries the variant, and only
+// ROOTLESS=true gave it one: a missing key, or any other value, filed the run
+// under the plain bundle's name. Both pins the bundle writes are true or
+// false, so anything else is a pins.env this runner does not know how to read.
+func (s *suite) rootlessMismatch(pins map[string]string) string {
 	switch pins["ROOTLESS"] {
 	case "true", "false":
 	default:
 		return fmt.Sprintf("the bundle %s names pins ROOTLESS=%q, neither true nor false, so which bundle it is cannot be told", s.brigCtl, pins["ROOTLESS"])
 	}
 	return ""
+}
+
+// hullCommitRE is the commit `hull --version` names first in its
+// parentheses, as in "hull v0.1.1-0.20261116192905-4bf76a6335d5 (4bf76a6,
+// 2026-11-16, go1.26.8, linux/amd64)". A hull built with no VCS data names
+// none: "dev (go1.26.8, linux/amd64)".
+var hullCommitRE = regexp.MustCompile(`\(([0-9a-f]{7,40}),`)
+
+// hullBundleMismatch says why the hull that reports runtimeLine is not the one
+// the bundle in pins ships, or "" when it is. The bundle builds hull from the
+// commit HULL_REF names and pins no hull version. hull reports the version Go
+// gives that commit, a tag or a pseudo-version, and a hull tag can read like
+// the bundle's own. So the commit is what ties the two.
+func (s *suite) hullBundleMismatch(runtimeLine string, pins map[string]string) string {
+	ref := pins["HULL_REF"]
+	if ref == "" {
+		return fmt.Sprintf("the bundle %s names pins no HULL_REF, so it ships no hull, and the hull that boots cannot be tied to it", s.brigCtl)
+	}
+	m := hullCommitRE.FindStringSubmatch(runtimeLine)
+	if m == nil {
+		return fmt.Sprintf("the runtime that boots reports %q, which names no commit, and the bundle %s names pins hull %s: which hull boots cannot be told", runtimeLine, s.brigCtl, ref)
+	}
+	if !strings.HasPrefix(ref, m[1]) {
+		return fmt.Sprintf("the runtime that boots reports hull commit %s and the bundle %s names pins hull %s: that bundle is not the one under test", m[1], s.brigCtl, ref)
+	}
+	return s.rootlessMismatch(pins)
+}
+
+// bundleLine is the record's runtime bundle row: the bundle's version, and
+// which build of it this is.
+func bundleLine(pins map[string]string) string {
+	bundle := pins["BUNDLE_VERSION"]
+	if v := pins["VARIANT"]; v != "" {
+		bundle += ", " + v
+	}
+	if pins["ROOTLESS"] == "true" {
+		bundle += ", rootless"
+	}
+	return bundle
 }
 
 // nerdctlStack is what the record says booted on Linux: the bundle and the
@@ -124,14 +173,7 @@ func (s *suite) nerdctlStack(ctx context.Context, env []string, rep *report) []s
 	}
 	rep.bundle = pins["BUNDLE_VERSION"]
 	rep.pins = pins
-	bundle := pins["BUNDLE_VERSION"]
-	if v := pins["VARIANT"]; v != "" {
-		bundle += ", " + v
-	}
-	if pins["ROOTLESS"] == "true" {
-		bundle += ", rootless"
-	}
-	rows := []stackRow{{"runtime bundle", bundle}}
+	rows := []stackRow{{"runtime bundle", bundleLine(pins)}}
 	for _, r := range []struct{ name, key string }{
 		{"containerd", "CONTAINERD_VERSION"},
 		{"urunc", "URUNC_VERSION"},
@@ -158,12 +200,78 @@ func (s *suite) nftRow(ctx context.Context, env []string) stackRow {
 	return stackRow{"nftables", firstLine(out)}
 }
 
-// nerdctlAssets names the kernel and initrd a boot on Linux took. The bundle
+// hullLinuxStack is what the record says booted for hull on Linux: the
+// runtime bundle, and the parts of it a boot goes through, from its pins. The
+// bundle builds hull from one commit, checks it against the urunc it carries,
+// and pins the hvi urunc boots and the hull-assets release the kernel and
+// initrd come from. There is no nftables row: hull's own gateway enforces a
+// policy here, as it does on hvi, and brig's nftables table plays no part.
+//
+// With no bundle the run is filed under no record, where a nerdctl of its own
+// is filed under its version. hull's tags and the bundle's read alike, and
+// v0.1.0-rc22 is both, so a hull filed under its own version would land where
+// a bundle's record goes and pass for it.
+func (s *suite) hullLinuxStack(ctx context.Context, env []string, rep *report) []stackRow {
+	pins, err := s.pins(ctx, env)
+	if err != nil {
+		why := "hull on Linux is measured as the runtime bundle ships it, and there is no bundle: " + err.Error()
+		rep.problems = append(rep.problems, why)
+		rep.unfiled = why
+		return []stackRow{{"runtime bundle", "none: " + err.Error()}}
+	}
+	// As on nerdctl, the pins say nothing of which hull booted, and a record
+	// filed under a bundle that did not boot would pass for the evidence
+	// docs/releasing.md gates a release on.
+	if why := s.hullBundleMismatch(rep.runtime, pins); why != "" {
+		rep.problems = append(rep.problems, why)
+		rep.unfiled = why
+		return []stackRow{{"runtime bundle", "not used: " + why}}
+	}
+	rep.bundle = pins["BUNDLE_VERSION"]
+	rep.pins = pins
+	hull := pins["HULL_REF"]
+	if repo := pins["HULL_REPO"]; repo != "" {
+		hull = repo + "@" + hull
+	}
+	hvi := pins["HVI_VERSION"]
+	if c := pins["HVI_COMMIT"]; hvi != "" && c != "" {
+		hvi += ", commit " + c
+	}
+	assets := pins["ASSETS_VERSION"]
+	if repo := pins["ASSETS_REPO"]; assets != "" && repo != "" {
+		assets += ", from " + repo
+	}
+	// hull and hvi get a row even when the pins name none, so the record
+	// says so: the bundle checked above ships hull, and a bundle with no hvi
+	// boots on some other monitor.
+	rows := []stackRow{
+		{"runtime bundle", bundleLine(pins)},
+		{"hull", hull},
+		{"urunc", pins["URUNC_VERSION"]},
+		{"hvi", hvi},
+	}
+	if assets != "" {
+		rows = append(rows, stackRow{"hull-assets", assets})
+	}
+	for _, r := range []struct{ name, key string }{
+		{"containerd", "CONTAINERD_VERSION"},
+		{"rootlesskit", "ROOTLESSKIT_VERSION"},
+		{"slirp4netns", "SLIRP4NETNS_VERSION"},
+	} {
+		if v := pins[r.key]; v != "" {
+			rows = append(rows, stackRow{r.name, v})
+		}
+	}
+	return rows
+}
+
+// bundleAssets names the kernel and initrd a boot on Linux took, on nerdctl
+// and on hull alike: both boot the files BRIG_BOOT_ASSETS names. The bundle
 // sets BRIG_BOOT_ASSETS to its own copy, built from the bundle KERNEL_SOURCE
 // names. Without the variable brig fetches the bundle with oras and writes
 // provenance.json beside it, which names what was fetched. The directory
 // itself is left out: it is under the user's home.
-func (s *suite) nerdctlAssets(env []string, rep *report) string {
+func (s *suite) bundleAssets(env []string, rep *report) string {
 	dir := envValue(env, "BRIG_BOOT_ASSETS")
 	if dir != "" {
 		if src := rep.pins["KERNEL_SOURCE"]; src != "" {
