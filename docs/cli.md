@@ -610,10 +610,12 @@ of `brig network ls` works as printed, so
 only.
 
 On macOS, publishing needs the `hvi` backend. On `vz` and `qemu`, Brig
-refuses a run that publishes a port. On Linux, ports are set only when the
-sandbox is created: `brig run --publish` works, and `brig network publish`
-on a running sandbox fails and tells you to remove the sandbox and run again
-with `--publish`.
+refuses a run that publishes a port. hull on Linux publishes as `hvi` does,
+on the sandbox's network gateway, so `brig network publish` works on a
+running sandbox there too. On nerdctl, ports are set only when the sandbox
+is created: `brig run --publish` works, and `brig network publish` on a
+running sandbox fails and tells you to remove the sandbox and run again with
+`--publish`.
 
 ### `brig doctor`
 
@@ -1359,8 +1361,8 @@ cannot serve it: on `vz` or `qemu`, on docker, with no network, and on an
 Brig does not serve.
 
 `brig network publish` refuses with `7` on `vz`, `qemu`, docker and a macOS
-backend that Brig does not know. On `hvi` it records the port, and the next
-run refuses with `7` if Brig cannot check the gateway.
+backend that Brig does not know. On `hvi` and hull on Linux it records the
+port, and the next run refuses with `7` if Brig cannot check the gateway.
 
 Two refusals exit `1`. With no policy bound, an isolated network on `vz`
 or `qemu` is a different refusal. A refusal that Brig reaches first keeps

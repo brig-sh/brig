@@ -293,7 +293,7 @@ credential.
 [broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
-> A guest on `hvi` or on Linux with nerdctl reaches a route at
+> A guest on `hvi`, or on Linux with nerdctl or hull, reaches a route at
 > `https://brig.internal`, with the brig CA (see
 > [Transports](broker.md#transports)). On hull on `vz` or `qemu`, and on
 > docker, Brig refuses a run bound to a policy with routes before anything
