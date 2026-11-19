@@ -76,12 +76,12 @@ The sandbox is a microVM on macOS and on Linux.
 | Host | How the microVM boots |
 | --- | --- |
 | macOS | [hull](https://github.com/brig-sh/hull) boots it. Its `hvi` backend uses Hypervisor.framework, and seven of the nine shipped profiles ask for `hvi`. Its `vz` backend uses Virtualization.framework, and `claude-desktop` and `cursor` run on `vz`. `BRIG_HYPERVISOR` overrides the profile. See [Run paths compared](runtimes.md#run-paths-compared). `brew install --cask brig` installs hull |
-| Linux | Brig drives `nerdctl` and hands the container to the urunc shim (`io.containerd.urunc.v2`) by default. The guest gets its own kernel |
+| Linux | Brig drives `hull` when a `hull` is on `PATH`, and `nerdctl` otherwise. `BRIG_RUNTIME` names either one. Both hand the container to the urunc shim (`io.containerd.urunc.v2`), which on nerdctl is the default. The guest gets its own kernel |
 
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
-name that shim. Brig refuses a shim that it knows shares the host kernel:
-`runc`, `crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`,
-by name or by path. A container that shares the host kernel is not the
+name that shim on nerdctl. hull does not read it. Brig refuses a shim that it
+knows shares the host kernel: `runc`, `crun` or the runc shim binaries
+`containerd-shim-runc-v1` and `-v2`, by name or by path. A container that shares the host kernel is not the
 boundary Brig provides.
 
 `--isolation microvm` goes further and refuses every run whose `ISOLATION` row
@@ -197,8 +197,8 @@ Brig does with the answers. They do not stop the reads.
 A credential reaches the guest by one of two channels, which the profile
 picks for each secret. A third channel, `broker`, keeps the credential on
 the host. A policy's [route](policies.md#routes) names the secret, and the
-guest gets a session token for the route in its place. Routes work on `hvi`
-and on Linux with nerdctl.
+guest gets a session token for the route in its place. Routes work on `hvi`,
+and on Linux with hull or nerdctl.
 
 | Channel | What it does |
 | --- | --- |
@@ -1368,7 +1368,7 @@ If you find an excluded item in a payload, that is a bug. Report it as
 
 ### Network egress
 
-To restrict egress, attach a policy on `hvi` or on Linux with nerdctl.
+To restrict egress, attach a policy on `hvi`, or on Linux with hull or nerdctl.
 `--network offline` is the one posture with no route out at all, on every
 backend.
 

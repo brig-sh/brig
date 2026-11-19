@@ -716,8 +716,8 @@ without a `gcloud` source. See [The gcp preset](policies.md#the-gcp-preset).
 ## Renewal on the host
 
 `brig-broker` renews a secret this way for a run whose
-[route](policies.md#routes) serves it, on macOS with the `hvi` backend and
-on Linux with nerdctl and urunc ([Transports](broker.md#transports)). Every other run delivers
+[route](policies.md#routes) serves it, on macOS with the `hvi` backend, and
+on Linux with hull or with nerdctl and urunc ([Transports](broker.md#transports)). Every other run delivers
 `claude-credentials` as a file, as
 [What file delivery buys](security.md#what-file-delivery-buys-and-what-it-costs)
 describes.

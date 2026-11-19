@@ -29,7 +29,7 @@ The license column comes from the `LICENSE` file of each repository, read on
 | `hull` | CLI that pulls an OCI image and boots it as a microVM on Apple Silicon | [brig-sh/hull](https://github.com/brig-sh/hull) | Apache-2.0 |
 | `vz-runner` | Swift helper hull launches for its `vz` backend, which is what talks to Virtualization.framework | same repository as hull, installed beside it | Apache-2.0 |
 | `hvi` | separate microVM monitor for hull's `hvi` backend, which talks to Hypervisor.framework directly | [brig-sh/hvi-vmm](https://github.com/brig-sh/hvi-vmm), a git submodule of hull, installed beside hull | Apache-2.0 |
-| `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
+| `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
 | `containerd` | daemon underneath nerdctl: it holds the image store and hands each container to a shim | [containerd/containerd](https://github.com/containerd/containerd) | Apache-2.0 |
 | `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc), built by the Linux runtime bundle from the `feat/unchanged_containers-exec-fixes` branch | Apache-2.0 |
 | `cosign` | verifies the signature on a guest image before it boots. Optional, and verification degrades to a warning without it | [sigstore/cosign](https://github.com/sigstore/cosign) | Apache-2.0 |
@@ -313,7 +313,8 @@ Brig finds the runtime in this order (`internal/runtime/runtime.go`):
 
 1. `BRIG_RUNTIME` names the runtime, `hull` or `nerdctl`. Brig refuses any
    other value by name. If the variable is unset, the runtime is `hull` on
-   macOS and `nerdctl` everywhere else.
+   macOS. Everywhere else it is `hull` when a `hull` is on `PATH`, and
+   `nerdctl` otherwise.
 2. `BRIG_RUNTIME_BIN` is the executable to run. Brig takes a path as it
    stands, and looks up a bare name on PATH. If the executable is missing or
    not executable, Brig reports that against the variable before anything
