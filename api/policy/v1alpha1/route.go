@@ -408,8 +408,11 @@ type GraphQLAllow struct {
 
 // RequestBody holds the rules that read a POST /v1/messages to the Anthropic
 // Messages API. A request that misses one is refused with 403 in the
-// Anthropic error shape before any credential is fetched. Each list that is
-// set holds at least one entry, and at least one rule is set.
+// Anthropic error shape before any credential is fetched. A route with these
+// rules also refuses every call but that one, GET /v1/models and
+// GET /v1/models/{id}, since the others take a prompt where the rules do not
+// read. Each list that is set holds at least one entry, and at least one rule
+// is set.
 type RequestBody struct {
 	// Models is optional. It lists the models a request may name, as exact
 	// names or globs where * matches any run of characters, none included.
@@ -417,13 +420,16 @@ type RequestBody struct {
 	Models []string `json:"models,omitempty"`
 	// Tools is optional. It limits the tools a request offers the model, by
 	// tools[].name. A request that offers a refused tool is refused whole.
+	// With it, the broker drops the Anthropic-Beta values that may declare
+	// tools inside messages, where tools[].name does not reach.
 	Tools *ToolRules `json:"tools,omitempty"`
 	// MaxTokens is optional, and 0 leaves it unset. A request whose
 	// max_tokens is over it is refused. A request without max_tokens passes.
 	MaxTokens int `json:"maxTokens,omitempty"`
-	// ToolResultDeny is optional. It lists RE2 patterns matched against the
-	// text of every tool_result block and every user text block. A request
-	// with a match is refused, and the matched text is never logged.
+	// ToolResultDeny is optional. It lists RE2 patterns matched against
+	// every key and string value of the body, at any depth. A model or tool
+	// name that Models or Tools.Allow lists is skipped. A request with a
+	// match is refused, and the matched text is never logged.
 	ToolResultDeny []string `json:"toolResultDeny,omitempty"`
 	// ToolUse is optional. It limits the tool calls of the answer: a
 	// tool_use block that calls a denied tool is replaced by a refusal text,
