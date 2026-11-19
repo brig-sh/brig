@@ -370,6 +370,12 @@ Brig refuses a route that sets both `headers.set` and `basicAuth`, and a
 route with a `credential` and neither, whatever `tls` says. Brig also
 refuses `tls` on a route with a `preset`.
 
+`remove` applies before `set`, so Brig refuses a header named in both. The
+exception is `Authorization`, which is always removed and which a route may
+set. No header list names `Host`, `Connection`, `Content-Length`,
+`Transfer-Encoding`, `Upgrade`, `Keep-Alive`, `TE`, `Trailer` or a `Proxy-`
+header, because the broker sets or drops those itself.
+
 ### Body rules for the Messages API
 
 `request.body` limits a `POST /v1/messages` by its body, and the tool calls
@@ -444,21 +450,6 @@ answer where the rewrite does not look. The method of the checked call is
 read in any case, so `post` is checked as `POST`. A trailing slash, a
 `;parameter` or a path in another case does not change which call a request
 is.
-
-`inject` sets one of `headers.set` and `basicAuth`, unless `tls.clientCertificate`
-stands alone. `tls` may also sit beside one of them. Brig refuses a route that
-sets both `headers.set` and `basicAuth`. A route with a `credential` carries it
-in `headers.set` or `basicAuth`, whatever `tls` says: a client certificate
-identifies the caller on the connection, and does not carry the credential.
-Brig refuses a route with a `credential` and neither, rather than resolve a
-credential it never sends. A route with a `preset` cannot carry `tls`, because
-the preset sets its `inject` itself, and Brig refuses it.
-
-`remove` applies before `set`, so Brig refuses a header named in both. The
-exception is `Authorization`, which is always removed and which a route may
-set. No header list names `Host`, `Connection`, `Content-Length`,
-`Transfer-Encoding`, `Upgrade`, `Keep-Alive`, `TE`, `Trailer` or a `Proxy-`
-header, because the broker sets or drops those itself.
 
 ### Client certificates
 
