@@ -14,6 +14,9 @@ Open an issue and pick the bug report template. Include:
 - The output of `brig doctor`, which prints one line per check: brig (the
   build), host, virtual, runtime, boot, verify, profiles, secrets, brigd and
   image.
+- If a session hung, slowed down or stopped, the file that
+  `brig report <ref>` writes. Read it before you attach it: see
+  [Diagnostic reports](security.md#diagnostic-reports).
 
 [Issues](../CONTRIBUTING.md#issues) in the contributing guide lists what else
 helps: the runtime version, your environment, and the steps to reproduce.
