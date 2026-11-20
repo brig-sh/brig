@@ -66,7 +66,7 @@ func divertContext(ctx context.Context, c net.Conn) context.Context {
 // refuses rather than serves.
 func vendOnly(r *http.Request) bool {
 	a, _ := r.Context().Value(arrivalKey{}).(arrival)
-	return a != arrivalLoopback && a != arrivalBrigInternal
+	return a != arrivalLoopback && a != arrivalBrigInternal && a != arrivalAddress
 }
 
 // serveLinkLocal serves one connection the diverter handed over for the

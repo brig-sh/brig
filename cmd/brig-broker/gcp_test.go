@@ -377,3 +377,84 @@ func TestTheBrokersEnvironmentDoesNotPickTheIdentity(t *testing.T) {
 		t.Errorf("the fake recorded no PATH, so this test checks nothing: %q", blob)
 	}
 }
+
+// A gcp route whose secret is a gcloud pointer runs the host's gcloud. A node
+// has no user login for it, and on GKE gcloud falls back to the node's own
+// service account. A broker started with --listen or --secret-dir refuses
+// the route at registration, names it, and never runs gcloud.
+func TestANodeBrokerRefusesAGCloudPointerRoute(t *testing.T) {
+	for name, flags := range map[string]func(*testing.T, *serverConfig){
+		"secret-dir alone": func(t *testing.T, cfg *serverConfig) {
+			cfg.secretDir = filesDir(t, map[string][]byte{"gcp": []byte(gcpPointer)})
+		},
+		"listen alone": func(_ *testing.T, cfg *serverConfig) { cfg.listen = "127.0.0.1:0" },
+		"both": func(t *testing.T, cfg *serverConfig) {
+			cfg.secretDir = filesDir(t, map[string][]byte{"gcp": []byte(gcpPointer)})
+			cfg.listen = "127.0.0.1:0"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var cfg serverConfig
+			flags(t, &cfg)
+			r, f := startGCPBroker(t, cfg, nil)
+			if err := r.store.Create("gcp", []byte(gcpPointer)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := r.client.Add(gcpSandbox("brig-a"))
+			ref := refusal(t, err)
+			if ref.Status != http.StatusBadRequest || ref.Kind != "" {
+				t.Errorf("refusal = %d kind %q, want a plain 400", ref.Status, ref.Kind)
+			}
+			for _, want := range []string{"route gcp", "gcloud", "service account", "--"} {
+				if !strings.Contains(ref.Message, want) {
+					t.Errorf("the refusal %q does not say %q", ref.Message, want)
+				}
+			}
+			if st, _ := r.client.Status(); len(st.Sandboxes) != 0 || len(st.Vending) != 0 {
+				t.Errorf("status = %+v after the refusal, want nothing registered", st)
+			}
+			if calls := f.calls(t); len(calls) != 0 {
+				t.Errorf("gcloud ran on a node broker: %q", calls)
+			}
+		})
+	}
+}
+
+// A node broker still serves a gcp route with a raw token. A mounted Secret
+// can change under a running broker, so a file that becomes a gcloud pointer
+// after the registration is refused at the request, and gcloud never runs.
+func TestANodeBrokerNeverRunsGCloudForAPointerThatAppearsLater(t *testing.T) {
+	logs := &lockedBuffer{}
+	u := newUpstream(t)
+	dir := filesDir(t, map[string][]byte{"gcp": []byte(fakeGCPRaw)})
+	r, f := startGCPBroker(t, serverConfig{secretDir: dir, logTo: logs}, u)
+	if _, err := r.client.Add(gcpSandbox("brig-a")); err != nil {
+		t.Fatalf("a raw token on a node broker: %v", err)
+	}
+	token := r.mint(t, "brig-a", "gcp")
+	if code := r.send(t, "brig-a", "gcp", token, "/storage/storage/v1/b"); code != http.StatusOK {
+		t.Fatalf("request with the raw token = %d, want 200", code)
+	}
+	path := filepath.Join(dir, "gcp")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(gcpPointer), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if code := r.send(t, "brig-a", "gcp", token, "/storage/storage/v1/b"); code != http.StatusBadGateway {
+		t.Errorf("request with a pointer on a node = %d, want 502", code)
+	}
+	if calls := f.calls(t); len(calls) != 0 {
+		t.Errorf("gcloud ran on a node broker: %q", calls)
+	}
+	if n := len(u.requests()); n != 1 {
+		t.Errorf("upstream saw %d requests, want the one with the raw token", n)
+	}
+	if !strings.Contains(logs.String(), "route gcp mints Google tokens through the host's gcloud CLI") {
+		t.Errorf("the broker log does not name the refusal:\n%s", logs.String())
+	}
+}

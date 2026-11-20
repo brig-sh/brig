@@ -462,6 +462,39 @@ accepts it. The request never leaves the virtual link for a network. The
 broker serves only a route that vends on that path, and refuses any other
 route before it reads the token. See [Transports](broker.md#transports).
 
+**The link to a broker on a node.** A broker on a Kubernetes node, started
+with `--listen`, has no virtual link and no divert socket. A pod reaches it
+at `brig.internal` over the pod network, with TLS. That broker refuses this
+route, and a `gcp` route whose secret is a gcloud pointer, because both run a
+CLI on the host. It serves the other routes, with these limits. See
+[Running the broker on a node](broker.md#running-the-broker-on-a-node).
+
+- **The source IP binds a token to its sandbox.** The broker binds each
+  request to the sandbox registered with the IP the connection came from.
+  The rule holds only where the pod network delivers each pod's own address.
+- **The token is the only client credential.** The TLS is server-only. A
+  request carries no identity besides its session token and its source IP.
+- **A shared source address names no pod.** Pods behind one address, such as
+  behind SNAT, cannot be told apart. Neither can a pod with `hostNetwork`,
+  which has the node's address. The broker refuses a loopback or link-local
+  sandbox address for that reason.
+- **A pod IP is reused.** A registration has no lifetime, and the CNI gives
+  the IP of a pod that is gone to a new pod. If the shim misses the removal
+  of the first pod, the new pod's requests are bound to the old sandbox. A
+  token of the old sandbox then works from the new pod while the token
+  lives. A registration that carries the pod UID replaces a registration of
+  the same address with another UID, and the tokens of the old sandbox stop
+  working. That needs a shim that sends the UID.
+- **The secret files are readable by the broker's group.** The files of
+  `--secret-dir` are mounted with `defaultMode: 0440` or the Secret's
+  `fsGroup`. Any process on the node with that group reads every credential
+  the broker serves.
+- **A renewed credential lives in memory only.** The secret directory is
+  read-only, so a credential the broker renews is not written back. A
+  restart starts again from the file. A provider that rotates the refresh
+  token at renewal can leave the file with one that no longer works, and
+  the Secret must then be updated.
+
 **Named, not ambient.** You name the AWS profile when you run
 `brig secret import`. The secret holds that pointer and no key. Brig does
 not read `~/.aws` or the AWS SSO cache itself. `brig-broker` runs the host's

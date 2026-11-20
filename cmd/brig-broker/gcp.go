@@ -23,6 +23,9 @@ import (
 type gcpMinter struct {
 	bin   string
 	cache *gcpcred.Cache
+	// node names the flags of a broker on a node, or is "". Such a broker
+	// runs no gcloud: see refuseHostRoutes.
+	node string
 	// log is the broker log. A failure the user cannot act on is written
 	// there, and the guest is told to look.
 	log *log.Logger
@@ -52,6 +55,9 @@ func newGCPMinter(bin, tokenInfoURL string, now func() time.Time, logger *log.Lo
 // left. A pointer that does not parse is not one the user fixes by logging
 // in, so it goes to the broker log and the guest is told to look there.
 func (m *gcpMinter) Mint(ctx context.Context, sandbox, route string, doc []byte) (string, error) {
+	if m.node != "" {
+		return "", m.failed(sandbox, route, gcloudOnNode(route, m.node), false)
+	}
 	p, err := gcpcred.ParsePointer(doc)
 	if err != nil {
 		return "", m.failed(sandbox, route, err, false)
@@ -69,6 +75,9 @@ func (m *gcpMinter) Mint(ctx context.Context, sandbox, route string, doc []byte)
 // the run that would otherwise start and fail at the guest's first Google
 // call, and the request after registration is served from the cache.
 func (m *gcpMinter) check(ctx context.Context, sandbox, route string, doc []byte) error {
+	if m.node != "" {
+		return m.failed(sandbox, route, gcloudOnNode(route, m.node), false)
+	}
 	p, err := gcpcred.ParsePointer(doc)
 	if err != nil {
 		return m.failed(sandbox, route, err, false)

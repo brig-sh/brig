@@ -107,10 +107,19 @@ func (l *connListener) Addr() net.Addr {
 // arrival is the arrival check of the route handler, and names the sandbox
 // whose divert socket the request arrived on. A request that arrived on a
 // divert socket, over brig.internal or the link-local address, is served only
-// for the sandbox the socket belongs to. A request on the loopback port is
-// served only for a sandbox that reaches the broker there: one registered with
-// a brig.internal address reaches it on its divert socket alone.
+// for the sandbox the socket belongs to. A request on the address listener is
+// served only for the sandbox registered with the IP its connection came from,
+// and a peer no sandbox registered is served for none. A request on the
+// loopback port is served only for a sandbox that reaches the broker there:
+// one registered with a brig.internal address reaches it on its divert socket
+// alone.
 func (s *server) arrival(sandbox, remoteAddr string) (string, bool) {
+	if peer, ok := peerAddr(remoteAddr); ok {
+		s.mu.Lock()
+		id := s.byAddr[peer]
+		s.mu.Unlock()
+		return id, id != "" && id == sandbox
+	}
 	// Both prefixes are checked here. A link-local address that fell through
 	// to the loopback check would pass for any sandbox without brig.internal.
 	for _, prefix := range []string{divertArrival, linkLocalArrival} {
