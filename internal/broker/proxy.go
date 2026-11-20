@@ -149,25 +149,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := sessionToken(&rt.spec, r.Header)
-	if token == "" {
-		a.check = errTokenMissing.Error()
-		refuseToken(rec, rt)
+	// A passthrough route has no session token, so only where the request
+	// arrived binds it to the sandbox. The loopback port names no sandbox,
+	// and any process on the host can send a request there.
+	passthrough := rt.spec.Passthrough
+	if passthrough && a.arrived != p.sandbox {
+		a.check = "arrival"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	c, err := verify(sb.key, token, p.sandbox, p.route, h.now())
-	if err != nil {
-		a.check = err.Error()
-		refuseToken(rec, rt)
-		return
+
+	var (
+		token string
+		exp   time.Time
+		wl    = sb.workload("")
+	)
+	if !passthrough {
+		token = sessionToken(&rt.spec, r.Header)
+		if token == "" {
+			a.check = errTokenMissing.Error()
+			refuseToken(rec, rt)
+			return
+		}
+		c, err := verify(sb.key, token, p.sandbox, p.route, h.now())
+		if err != nil {
+			a.check = err.Error()
+			refuseToken(rec, rt)
+			return
+		}
+		wl = sb.workload(c.Session)
+		exp = time.Unix(c.Exp, 0)
+		sb.remember(token, c.Route, exp)
 	}
-	wl := sb.workload(c.Session)
 	a.workload = workloadID(wl)
-	sb.remember(token, c.Route, time.Unix(c.Exp, 0))
 
 	// A token anywhere but its carrier is refused before anything else reads
 	// the request. The body is held for the scan, and goes upstream from the
-	// copy.
+	// copy. A passthrough route has no carrier, so a token of another route
+	// of the sandbox is refused wherever it is.
 	held, err := h.holdBody(rec, r, p.sandbox)
 	defer held.release()
 	if err != nil {
@@ -194,7 +213,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// as on arrival, and the scan runs at the same instant, so a token that
 	// passes here is still among the live ones the scan looks for.
 	now := h.now()
-	if !now.Before(time.Unix(c.Exp, 0)) {
+	if !passthrough && !now.Before(exp) {
 		a.check = errTokenExpired.Error()
 		refuseToken(rec, rt)
 		return
@@ -543,7 +562,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 			// its end before this clone, and the header rules below would
 			// not see them.
 			pr.Out.Trailer = nil
-			a.dropped = dropGuestHeaders(in, pr.Out.Header, token)
+			a.dropped = dropGuestHeaders(&rt.spec, pr.Out.Header, token)
 			if body := bodyRules(&rt.spec); body != nil && body.Tools != nil {
 				if n := dropToolBetas(pr.Out.Header); n > 0 {
 					if a.dropped == nil {
@@ -738,7 +757,7 @@ func (u *upstreamTrip) prepareTLS(ctx context.Context) error {
 // the transport of its sandbox and route, which presents the certificate it
 // was built with; any other goes through the shared one.
 func (u *upstreamTrip) send(req *http.Request) (*http.Response, error) {
-	if u.inject.TLS == nil {
+	if u.inject == nil || u.inject.TLS == nil {
 		return u.h.transport.RoundTrip(req)
 	}
 	if u.tt == nil {

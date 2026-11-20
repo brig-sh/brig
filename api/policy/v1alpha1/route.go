@@ -96,10 +96,18 @@ type Route struct {
 	// name, wildcard, zone or trailing dot, a host that is a DNS name or an
 	// IP address, and a port in 1-65535 when one is given.
 	Upstream string `json:"upstream,omitempty"`
-	// Credential is required. It names the secret that the broker injects.
+	// Passthrough is optional. A passthrough route holds no credential: the
+	// guest sends its own, and the broker forwards it with the request after
+	// the request rules. It takes no credential, no inject but
+	// inject.headers.allow, and only the claude-code and anthropic-api-key
+	// presets, or none.
+	Passthrough bool `json:"passthrough,omitempty"`
+	// Credential is required unless the route is passthrough. It names the
+	// secret that the broker injects.
 	Credential *CredentialRef `json:"credential,omitempty"`
-	// Inject is required unless a preset sets it. It says where the
-	// credential goes on the upstream request.
+	// Inject is required unless a preset sets it or the route is
+	// passthrough. It says where the credential goes on the upstream
+	// request.
 	Inject *Inject `json:"inject,omitempty"`
 	// Guest is required unless a preset sets it. It says how the tool in the
 	// guest is pointed at the route.

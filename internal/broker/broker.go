@@ -355,7 +355,8 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if _, dup := sb.routes[name]; dup {
 			return fmt.Errorf("sandbox %s: route %s is registered twice", s.ID, name)
 		}
-		if r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly()) {
+		if !r.Route.Passthrough &&
+			(r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly())) {
 			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
 		}
 		if m := r.Route.Mode; !m.AtBrigInternal() && !slices.Contains(s.Modes, m) {

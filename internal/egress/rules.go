@@ -105,11 +105,19 @@ func normalizeName(name string) string {
 
 func (r ruleSet) matchesHost(name string) bool {
 	for _, glob := range r.hosts {
-		if ok, err := path.Match(glob, name); err == nil && ok {
+		if MatchHost(glob, name) {
 			return true
 		}
 	}
 	return false
+}
+
+// MatchHost reports whether the host rule glob covers name, as the resolver
+// and hull's gateway read it. brig checks a policy against a route's upstream
+// before the run with it, so the check and the enforcer cannot disagree.
+func MatchHost(glob, name string) bool {
+	ok, err := path.Match(normalizeName(glob), normalizeName(name))
+	return err == nil && ok
 }
 
 // literalHosts returns the host rules that name exactly one host. Only these

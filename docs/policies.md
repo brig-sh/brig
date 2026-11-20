@@ -332,8 +332,9 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
 | `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. `host`: the guest reaches the route at `https://<route>.brig.internal`, so `name` is at most 63 characters and does not end with a dash. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
+| `passthrough` | no | `true` for a route that holds no credential: the guest sends its own, and the broker forwards it after the request rules. It takes no `credential`, no `inject` but `inject.headers.allow`, no `guest.git`, no `{session.token}` in `guest.env`, and only the `anthropic-api-key` and `claude-code` presets, or none. See [Passthrough routes](#passthrough-routes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
-| `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
+| `credential.secretRef.name` | yes, unless the route is certificate-only or passthrough | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
 | `inject.headers.set` | unless a preset sets it, `basicAuth` is set, or the route is certificate-only | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
@@ -450,6 +451,58 @@ answer where the rewrite does not look. The method of the checked call is
 read in any case, so `post` is checked as `POST`. A trailing slash, a
 `;parameter` or a path in another case does not change which call a request
 is.
+
+### Passthrough routes
+
+A passthrough route checks the requests of a guest that holds its own key.
+The broker applies `request.allow` and `request.body`, and forwards the
+guest's credential as it was sent. It holds no secret for the route.
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: anthropic-checked
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      passthrough: true
+      request:
+        allow:
+          methods: [POST]
+          paths: ["/v1/messages"]
+        body:
+          models: ["claude-sonnet-4-5*"]
+          maxTokens: 8192
+          toolUse:
+            deny: [Bash]
+```
+
+The preset still sets the upstream, `ANTHROPIC_BASE_URL` and the
+`Anthropic-Beta` allow list. It no longer sets `ANTHROPIC_API_KEY`, so the
+guest keeps its own.
+
+The egress has no `allow` for `api.anthropic.com`. The guest holds its own
+key, so an `allow` for the host would let it send the key there directly,
+past `request.body`. Brig refuses a policy that allows the upstream of its
+own passthrough route, and tells you to remove that `allow`. It also refuses
+a run whose merged egress would let the guest reach the upstream: with no
+`spec.egress`, under `default: allow`, with an `allow` from another bound
+policy that covers the host, or with any `allow` cidr. The starter from
+`brig policy create` allows `api.anthropic.com`, so remove that `allow`
+before you add a passthrough route to it.
+
+A policy from a Brigfile may not declare a passthrough route. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
+The route has no session token, so the broker serves it only for a request
+that arrived bound to the sandbox: on its divert socket, or from the address
+it registered on a node broker. See [Passthrough
+routes](broker.md#passthrough-routes) for what the broker checks, and what it
+leaves to the egress rules.
 
 ### Client certificates
 
@@ -1068,14 +1121,16 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-`check` does four checks:
+`check` does five checks:
 
 1. Is the profile `kind: shell` or `kind: gui`? Such a profile can never
    enforce a policy.
 2. Does every bound name still resolve to a policy that loaded?
 3. Can the routes of the bound policies apply together? See
    [Several policies with routes](#several-policies-with-routes).
-4. Can a run of the profile on this host enforce the egress rules? Where it
+4. Does the merged egress refuse the upstream of every passthrough route?
+   See [Passthrough routes](#passthrough-routes).
+5. Can a run of the profile on this host enforce the egress rules? Where it
    cannot, on `vz`, `qemu` or docker, `check` refuses them
    with exit status `7`, as the run does. An offline run passes, and with no
    runtime on the host this check is skipped.
@@ -1489,7 +1544,9 @@ The relay passes the bytes on unchanged, and never logs them.
 
 **`attach` and `check` do not inspect rules.** They refuse a `kind: shell`
 or `kind: gui` profile, and a name bound to nothing. They can tell you that
-the document parses, not that an `allow` glob matches what you meant.
+the document parses, not that an `allow` glob matches what you meant. The one
+exception is a passthrough route: `check` refuses egress that would let the
+guest reach its upstream.
 
 **Brig's merge applies no priority.** It concatenates the `allow` and `deny`
 lists from every bound policy. On `hvi` and on hull on Linux, the gateway

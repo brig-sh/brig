@@ -124,18 +124,24 @@ error of that step, and the upstream is never dialed.
    socket, only the sandbox of that socket is served. An unknown sandbox or
    route, or another sandbox's path, is a 404. A request on the link-local
    address is served only for a route that vends. Any other route is a 404
-   there, before its token is read.
+   there, before its token is read. A [passthrough
+   route](#passthrough-routes) is served only for a request that arrived on
+   its sandbox's divert socket, or on the address listener from the IP the
+   sandbox registered. On the loopback port it is a 404.
 3. Read the session token from `Authorization: Bearer`, or from another
    carrier of the route that [Placeholder detection](#placeholder-detection)
    lists, such as the basic-auth password that git's credential helper
-   sends.
+   sends. A passthrough route has no session token, and skips this step and
+   the next.
 4. Verify the token: the signature with the sandbox key, the sandbox claim
    against the path, the route claim against the route, and the expiry.
    Any failure is a 401.
 5. Read the body, up to 8 MiB, and check the expiry again: the body can
    take longer to arrive than the token had left. An expired token is a
    401. Then refuse a session token anywhere but its carrier. This is a
-   403. See [Placeholder detection](#placeholder-detection).
+   403. See [Placeholder detection](#placeholder-detection). A passthrough
+   route has no carrier, so a session token of any route of the sandbox is
+   refused wherever it is.
 6. Refuse a `<rest>` that the upstream could read as another path. This is
    a 400. See [Canonical paths](#canonical-paths). A route that vends serves
    `/` alone, and any other `<rest>` is a 404.
@@ -155,7 +161,8 @@ error of that step, and the upstream is never dialed.
    been read yet.
 9. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached. A route with no `credential`, such as a
-   [certificate-only](policies.md#client-certificates) route, skips this step.
+   [certificate-only](policies.md#client-certificates) route or a passthrough
+   route, skips this step.
    On a `gcp` route whose secret is a gcloud pointer, the broker mints the
    token. See [Minted tokens](#minted-tokens).
 10. Edit the headers and forward the request. The response streams back as
@@ -231,6 +238,10 @@ Before the request goes upstream, the broker removes:
   would carry past them what they remove
 
 The names are compared in lower case.
+
+A passthrough route has no `inject.headers.set` or `remove`, so the broker
+keeps `Authorization` and every other header that carries the guest's own
+credential. It removes the rest of the list above.
 
 `inject.headers.allow` then keeps only the listed values of its header. A
 header that holds a comma-separated list is filtered item by item, and the
@@ -477,7 +488,7 @@ changes:
 | Status | When | `check=` on the audit line |
 | --- | --- | --- |
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
-| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on, or arrived on the address listener from an IP that sandbox did not register, or from an IP no sandbox registered. On a route that vends, any `<rest>` but `/`. On the link-local address, a route that does not vend | `path`, `arrival`, `sandbox`, `route`, `route.cleartext` |
+| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on, or arrived on the address listener from an IP that sandbox did not register, or from an IP no sandbox registered. On a passthrough route, a request on the loopback port. On a route that vends, any `<rest>` but `/`. On the link-local address, a route that does not vend | `path`, `arrival`, `sandbox`, `route`, `route.cleartext` |
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, or an expired token | `token`, `signature`, `token.sandbox`, `token.route`, `expired` |
 | 400 | The request body could not be read | `body` |
 | 400 | On a route with `request.body`, a `POST /v1/messages` body that is not JSON, or is over 8 MiB. `check=body` is shared with the read failures above, and the `reason` attr, `json` or `size`, tells them apart | `body` |
@@ -575,6 +586,54 @@ values `inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`
 before it forwards a request. They may carry tools inside `messages`, where
 the `tools` rule does not read. The audit line counts them in
 `dropped.anthropic-beta`.
+
+## Passthrough routes
+
+A route with `passthrough: true` holds no credential. The guest sends its
+own, and the broker forwards it after the request rules. Use it when the
+guest already holds the key, and the broker is there to apply `request.allow`
+and `request.body`, not to keep the key from the guest.
+
+A passthrough route takes no `credential`, and no `inject` but
+`inject.headers.allow`. Its `guest.env` never holds `{session.token}`. On
+the `anthropic-api-key` and `claude-code` presets, the guest gets the route
+URL in `ANTHROPIC_BASE_URL` and keeps its own `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN`. The other presets need a credential of the
+broker's, and refuse `passthrough`.
+
+A passthrough route has no session token, so only where its request arrived
+binds it to the sandbox. The broker serves it for a request on the
+sandbox's divert socket, or on the address listener from the IP the sandbox
+registered. A sandbox with neither is refused at registration, with a 400
+that names the route. The loopback port names no sandbox, and any process on
+the host can send a request there.
+
+The rest of the request path applies as on any route: the arrival, the
+canonical path, `request.allow`, `request.body`, the rewrite of denied tool
+calls in the answer, and the audit line. The response is not redacted, since
+the broker put no credential on the request. The preset's `Anthropic-Beta`
+list still applies, since it is a request rule and not a credential. A beta
+off the list, such as `mcp-client-2025-04-04`, is dropped before the request
+goes upstream.
+
+The request rules of a passthrough route hold only while egress refuses the
+upstream to the guest. Otherwise the guest can send the same key to the
+upstream directly. So Brig refuses a run, and `brig policy check` refuses the
+policies bound to it, when the run's merged egress would let the guest reach
+the upstream's host:
+
+- No bound policy has `spec.egress`.
+- The merged default is `allow`. A host `deny` under it is best effort,
+  because a connection sent straight to an address asks for no name.
+- An `allow` glob covers the host, and no `deny` glob does.
+- Any `allow` cidr is bound. Brig cannot resolve the host before the run, so
+  it cannot tell whether the cidr holds one of its addresses.
+
+A policy whose own `egress.allow` covers the upstream of its passthrough
+route is refused when it is read, with a message that names the host to
+remove. A pod on a node broker is not a Brig run, and Brig does not check its
+egress. Its network policy has to refuse the upstream, or the pod can send
+the same key past the broker.
 
 ## Session tokens
 
