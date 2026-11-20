@@ -339,8 +339,9 @@ func TestRenderDenyDefaultLooksUpOnlyAllowedNames(t *testing.T) {
 }
 
 // The resolver looks a name up under each search domain before it looks it
-// up as written. The proxy refuses a lookup it has no pattern for, and glibc
-// stops there, so every allow host needs its search lookups answered.
+// up as written. The proxy refuses a lookup it has no pattern for, and musl
+// waits on that refusal until it times out, so every allow host needs its
+// search lookups answered.
 func TestRenderDenyDefaultAnswersTheSearchLookups(t *testing.T) {
 	np, err := Render(loadPolicy(t, "deny-default"), Options{DNSSearch: []string{"US-West-2.Compute.Internal."}})
 	if err != nil {

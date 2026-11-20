@@ -1265,13 +1265,18 @@ the names it looks up, as in `<data>.attacker.example`. Brig's own resolver
 refuses those names too.
 
 A pod's resolver, with the usual `ndots:5`, looks a name up under each search
-domain before it looks it up as written. A lookup the proxy refuses ends
-there: glibc stops at the refusal, and musl waits until it times out. So the
-DNS rule answers every name under `cluster.local`, which kube-dns serves
-itself. Pass any other search domain in the pod's `/etc/resolv.conf` with
-`--dns-search`. On EKS that is the node's domain, such as
-`us-west-2.compute.internal`. Without it, a name the policy allows does not
-resolve.
+domain before it looks it up as written. glibc moves on to the next name when
+the proxy refuses one. musl does not: it waits for another answer until it
+times out, and the lookup fails. So the DNS rule answers every name under
+`cluster.local`, which kube-dns serves itself. Pass any other search domain
+in the pod's `/etc/resolv.conf` with `--dns-search`. On EKS that is the
+node's domain, such as `us-east-2.compute.internal`. Without it, a name the
+policy allows does not resolve in an image built on musl, such as Alpine.
+
+The rule to the `cluster` entity under `--cluster` also reaches kube-dns, on
+every port. On Cilium 1.17.3 the DNS rule still applies to that traffic: a
+lookup of a name the policy does not allow is refused, through the kube-dns
+service or straight to a kube-dns pod, over UDP and TCP.
 
 The DNS rule reaches kube-dns, the pods labeled `k8s-app: kube-dns` in
 `kube-system`. A cluster that runs NodeLocal DNSCache sends lookups to the

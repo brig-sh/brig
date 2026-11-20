@@ -315,8 +315,8 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 // on a Cilium release that reads "**." as one label. A resolver with the
 // usual ndots:5 looks a name up under each search domain before it looks
 // it up as written, and the proxy refuses a lookup it has no pattern for.
-// glibc stops at such a refusal and musl waits until it times out, so the
-// name never resolves. The deepest such lookup is an allow host followed
+// glibc moves on past such a refusal, and musl waits until it times out,
+// so the name never resolves in a musl image. The deepest such lookup is an allow host followed
 // by the namespace and "svc". A leading "*." counts as globDepth labels.
 // The result is never below globDepth, which leaves room for the names of
 // services in the cluster.
