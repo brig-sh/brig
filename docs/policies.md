@@ -1405,8 +1405,8 @@ or `kind: gui` profile, and a name bound to nothing. They can tell you that
 the document parses, not that an `allow` glob matches what you meant.
 
 **Brig's merge applies no priority.** It concatenates the `allow` and `deny`
-lists from every bound policy. On `hvi`, the gateway orders deny, allow and
-default. On nerdctl, Brig's table does.
+lists from every bound policy. On `hvi` and on hull on Linux, the gateway
+orders deny, allow and default. On nerdctl, Brig's table does.
 
 **The manual tests cover these cases:**
 
@@ -1417,11 +1417,12 @@ default. On nerdctl, Brig's table does.
 | [Egress policy on hull on Linux](manual-tests/egress-policy-hull-linux.md) | a urunc guest on hull on Linux, on hvi | a `default: deny` policy with `host` allows. The allowed names reach and the others fail to resolve | the run drove hull directly, not `brig run` |
 | [Egress conformance on nerdctl, bundle v0.1.0-rc17, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 | [Egress conformance on nerdctl, bundle v0.1.0-rc21, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc21-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
+| [Egress conformance on `hvi`, hull v0.2.0](manual-tests/egress-conformance-hvi-v0.2.0.md) | a real guest on `hvi`, probes under `brig sh` | the network conformance suite under both defaults, including a `deny` rule that overrides an `allow` rule | the `vz` and `qemu` backends |
+| [Egress conformance on hull on Linux, bundle v0.1.0-rc23, rootless](manual-tests/egress-conformance-hull-linux-v0.1.0-rc23-rootless.md) | a urunc guest on hull on Linux, on hvi, from the runtime bundle, probes under `brig sh` | the network conformance suite under both defaults, including a `deny` rule that overrides an `allow` rule | a rootful runtime bundle, an arm64 host |
 
 `script/egress-conformance.sh -backend hull-linux` runs the same suite on
 hull on Linux, with the hull the runtime bundle ships. Its record is
-`egress-conformance-hull-linux-<bundle version>.md`. No such record is
-committed yet.
+`egress-conformance-hull-linux-<bundle version>.md`.
 
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox.
