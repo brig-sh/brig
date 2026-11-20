@@ -6,17 +6,27 @@ import (
 	"path/filepath"
 )
 
-// hostDir is where brig keeps state of its own on the host: ~/.brig/host, or
-// host under BRIG_STATE_DIR.
-func hostDir() (string, error) {
+// StateDir is brig's state directory: ~/.brig, or BRIG_STATE_DIR. The host
+// directory and the memory stores are below it.
+func StateDir() (string, error) {
 	if dir := os.Getenv("BRIG_STATE_DIR"); dir != "" {
-		return filepath.Join(dir, "host"), nil
+		return dir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("no home directory to keep host state in: %w", err)
+		return "", fmt.Errorf("no home directory to keep brig's state in: %w", err)
 	}
-	return filepath.Join(home, ".brig", "host"), nil
+	return filepath.Join(home, ".brig"), nil
+}
+
+// hostDir is where brig keeps state of its own on the host: ~/.brig/host, or
+// host under BRIG_STATE_DIR.
+func hostDir() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "host"), nil
 }
 
 // HostDir is where brig keeps state of its own on the host: ~/.brig/host, or

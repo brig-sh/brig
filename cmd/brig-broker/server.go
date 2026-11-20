@@ -93,6 +93,9 @@ type serverConfig struct {
 	// tokens. nil is time.Now. A minted token's expiry comes from the host's
 	// clock, not from now.
 	now func() time.Time
+	// memoryDir is the root of the memory stores, memory under brig's state
+	// directory. "" serves no memory: a registration is refused.
+	memoryDir string
 }
 
 // lifecycleRenewer returns the Renewer that keeps a credential of lifecycle
@@ -144,7 +147,14 @@ type server struct {
 	diverts map[string]*divertSandbox
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
-	vends    map[string]map[string]vendRoute
+	vends map[string]map[string]vendRoute
+	// memoryKey signs the memory tokens, through the sandbox keys in
+	// memories. It is not the host key.
+	memoryKey []byte
+	// memories are the memory registrations, by sandbox id.
+	memories map[string]memoryReg
+	// memGate bounds the memory requests in flight.
+	memGate  memoryGate
 	stopping bool
 	stop     chan struct{}
 }
@@ -160,7 +170,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
-		resolve: cfg.resolve, dial: cfg.dial}
+		resolve: cfg.resolve, dial: cfg.dial, memories: map[string]memoryReg{}}
 	if s.resolve == nil {
 		s.resolve = lookupHost
 	}
@@ -177,6 +187,9 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	hostKey, err := loadOrCreateHostKey(filepath.Join(cfg.dir, injector.HostKeyName))
 	if err != nil {
+		return nil, err
+	}
+	if s.memoryKey, err = loadOrCreateMemoryKey(filepath.Join(cfg.dir, injector.MemoryKeyName)); err != nil {
 		return nil, err
 	}
 	if s.ca, err = loadOrCreateCA(cfg.dir); err != nil {
@@ -275,9 +288,10 @@ func (s *server) serve(ctx context.Context) error {
 	// sockets hand over, and so is the link-local address of the routes
 	// that vend. Each request's remote address names the socket it arrived
 	// on, and its context marks whether it came in clear text. See
-	// briginternal.go and linklocal.go.
+	// briginternal.go and linklocal.go. It also serves memory, which the
+	// loopback port never does: see memory.go.
 	internal := &http.Server{
-		Handler:           s.handler,
+		Handler:           s.internalMux(),
 		ConnContext:       divertContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
@@ -385,6 +399,9 @@ func (s *server) controlMux() http.Handler {
 	mux.HandleFunc("POST /tokens", s.mint)
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /stop", s.stopRequest)
+	mux.HandleFunc("POST /memory/sandboxes", s.addMemory)
+	mux.HandleFunc("DELETE /memory/sandboxes/{id}", s.removeMemory)
+	mux.HandleFunc("POST /memory/tokens", s.mintMemory)
 	return mux
 }
 
@@ -492,6 +509,17 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	if s.refuseStopping(w) {
 		return
 	}
+	// The routes and the memory of a sandbox share its divert socket, which
+	// serves one brig.internal address.
+	if m, ok := s.memories[req.ID]; ok && m.internal.IsValid() && m.internal != internal {
+		if _, ok := s.sandboxes[req.ID]; !ok {
+			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
+		}
+		http.Error(w, fmt.Sprintf("sandbox %s: the routes reach brig.internal at %s, and its memory at %s; "+
+			"both must name the same address", req.ID, addrName(internal), m.internal), http.StatusConflict)
+		return
+	}
 	if s.sandboxes[req.ID] == string(key) {
 		s.setVends(req.ID, vends)
 		reply(w, s.added(req.ID))
@@ -536,15 +564,35 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// One socket for brig.internal and every route mode besides endpoint.
 	// The socket path is the sandbox's, so the listener of a registration
-	// this one replaces goes first.
-	if old := s.diverts[req.ID]; old != nil {
+	// this one replaces goes first. A socket the sandbox's memory holds
+	// stays, at the address checked above, and only what the routes serve
+	// on it changes: closing it would cut the guest's open connections to
+	// its memory on every change of routes.
+	routesHold := internal.IsValid() || len(sb.Modes) > 0
+	old := s.diverts[req.ID]
+	if old != nil && !old.memory {
 		old.close()
 		delete(s.diverts, req.ID)
+		old = nil
 	}
-	// One socket for brig.internal and every route mode besides endpoint.
-	if internal.IsValid() || len(sb.Modes) > 0 {
-		l, err := s.openDivert(req.ID, internal, sb.Modes, req.Modes)
+	if old != nil || routesHold {
+		var err error
+		if old != nil {
+			// The old handlers close before the new open, as when the
+			// socket is replaced.
+			old.setRoutes(false, nil)
+			var handlers []divertHandler
+			if handlers, err = s.openHandlers(req.ID, sb.Modes, req.Modes); err == nil {
+				old.setRoutes(routesHold, handlers)
+			}
+		} else {
+			var l *divertSandbox
+			if l, err = s.openDivert(req.ID, internal, true, sb.Modes, req.Modes); err == nil {
+				s.diverts[req.ID] = l
+			}
+		}
 		if err != nil {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
@@ -555,7 +603,6 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusInternalServerError)
 			return
 		}
-		s.diverts[req.ID] = l
 	}
 	s.sandboxes[req.ID] = string(key)
 	s.setVends(req.ID, vends)
@@ -646,6 +693,14 @@ func brigInternalAddr(s string) (netip.Addr, error) {
 	return a.Unmap(), nil
 }
 
+// addrName spells a brig.internal address in a refusal.
+func addrName(a netip.Addr) string {
+	if !a.IsValid() {
+		return "none"
+	}
+	return a.String()
+}
+
 func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := broker.ValidID(id); err != nil {
@@ -660,10 +715,15 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	s.aws.forget(id)
 	s.gcp.forget(id)
 	if l := s.diverts[id]; l != nil {
-		l.close()
-		delete(s.diverts, id)
+		// A socket the sandbox's memory holds stays for it.
+		if l.memory {
+			l.setRoutes(false, nil)
+		} else {
+			l.close()
+			delete(s.diverts, id)
+		}
 	}
-	remaining := len(s.sandboxes)
+	remaining := s.registered()
 	s.mu.Unlock()
 	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
 }
@@ -701,11 +761,16 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.sandboxes {
 		ids = append(ids, id)
 	}
+	var memories []string
+	for id := range s.memories {
+		memories = append(memories, id)
+	}
 	s.mu.Unlock()
 	sort.Strings(ids)
+	sort.Strings(memories)
 	pending, failing, recovering := s.creds.report()
 	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
-		Pending: pending, Failing: failing, Recovering: recovering}
+		Pending: pending, Failing: failing, Recovering: recovering, Memory: memories}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
@@ -718,14 +783,15 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 }
 
 // stopRequest stops the broker. With ifIdle it stops only when no sandbox
-// is registered, and from then on refuses a new one.
+// is registered, for routes or for memory, and from then on refuses a new
+// one.
 func (s *server) stopRequest(w http.ResponseWriter, r *http.Request) {
 	var req injector.StopRequest
 	if !decode(w, r, &req) {
 		return
 	}
 	s.mu.Lock()
-	ok := !req.IfIdle || len(s.sandboxes) == 0
+	ok := !req.IfIdle || s.registered() == 0
 	first := ok && !s.stopping
 	if ok {
 		s.stopping = true

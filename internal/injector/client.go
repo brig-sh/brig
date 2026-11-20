@@ -210,3 +210,32 @@ func (c Client) Stop(ifIdle bool) (bool, error) {
 	err := c.call(http.MethodPost, "/stop", StopRequest{IfIdle: ifIdle}, &out)
 	return out.Stopping, err
 }
+
+// AddMemory registers the memory of s.ID, apart from its routes. The same
+// store again keeps the sandbox's memory key, so the token of an agent
+// already running stays valid. Another store under the same id is refused.
+func (c Client) AddMemory(s MemorySandbox) (AddResponse, error) {
+	var out AddResponse
+	err := c.call(http.MethodPost, "/memory/sandboxes", s, &out)
+	return out, err
+}
+
+// RemoveMemory stops serving the memory of sandbox id. Its memory tokens are
+// refused from the next request on.
+func (c Client) RemoveMemory(id string) (RemoveResponse, error) {
+	var out RemoveResponse
+	err := c.call(http.MethodDelete, "/memory/sandboxes/"+id, nil, &out)
+	return out, err
+}
+
+// MintMemory returns a memory token for a sandbox registered for memory.
+func (c Client) MintMemory(r MemoryMintRequest) (string, error) {
+	var out MintResponse
+	if err := c.call(http.MethodPost, "/memory/tokens", r, &out); err != nil {
+		return "", err
+	}
+	if out.Token == "" {
+		return "", errors.New("the credential broker minted an empty memory token")
+	}
+	return out.Token, nil
+}
