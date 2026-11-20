@@ -368,6 +368,9 @@ type Options struct {
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
+	// NetworkFlag is the flag that set Network, named in a message about the
+	// posture: --offline for the shorthand. Empty means --network.
+	NetworkFlag string
 	// Isolation is the boundary this run requires, from --isolation on the
 	// command line: IsolationMicroVM, or empty for no requirement. It has no
 	// other source on purpose. A variable could be set in a shell profile and
@@ -620,6 +623,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		baseFrom = o.Target.Base
 	}
 	netValue, netSource := o.Network, "--network"
+	if o.NetworkFlag != "" {
+		netSource = o.NetworkFlag
+	}
 	netOrigin := "flag"
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.SettingName("NETWORK")
