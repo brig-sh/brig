@@ -16,12 +16,15 @@ guest, a real kernel and real resolvers.
 
 ## The conformance cases
 
-The cases are the ones `test/conformance` runs on `hvi`, with its two policy
-documents unchanged. That runner boots `hvi` only, so the cases were run by
-hand. The guest image was `ghcr.io/brig-sh/claude-code-stock:root`, which
-carries curl and a CA bundle, and the probe was `test/netprobe`, as the
-suite uses them. Each case ran under its policy and again in a sandbox with
-no policy.
+The cases are the ones `test/conformance` runs, with its two policy
+documents unchanged. When this was measured that runner booted `hvi` only,
+so the cases were run by hand. It now boots nerdctl too:
+`script/egress-conformance.sh` on a Linux host with the runtime bundle
+writes `egress-conformance-nerdctl-<bundle version>.md` beside this file,
+with `-rootless` after the version for the rootless bundle. The guest image
+was `ghcr.io/brig-sh/claude-code-stock:root`, which carries curl and a CA
+bundle, and the probe was `test/netprobe`, as the suite uses them. Each case
+ran under its policy and again in a sandbox with no policy.
 
 `conformance-deny`, `default: deny`:
 
@@ -129,4 +132,4 @@ A rootful nerdctl, an arm64 host, and rootlesskit's `pasta` network driver.
 DNS over TCP from a guest: `internal/egress` tests it over loopback only. A
 connection that outlives a boot of its sandbox, and a `brig stop` that
 fails: `internal/egress` and `internal/runtime` test the rules and the
-teardown for both. `test/conformance` itself does not run on nerdctl yet.
+teardown for both.

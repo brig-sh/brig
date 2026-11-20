@@ -21,8 +21,8 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 		{RunPath{"hull", "hvi"}, Enforced},
 		{RunPath{"hull", "vz"}, CannotEnforce},
 		{RunPath{"hull", "qemu"}, CannotEnforce},
-		// hull on Linux, which has no network of a sandbox's own yet.
-		{RunPath{"hull", "io.containerd.urunc.v2"}, CannotEnforce},
+		// hull on Linux: the same gateway as hvi, shown to refuse on 2026-11-18.
+		{RunPath{"hull", "io.containerd.urunc.v2"}, Enforced},
 		{RunPath{"nerdctl", "io.containerd.urunc.v2"}, Enforced},
 		{RunPath{"nerdctl", "io.containerd.kata.v2"}, Enforced},
 		{RunPath{"docker", "io.containerd.urunc.v2"}, CannotEnforce},
@@ -73,7 +73,8 @@ func TestRunPathWithNoBackendNamesTheRuntimeAlone(t *testing.T) {
 
 // Each backend booted through its adapter, against a runtime double that logs
 // every call. A policy boots only where the contract answers enforced, and a
-// refusal reaches no runtime command beyond the probe.
+// refusal reaches no runtime command beyond the capability question and the
+// probe.
 func TestEgressContractDecidesTheBootOnEveryBackend(t *testing.T) {
 	policy := Egress{Default: "deny", Allow: []Rule{{Host: "example.com"}}}
 	for _, tt := range []struct {
@@ -125,11 +126,13 @@ func TestEgressContractDecidesTheBootOnEveryBackend(t *testing.T) {
 					t.Errorf("the refusal does not name %q: %v", want, err)
 				}
 			}
-			// Exactly the probe, or nothing at all. A check for the boot alone
-			// passes a refusal that started some other command first.
+			// Exactly the question and the probe, or nothing at all. A check
+			// for the boot alone passes a refusal that started some other
+			// command first. The double has no capability report, so brig
+			// asks for one, gets none, and probes.
 			want := ""
 			if tt.probe {
-				want = "network-gateway --help\n"
+				want = "version --json\nnetwork-gateway --help\n"
 			}
 			if calls != want {
 				t.Errorf("a refused run reached the runtime: %q, want %q", calls, want)
@@ -316,6 +319,20 @@ type hullDouble struct {
 
 func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 	t.Helper()
+	return hullDoubleWith(t, helpCase(help, exit), "0")
+}
+
+// helpCase is the shell case that answers `network-gateway --help` with help
+// and exits with exit.
+func helpCase(help, exit string) string {
+	return "  case \" $* \" in *\" --help \"*) cat <<'EOF'\n" + help + "EOF\n  exit " + exit + ";; esac\n"
+}
+
+// hullDoubleWith writes the double newHullDouble describes. gateway is shell
+// run first for a `network-gateway` call, before the double records the
+// --qemu-socket it was handed, and `run` exits runExit.
+func hullDoubleWith(t *testing.T, gateway, runExit string) *hullDouble {
+	t.Helper()
 	scratchIsolatedDir(t)
 	dir := t.TempDir()
 	d := &hullDouble{bin: filepath.Join(dir, "hull"), log: filepath.Join(dir, "calls")}
@@ -323,9 +340,10 @@ func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 	script := "#!/bin/sh\n" +
 		"echo \"$*\" >> '" + d.log + "'\n" +
 		"if [ \"$1\" = network-gateway ]; then\n" +
-		"  case \" $* \" in *\" --help \"*) cat <<'EOF'\n" + help + "EOF\n  exit " + exit + ";; esac\n" +
+		gateway +
 		"  prev=''; for a in \"$@\"; do [ \"$prev\" = --qemu-socket ] && echo \"$a\" > '" + ready + "'; prev=\"$a\"; done\n" +
 		"fi\n" +
+		"[ \"$1\" = run ] && exit " + runExit + "\n" +
 		"exit 0\n"
 	if err := os.WriteFile(d.bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -372,9 +390,69 @@ func newHullDouble(t *testing.T, help, exit string) *hullDouble {
 	return d
 }
 
+// newLinuxHullDouble returns a hull on Linux that runs the double newHullDouble
+// writes. overlayHost lets the overlay root check pass, and linux makes Run
+// take runLinux, so a boot reaches joinGateway and `hull run` as on Linux.
+func newLinuxHullDouble(t *testing.T, help, exit string) (*hull, *hullDouble) {
+	t.Helper()
+	overlayHost(t)
+	d := newHullDouble(t, help, exit)
+	return &hull{bin: d.bin, linux: true}, d
+}
+
+// routingHelp is the help of a gateway that takes both the rules and the
+// diverts.
+const routingHelp = egressHelp + "   --divert string   host:port=socket\n"
+
+// newRoutingHullDouble returns a hull, on Linux when linux is set, whose
+// gateway takes the rules and the diverts, so a run with brig.internal or a
+// route reaches its boot. The link-local probe hands the gateway two
+// identical diverts and no --qemu-socket, and this one answers "diverted
+// twice" as a hull that takes a link-local divert does. runExit is what
+// `hull run` exits with, so a test can fail the boot after the forwards were
+// installed and see them withdrawn.
+func newRoutingHullDouble(t *testing.T, linux bool, runExit string) (*hull, *hullDouble) {
+	t.Helper()
+	if linux {
+		overlayHost(t)
+	}
+	probe := "  case \" $* \" in *\" --qemu-socket \"*) ;; *\" --divert \"*) cat >&2 <<'EOF'\n" +
+		newHullAnswer + "\nEOF\n  exit 1;; esac\n"
+	d := hullDoubleWith(t, helpCase(routingHelp, "0")+probe, runExit)
+	return &hull{bin: d.bin, linux: linux}, d
+}
+
 func (d *hullDouble) calls() string {
 	blob, _ := os.ReadFile(d.log)
 	return string(blob)
 }
 
 func (d *hullDouble) called(s string) bool { return strings.Contains(d.calls(), s) }
+
+// The divert and link-local probes name the run path they are asked for, so a
+// hull on Linux with a gateway too old for a route is told its own path and
+// the macOS hull keeps hull on hvi. The routing double passes both probes on
+// either path.
+func TestTheDivertProbesNameThePathAsked(t *testing.T) {
+	for _, linux := range []bool{false, true} {
+		h, _ := newRoutingHullDouble(t, linux, "0")
+		if err := h.ProbeBrigInternal(); err != nil {
+			t.Errorf("linux=%v: ProbeBrigInternal = %v, want nil", linux, err)
+		}
+		if err := h.ProbeLinkLocal(); err != nil {
+			t.Errorf("linux=%v: ProbeLinkLocal = %v, want nil", linux, err)
+		}
+	}
+	for _, path := range []RunPath{linuxHullPath, macGatewayPath} {
+		d := newHullDouble(t, egressHelp, "0")
+		var ce *CapabilityError
+		if err := gatewayDivertsOn(d.bin, path); !errors.As(err, &ce) || ce.Path != path ||
+			ce.State != CannotEnforce {
+			t.Errorf("gatewayDivertsOn(%v) of a gateway with no --divert = %v, want CannotEnforce on that path",
+				path, err)
+		}
+		if err := noLinkLocalDivertOn(d.bin, path); !errors.As(err, &ce) || ce.Path != path {
+			t.Errorf("noLinkLocalDivertOn(%v) = %v, want that path", path, err)
+		}
+	}
+}

@@ -26,8 +26,8 @@ spec:
   <img alt="The locked-down policy on hull's hvi backend. Every connection from the sandbox goes through its network gateway, which enforces the policy. api.anthropic.com and 10.0.0.0/8 are allowed. A name the policy does not allow does not resolve, and a connection to an address it does not allow does not open." src="../assets/egress-policy.svg" width="820">
 </p>
 
-Brig enforces a policy on Linux with nerdctl, and on macOS with the `hvi`
-backend. It refuses a policy-bound run anywhere else. See
+Brig enforces a policy on Linux with hull or nerdctl, and on macOS with the
+`hvi` backend. It refuses a policy-bound run anywhere else. See
 [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
 
 Create the policy, attach it to a profile, and check it:
@@ -39,12 +39,16 @@ brig policy check claude-code
 ```
 
 `brig policy create` writes a starter document and opens it in your editor.
-Fill it in as shown above. `brig policy check` names each policy bound to
-the profile, and says where Brig can enforce it:
+Fill it in as shown above. With a document on stdin, such as a heredoc, it
+checks and writes that document instead and opens no editor.
+`brig policy check` names each policy bound to the profile, and says where
+Brig can enforce it. On a host where a run of the profile cannot enforce the
+egress rules, check refuses them with exit status `7`, as the run does. On
+Linux with nerdctl, or on macOS with `BRIG_HYPERVISOR=hvi`, it prints:
 
 ```
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 Then run the agent as usual, with `brig run claude`. A sandbox that is
@@ -100,17 +104,18 @@ brig: BRIG_NETWORK "bogus" is not a posture: use shared, isolated or offline
 
 ### Posture by backend and profile
 
-On macOS, `isolated` needs the `hvi` backend. On Linux it needs nerdctl: hull on Linux cannot give a sandbox its own network yet.
+On macOS, `isolated` needs the `hvi` backend. On Linux, nerdctl and hull both provide it. hull gives the sandbox a network gateway of its own, as `hvi` does, and needs the `hvi` monitor for it.
 
 | Case | Posture |
 | --- | --- |
-| A new sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
+| A new sandbox on `hvi`, or on Linux with nerdctl or hull | `isolated` |
 | The seven built-in `hvi` profiles | `isolated`. Each profile names that posture |
 | `claude-desktop` | `shared`. The profile names that posture, because its GUI requires `vz`, where Brig cannot give a sandbox its own network |
-| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl and `hvi`, and the `shared` fallback on `vz`, `qemu` and hull on Linux |
-| A custom profile with no `network:` field, on `vz`, `qemu` or hull on Linux | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
-| An explicit `isolated`, such as `--network isolated`, on `vz`, `qemu` or hull on Linux | Refused |
-| A built-in `hvi` profile overridden to `vz` or `qemu`, or run on hull on Linux | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl, `hvi` and hull on Linux, and the `shared` fallback on `vz` and `qemu` |
+| A custom profile with no `network:` field, on `vz` or `qemu` | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
+| An explicit `isolated`, such as `--network isolated`, on `vz` or `qemu` | Refused |
+| A built-in `hvi` profile overridden to `vz` or `qemu` | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| A networked run on hull on Linux on a monitor other than `hvi` | Refused. Only `hvi` joins a network gateway. Unset `BRIG_HYPERVISOR`, or run it with `--network offline` |
 
 On `hvi`, the network of each isolated sandbox used about 28.7 MB of memory
 in the measurement recorded in
@@ -255,6 +260,11 @@ refuses an entry that names both, and an entry that names neither.
 A `host:` glob matches the name that the guest looks up. `*` spans dots,
 and `*.example.com` does not cover `example.com` itself.
 
+A rule names a host or a range, never an HTTP method or path. So
+`host: api.github.com` allows every GitHub GraphQL request, reads and writes
+alike. To limit what `gh` may do, send it through a `github-api` route with
+`request.allow.graphql` (see [Routes](#routes)).
+
 Parsing is strict. A field that the format does not recognize fails to
 parse, such as `engine:` under `spec` or a typo such as `descripton:`. A key
 must match the field name byte for byte, so `Spec:`, or a key with a
@@ -283,7 +293,7 @@ credential.
 [broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
-> A guest on `hvi` or on Linux with nerdctl reaches a route at
+> A guest on `hvi`, or on Linux with nerdctl or hull, reaches a route at
 > `https://brig.internal`, with the brig CA (see
 > [Transports](broker.md#transports)). On hull on `vz` or `qemu`, and on
 > docker, Brig refuses a run bound to a policy with routes before anything
@@ -321,7 +331,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | --- | --- | --- |
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
-| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
+| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. `host`: the guest reaches the route at `https://<route>.brig.internal`, so `name` is at most 63 characters and does not end with a dash. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
 | `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
@@ -335,8 +345,11 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
-| `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
-| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
+| `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
+| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
+| `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
+| `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
+| `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field, and the repository of each node ID a mutation names (both repositories of a pull request), must match. With it, `queries` may list only `repository` and `rateLimit` |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
@@ -411,7 +424,7 @@ user presents that certificate. Brig does not choose between certificates.
 
 ### Placeholders
 
-A route names values that the guest never holds through four placeholders:
+A route names values that the guest never holds through five placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
@@ -419,15 +432,17 @@ A route names values that the guest never holds through four placeholders:
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
 | `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile |
+| `{route.host}` | a `guest.env` value of a route in `mode: host` | the host name of the route, `<route>.brig.internal` |
 
-A `guest.env` value is one of the last three placeholders, and nothing else.
-Brig refuses `{route.region}` on a route that is not on the `aws` preset.
+A `guest.env` value is one of the last four placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset, and
+`{route.host}` on a route that is not in `mode: host`.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -446,8 +461,44 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `github-api` | `https://api.github.com`. `host` mode only. The broker maps `/api/v3` and `/api/graphql` to the API paths and refuses any other | `Authorization: Bearer {value}` | `GH_HOST={route.host}`, `GH_ENTERPRISE_TOKEN={session.token}` | none, the token is static. See [The github-api preset](broker.md#the-github-api-preset) |
 | `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 | `gcp` | none. Each service is forwarded to `https://<service>.googleapis.com` | `Authorization: Bearer {value}` | `BRIG_GCP_URL={route.url}`, `BRIG_GCP_TOKEN={session.token}`, and the gcloud variables of [The gcp preset](#the-gcp-preset) | none, the access token is static. See [The gcp preset](#the-gcp-preset) |
+
+A `github-api` route needs only the credential:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+```
+
+To limit what `gh` may do, add `request.allow.graphql`. On this route, a
+GraphQL request may read pull requests and issues in one repository and
+comment on them:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+  request:
+    allow:
+      graphql:
+        queries: [repository]
+        mutations: [addComment]
+        repos: [brig-sh/brig]
+```
+
+On a route with `request.allow.graphql`, the REST API is read-only: `GET`
+and `HEAD` stay open on every path the token reaches, such as `/user` and
+`/search`, unless `request.allow.methods` or `request.allow.paths` narrows
+them. A query can also follow an edge, such as
+an issue's `parent`, into another repository. The token's scope is the limit
+for both, so use a fine-grained token. See
+[GraphQL requests](broker.md#graphql-requests) for what the broker checks,
+which `gh` commands work, and the limits.
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -489,6 +540,16 @@ A field that the route sets overrides the value of the preset:
 `credential.lifecycle` comes from the preset alone. Brig refuses a policy
 that names it. Brig refuses a route that changes the `upstream` or the
 `credential.field` of a preset with a lifecycle, such as `claude-code`.
+
+The git rewrites of a preset follow its upstream. `github-token` with
+`upstream: https://ghe.example.com` rewrites `https://ghe.example.com/` and
+`git@ghe.example.com:`, and no longer the two `github.com` forms. That is
+all a GitHub Enterprise host needs. To keep the `github.com` forms on a
+route with another upstream, such as a mirror, write `guest.git.insteadOf`
+out.
+
+A policy that a Brigfile holds is limited further. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
 
 `brig policy show` leaves `credential.lifecycle` out, and names it in a
 comment under `credential:`. Its output is a policy that Brig reads back:
@@ -761,11 +822,22 @@ github-brig-sh
   route github  preset github-token  mode endpoint
     ...
 posture: isolated
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 A run with a route needs the `isolated` posture. The `posture:` line is that
 plan.
+
+A route with `request.allow` has a row for its rules: `allow` with its
+`methods`, `paths` and `repos`, and `allow graphql` with its `queries`,
+`mutations` and `repos`. A GraphQL list that is left out allows nothing and
+prints as `(none)`. A route with `services` has a row for each service with
+rules:
+
+```console
+  route github-api  preset github-api  mode host
+    allow graphql  queries repository  mutations addComment  repos brig-sh/brig
+```
 
 A route with `inject.tls` has a `tls` row that names the secrets the route
 uses:
@@ -807,7 +879,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | verb | what it does |
 | --- | --- |
 | `brig policy ls` | every policy that parses, by name and description, and, for one bound to anything, what binds it |
-| `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
+| `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi`. With a pipe or a file on stdin, write that document instead. Brig refuses it, and writes nothing, if it is empty, does not parse or validate, or names another policy in `metadata.name` |
 | `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that orphans anything bound to it, inline or attached, unless `--force` |
 | `brig policy show <name> [--json]` | print the parsed document, with each route's preset expanded |
 | `brig policy show --preset <preset> [--json]` | print the route that a preset expands to. See [Presets](#presets) |
@@ -870,10 +942,10 @@ They do not change the policy or the profile.
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down claude-code -n refactor
 attached locked-down to claude-code -n refactor
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -897,30 +969,37 @@ bindings.
 
 `check` lists every policy that applies to one profile or, with `-n`, to one
 of its sessions. It covers inline, profile-level and session-level bindings.
-It also runs the same refusal as `attach`:
+It also runs the same refusal as `attach`. On Linux with hull or nerdctl, or on
+macOS with `BRIG_HYPERVISOR=hvi`:
 
 ```console
 $ brig policy check claude-code
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-`check` does three checks:
+`check` does four checks:
 
 1. Is the profile `kind: shell` or `kind: gui`? Such a profile can never
    enforce a policy.
 2. Does every bound name still resolve to a policy that loaded?
 3. Can the routes of the bound policies apply together? See
    [Several policies with routes](#several-policies-with-routes).
+4. Can a run of the profile on this host enforce the egress rules? Where it
+   cannot, on `vz`, `qemu` or docker, `check` refuses them
+   with exit status `7`, as the run does. An offline run passes, and with no
+   runtime on the host this check is skipped.
 
 For a policy with routes, `check` also prints the routes and the posture.
 See [What check prints for routes](#what-check-prints-for-routes).
 
-For a policy without routes, `check` does not look at the runtime, so it
-cannot tell you whether this host will boot the run or refuse it. See
+`check` reads which run paths enforce the rules, and not the probes a boot
+runs. So a run that `check` passes can still be refused: on `hvi`, when the
+runtime is too old to enforce the rules, and on Linux, when Brig cannot check
+that the host enforces them. See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 `--force` on `rm`, or on a rename, can leave a binding that points at a name
@@ -1019,7 +1098,7 @@ brig: no-net is recorded under "My Work", which no run reaches
   ↳ a session named "My Work" starts "my-work"
   → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 One gap remains. `attach -n` refuses a name that any reserved profile ends
@@ -1114,7 +1193,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
@@ -1184,7 +1263,8 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
-| hull on Linux, on any monitor | `cannot enforce` | hull on Linux gives a sandbox no network of its own yet. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
+| hull on Linux, on `hvi` (its default) | `enforced` | the rules apply at the network gateway of the sandbox, its only way out. A run on 2026-11-18 refused `github.com` and `one.one.one.one` and served `example.com` and `www.example.com` ([measured](manual-tests/egress-policy-hull-linux.md)) | a hull whose gateway passes the same probe as on `hvi` |
+| hull on Linux, on another monitor | `cannot enforce` | urunc joins only `hvi` to a network gateway, so Brig refuses a networked run there with exit 7 | |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
@@ -1196,7 +1276,7 @@ What Brig does with a run:
 | Run | Result |
 | --- | --- |
 | A policy, on an `enforced` run path | Brig boots the sandbox |
-| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu`, docker and hull on Linux also name the backend that does enforce |
+| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu` and docker also name the backend that does enforce |
 | A policy, with `--network offline`, on any run path | Brig does not refuse the run. A sandbox with no route out reaches no network, so it satisfies every rule set |
 | No policy | Brig asks nothing of the run path |
 
@@ -1215,7 +1295,7 @@ refuses a hull that is too old to enforce the rules:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl or hull, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig run claude
 brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
@@ -1285,8 +1365,9 @@ A guest of nerdctl reaches its routes at `brig.internal` (see
 sandbox with routes and no policy gets the same resolver and table, which
 then filter nothing else.
 
-The resolver answers `brig.internal` with the bridge address, under any
-policy. The table sends a connection to port 443 of that address to a
+The resolver answers `brig.internal`, and each host route's
+`<route>.brig.internal`, with the bridge address, under any policy.
+The table sends a connection to port 443 of that address to a
 relay of the resolver, which passes it to the broker. On a run with a route
 that vends, it also sends a connection to port 80 of `169.254.170.2` to the
 relay. Under a policy with a default, every other address and port of
@@ -1333,6 +1414,9 @@ default. On nerdctl, Brig's table does.
 | --- | --- | --- | --- |
 | [Egress policy on `hvi`](manual-tests/egress-policy.md) | a real guest on `hvi` | a `default: deny` policy with one `host` allow. The allowed name reaches, a denied name fails to resolve, and an address dialed directly fails to connect | a `deny` rule that overrides an `allow` rule, and a `default: allow` policy |
 | [Egress policy on Linux](manual-tests/egress-policy-linux.md) | a urunc guest on rootless nerdctl | the cases of the network conformance suite under both defaults, including a `deny` glob inside an `allow` glob and a `deny` cidr inside an `allow` cidr | |
+| [Egress policy on hull on Linux](manual-tests/egress-policy-hull-linux.md) | a urunc guest on hull on Linux, on hvi | a `default: deny` policy with `host` allows. The allowed names reach and the others fail to resolve | the run drove hull directly, not `brig run` |
+| [Egress conformance on nerdctl, bundle v0.1.0-rc17, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
+| [Egress conformance on nerdctl, bundle v0.1.0-rc21, rootless](manual-tests/egress-conformance-nerdctl-v0.1.0-rc21-rootless.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox.

@@ -15,6 +15,9 @@ const (
 	PresetAnthropicAPIKey Preset = "anthropic-api-key"
 	// PresetGitHubToken is git over HTTPS to github.com with a token.
 	PresetGitHubToken Preset = "github-token"
+	// PresetGitHubAPI is gh against api.github.com with a token, reached as a
+	// host route.
+	PresetGitHubAPI Preset = "github-api"
 	// PresetAWS is the AWS container credential provider. The route answers
 	// it with temporary keys, because AWS signs each request with the secret
 	// key and a stand-in cannot be injected on the way out.
@@ -31,6 +34,23 @@ type RouteMode string
 // one mode every build of brig serves. A build can register others (see
 // internal/routemode).
 const ModeEndpoint RouteMode = "endpoint"
+
+// ModeHost is an endpoint route that the guest reaches at its own name,
+// <route>.brig.internal. A tool that takes a host name and no URL, such as
+// gh, needs it.
+const ModeHost RouteMode = "host"
+
+// AtBrigInternal reports whether a route in mode m is served by the broker at
+// brig.internal: mode endpoint, which an empty mode defaults to, and mode host.
+func (m RouteMode) AtBrigInternal() bool {
+	return m == "" || m == ModeEndpoint || m == ModeHost
+}
+
+// HostName is the name under brig.internal at which the guest reaches the
+// host route of that name.
+func HostName(route string) string {
+	return route + ".brig.internal"
+}
 
 // Lifecycle names how the broker keeps a credential valid.
 type Lifecycle string
@@ -53,6 +73,9 @@ const (
 	// PlaceholderRouteRegion is the region of a route that vends, in a
 	// guest.env value.
 	PlaceholderRouteRegion = "{route.region}"
+	// PlaceholderRouteHost is the host name of a mode: host route, in a
+	// guest.env value, for a tool such as gh that takes a host and no URL.
+	PlaceholderRouteHost = "{route.host}"
 )
 
 // Route is one brokered endpoint. The guest is pointed at the route, and the
@@ -324,6 +347,13 @@ func (p *RequestPolicy) deepCopy() *RequestPolicy {
 			Paths:   slices.Clone(a.Paths),
 			Repos:   slices.Clone(a.Repos),
 		}
+		if g := a.GraphQL; g != nil {
+			req.Allow.GraphQL = &GraphQLAllow{
+				Queries:   slices.Clone(g.Queries),
+				Mutations: slices.Clone(g.Mutations),
+				Repos:     slices.Clone(g.Repos),
+			}
+		}
 	}
 	return &req
 }
@@ -338,5 +368,21 @@ type RequestAllow struct {
 	Paths []string `json:"paths,omitempty"`
 	// Repos is optional, and only the github-token preset takes it. It lists
 	// owner/name globs.
+	Repos []string `json:"repos,omitempty"`
+	// GraphQL is optional, and only the github-api preset takes it. It
+	// limits a request to /api/graphql by the operation it carries.
+	GraphQL *GraphQLAllow `json:"graphql,omitempty"`
+}
+
+// GraphQLAllow is what a GraphQL request may do. A list left out allows
+// nothing, and "*" allows any field.
+type GraphQLAllow struct {
+	// Queries lists the top-level fields of Query a query may select.
+	Queries []string `json:"queries,omitempty"`
+	// Mutations lists the mutations a request may call.
+	Mutations []string `json:"mutations,omitempty"`
+	// Repos is optional. It lists owner/name globs that a root
+	// repository(owner:, name:) field must match. It limits where a query
+	// starts, not where it goes, and does not limit mutations.
 	Repos []string `json:"repos,omitempty"`
 }

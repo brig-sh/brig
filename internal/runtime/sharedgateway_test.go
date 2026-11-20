@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -78,7 +79,20 @@ func TestGatewayHelperProcess(t *testing.T) {
 		if err != nil {
 			os.Exit(2)
 		}
-		srv := &http.Server{Handler: &forwardAPI{}, ReadHeaderTimeout: time.Second}
+		// BRIG_TEST_GATEWAY_MEMBERS is the JSON GET /members answers. Unset,
+		// the gateway predates the endpoint.
+		api := &forwardAPI{}
+		if m := os.Getenv("BRIG_TEST_GATEWAY_MEMBERS"); m != "" {
+			if err := json.Unmarshal([]byte(m), &api.members); err != nil {
+				os.Exit(2)
+			}
+		}
+		// BRIG_TEST_GATEWAY_MEMBERS_STATUS is a status GET /members fails
+		// with, for an API that is up and cannot answer.
+		if m := os.Getenv("BRIG_TEST_GATEWAY_MEMBERS_STATUS"); m != "" {
+			api.membersStatus, _ = strconv.Atoi(m)
+		}
+		srv := &http.Server{Handler: api, ReadHeaderTimeout: time.Second}
 		go func() { _ = srv.Serve(l) }()
 	}
 	// Gone on its own if a test fails to stop it, so nothing outlives a run

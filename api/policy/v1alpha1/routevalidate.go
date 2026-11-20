@@ -45,15 +45,26 @@ func (r *Route) validate(expanded bool) error {
 		return err
 	}
 	switch r.Preset {
-	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP:
+	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetGitHubAPI, PresetAWS, PresetGCP:
 	default:
-		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s or %s",
-			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP)
+		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s, %s or %s",
+			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetGitHubAPI, PresetAWS, PresetGCP)
 	}
 	// Services are what the gcp preset forwards to. On another route they
 	// would read as a restriction that nothing enforces.
 	if len(r.Services) > 0 && r.Preset != PresetGCP {
 		return fmt.Errorf("services needs preset: %s", PresetGCP)
+	}
+	// The name becomes a DNS label of the host the guest reaches the route at.
+	if r.Mode == ModeHost {
+		if len(r.Name) > 63 {
+			return fmt.Errorf("route name %q is %d characters; a host route name must be 63 or fewer",
+				r.Name, len(r.Name))
+		}
+		if strings.HasSuffix(r.Name, "-") {
+			return fmt.Errorf("route name %q ends with a dash; a host route name must end with a letter or digit",
+				r.Name)
+		}
 	}
 	// Whether this build serves a mode other than endpoint is the run's to
 	// say, so a policy reads the same in every build.
@@ -146,7 +157,7 @@ func (r *Route) validate(expanded bool) error {
 	}
 
 	if r.Guest != nil {
-		if err := r.Guest.validate(complete, r.Preset); err != nil {
+		if err := r.Guest.validate(complete, r.Preset, r.Mode); err != nil {
 			return err
 		}
 	} else if complete {
@@ -378,7 +389,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 			return fmt.Errorf("inject.headers.set names %s, which inject.headers.remove drops first; "+
 				"name it in one list", hd.Name)
 		}
-		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion, PlaceholderRouteHost} {
 			if strings.Contains(hd.Value, p) {
 				return fmt.Errorf("inject.headers.set %s holds %s, which only guest.env takes", hd.Name, p)
 			}
@@ -429,7 +440,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 	return nil
 }
 
-func (g *Guest) validate(complete bool, preset Preset) error {
+func (g *Guest) validate(complete bool, preset Preset, mode RouteMode) error {
 	if complete && len(g.Env) == 0 && g.Git == nil {
 		return fmt.Errorf("guest needs env, git or both")
 	}
@@ -454,11 +465,15 @@ func (g *Guest) validate(complete bool, preset Preset) error {
 				return fmt.Errorf("guest.env %s: %s needs preset: %s",
 					name, PlaceholderRouteRegion, PresetAWS)
 			}
+		case PlaceholderRouteHost:
+			if mode != ModeHost {
+				return fmt.Errorf("guest.env %s: %s requires mode: %s", name, PlaceholderRouteHost, ModeHost)
+			}
 		default:
 			// The value is left out: a literal here is most often a pasted
 			// credential, and the error goes to a terminal or a CI log.
-			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s or %s, never a literal",
-				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion)
+			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s, %s or %s, never a literal",
+				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion, PlaceholderRouteHost)
 		}
 	}
 	if g.Git != nil {
@@ -485,7 +500,7 @@ func (a *RequestAllow) validate(preset Preset) error {
 			return fmt.Errorf("request.allow.%s is empty; list at least one, or leave the key out", l.field)
 		}
 	}
-	if len(a.Methods) == 0 && len(a.Paths) == 0 && len(a.Repos) == 0 {
+	if len(a.Methods) == 0 && len(a.Paths) == 0 && len(a.Repos) == 0 && a.GraphQL == nil {
 		return fmt.Errorf("request.allow lists nothing; leave it out to allow every request")
 	}
 	for _, m := range a.Methods {
@@ -508,7 +523,65 @@ func (a *RequestAllow) validate(preset Preset) error {
 			return fmt.Errorf("request.allow.repos %q is not owner/name", repo)
 		}
 	}
+	if g := a.GraphQL; g != nil {
+		if preset != PresetGitHubAPI {
+			return fmt.Errorf("request.allow.graphql needs preset: %s", PresetGitHubAPI)
+		}
+		if len(g.Queries) == 0 && len(g.Mutations) == 0 {
+			return fmt.Errorf("request.allow.graphql lists no queries and no mutations; list at least one")
+		}
+		for _, l := range []struct {
+			field string
+			list  []string
+		}{{"queries", g.Queries}, {"mutations", g.Mutations}} {
+			for _, f := range l.list {
+				if f != "*" && !isGraphQLName(f) {
+					return fmt.Errorf("request.allow.graphql.%s %q is not a GraphQL field name; use a name such as addComment, or *", l.field, f)
+				}
+			}
+		}
+		// An empty repos would count as unset and open every repository the
+		// credential reaches, while a reader takes it to allow none.
+		if g.Repos != nil && len(g.Repos) == 0 {
+			return fmt.Errorf("request.allow.graphql.repos is empty; list at least one, or leave the key out")
+		}
+		for _, repo := range g.Repos {
+			owner, name, ok := strings.Cut(repo, "/")
+			if !ok || owner == "" || name == "" || strings.Contains(name, "/") || !isASCIIPrint(repo) {
+				return fmt.Errorf("request.allow.graphql.repos %q must be owner/name in ASCII", repo)
+			}
+		}
+		// Any other root field reaches a repository by a node ID, a search,
+		// a URL or an owner, which repos cannot check.
+		if len(g.Repos) > 0 {
+			for _, f := range g.Queries {
+				if f != "repository" && f != "rateLimit" {
+					return fmt.Errorf("request.allow.graphql.queries %q bypasses repos; with repos, list only repository and rateLimit", f)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+// isASCIIPrint reports whether s is printable ASCII with no space.
+func isASCIIPrint(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] <= ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// isGraphQLName reports whether s is a GraphQL name.
+func isGraphQLName(s string) bool {
+	for i, c := range s {
+		if c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (i == 0 || c < '0' || c > '9') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // checkHeaderName refuses a name that is not an HTTP header name, and a header

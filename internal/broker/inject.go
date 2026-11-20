@@ -23,6 +23,11 @@ var errCredentialShape = errors.New("the credential is not a header value")
 // secret, which the user fixes in the store and not in the policy.
 var errCredentialMalformed = errors.New("the credential is not valid JSON")
 
+// errCredentialDocument is a resolved secret that is a whole JSON object, on
+// a route that names no credential.field. It is kept apart from
+// errCredentialShape so that the refusal names the fix, credential.field.
+var errCredentialDocument = errors.New("the credential is a JSON document")
+
 // credentialValue returns what the route injects from doc: the field that
 // credential.field names, or the whole document, without one trailing "\n"
 // or "\r\n".
@@ -31,8 +36,15 @@ func credentialValue(c *v1alpha1.CredentialRef, doc []byte) (string, error) {
 	// short before its kind field, which neither VendDoc nor MintDoc can
 	// recognise. Sent as a header, it would name the user's AWS profile and
 	// role, or gcloud account.
-	if t := pointerkind.Trim(doc); len(t) > 0 && t[0] == '{' && !json.Valid(t) {
-		return "", errCredentialMalformed
+	if t := pointerkind.Trim(doc); len(t) > 0 && t[0] == '{' {
+		if !json.Valid(t) {
+			return "", errCredentialMalformed
+		}
+		// A whole object is not a header value either, and it may be a
+		// pointer with no kind field.
+		if c.Field == "" {
+			return "", errCredentialDocument
+		}
 	}
 	v := string(doc)
 	if c.Field != "" {
@@ -150,10 +162,12 @@ func collect(node any, name string, found *[]any) {
 // vends, an Authorization value of one word is the token too: the AWS SDK
 // sends the container authorization token as it is, with no scheme. No other
 // route reads it, so a token sent that way to a proxying route is refused.
+// On the github-api route, Authorization: token is read too, since gh sends
+// its token with that scheme.
 func sessionToken(spec *v1alpha1.Route, h http.Header) string {
 	in, vends := spec.Inject, spec.Vends()
 	auth := h.Get("Authorization")
-	if scheme, tok, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") {
+	if scheme, tok, ok := strings.Cut(auth, " "); ok && carrierScheme(spec, scheme) {
 		return strings.TrimSpace(tok)
 	}
 	if in.BasicAuth != nil {
@@ -183,6 +197,13 @@ func sessionToken(spec *v1alpha1.Route, h http.Header) string {
 		}
 	}
 	return ""
+}
+
+// carrierScheme reports whether scheme, in an Authorization value, carries the
+// session token on this route: Bearer, and on github-api also gh's token.
+func carrierScheme(spec *v1alpha1.Route, scheme string) bool {
+	return strings.EqualFold(scheme, "Bearer") ||
+		spec.Preset == v1alpha1.PresetGitHubAPI && strings.EqualFold(scheme, "token")
 }
 
 // droppedNames are guest headers that never reach the upstream. Each one

@@ -46,6 +46,12 @@ func TestMain(m *testing.M) {
 	registryDigests = func(string, string) (verify.BootDigests, error) {
 		return nil, errors.New("no registry in unit tests")
 	}
+	// Many cases record a session before they give the Config its fake hull,
+	// so the entry records no runtime. On Linux hull reads such an entry as
+	// nerdctl's and refuses it, which those cases are not about. They read the
+	// index as macOS does, on either host. A case about that reading names
+	// the host itself. See entryRuntime and readIndexAs.
+	hostOS = "darwin"
 	code := m.Run()
 	_ = os.RemoveAll(gw)
 	os.Exit(code)

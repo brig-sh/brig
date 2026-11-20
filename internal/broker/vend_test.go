@@ -357,3 +357,46 @@ func TestAMalformedJSONSecretIsNotSentUpstream(t *testing.T) {
 		}
 	}
 }
+
+// A secret that is a whole JSON object is never a header value, and it may be
+// a pointer with no kind field, which no VendDoc or MintDoc check can
+// recognise and which names the user's AWS profile and role or gcloud
+// account. A route without credential.field refuses it with its own check,
+// and the refusal points at credential.field.
+func TestAJSONDocumentIsNotSentUpstreamWhole(t *testing.T) {
+	for _, doc := range []string{
+		`{"awsProfile":"dev","mode":"role","roleArn":"arn:aws:iam::0:role/dev"}`,
+		`{"configuration":"dev","mode":"self","account":"dev@example.com"}` + "\n",
+		"\ufeff {\"token\":\"dev\"}",
+	} {
+		up := newUpstream(t, nil)
+		routes := []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL, nil)}
+		r := newRig(t, up, routes)
+		r.creds.docs["gh-token"] = []byte(doc)
+		resp, body := r.do("GET", "/brig-a/r/github/user", bearer(r.mint("brig-a", "github")), "")
+		wantStatus(t, resp, http.StatusBadGateway)
+		wantAudit(t, r.lastAudit(), "check=credential.document")
+		if up.count() != 0 {
+			t.Errorf("%q: reached the upstream %d times", doc, up.count())
+		}
+		if strings.Contains(body, "dev") {
+			t.Errorf("%q: the refusal quotes the secret: %q", doc, body)
+		}
+		if !strings.Contains(body, "the secret is a JSON document") || !strings.Contains(body, "credential.field") {
+			t.Errorf("%q: the refusal does not say what to fix: %q", doc, body)
+		}
+	}
+}
+
+// The control: a route with credential.field sends that field of the same
+// kind of document.
+func TestAJSONDocumentSendsTheFieldItNames(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{customRoute(t, "inventory", up.URL, nil)})
+	r.creds.docs["inventory-token"] = []byte(`{"token":"inv-key","awsProfile":"dev"}`)
+	resp, _ := r.do("GET", "/brig-a/r/inventory/v2/items", bearer(r.mint("brig-a", "inventory")), "")
+	wantStatus(t, resp, http.StatusOK)
+	if got := up.last(t).header.Get("X-Api-Key"); got != "inv-key" {
+		t.Errorf("X-Api-Key = %q, want the token field", got)
+	}
+}

@@ -33,6 +33,7 @@ const policyUsage = `brig policy -- manage egress policies and what they bind
 usage:
   brig policy ls                                    every policy, and what binds it
   brig policy create <name> [--force]               write a starter, then open it
+  brig policy create <name> [--force] < FILE        write the policy on stdin
   brig policy edit <name> [--force]                 open yours in $VISUAL or $EDITOR
   brig policy show <name> [--json]                  print the parsed document, presets expanded
   brig policy show --preset <preset> [--json]       print the route a preset expands to
@@ -398,7 +399,8 @@ func parseNameAndForce(verb string, args []string) (name string, force bool, err
 }
 
 // createPolicy writes a starter policy document, then opens it in your
-// editor: $VISUAL, then $EDITOR, then vi.
+// editor: $VISUAL, then $EDITOR, then vi. With a pipe or a file on stdin, it
+// writes that document instead and opens no editor.
 func createPolicy(args []string) error {
 	name, force, err := parseNameAndForce("create", args)
 	if err != nil {
@@ -445,9 +447,38 @@ func createPolicy(args []string) error {
 		existed = true
 		mode = info.Mode().Perm()
 	}
+	piped := stdinPiped()
 	if !force && existed {
+		with := "a fresh starter"
+		if piped {
+			with = "the document on stdin"
+		}
 		return fmt.Errorf("%s already exists. Edit it directly with `brig policy edit %s`, "+
-			"or pass --force to replace it with a fresh starter", path, name)
+			"or pass --force to replace it with %s", path, name, with)
+	}
+
+	// A document on stdin is checked before anything is written, so a
+	// refused one leaves no file behind.
+	content := policyStarter(name)
+	if piped {
+		blob, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading stdin: %w", err)
+		}
+		if len(bytes.TrimSpace(blob)) == 0 {
+			return fmt.Errorf("stdin is empty; pipe a policy document into `brig policy create %s`, "+
+				"or run it in a terminal to edit a starter", name)
+		}
+		p, err := policy.Parse(blob)
+		if err != nil {
+			return fmt.Errorf("%s was not written: %w", path, err)
+		}
+		// The file name and the policy name must agree, or the policy is
+		// listed and attached under a name the command never used.
+		if p.Metadata.Name != name {
+			return fmt.Errorf("%s was not written: the document is named %q, not %q", path, p.Metadata.Name, name)
+		}
+		content = string(blob)
 	}
 
 	// The starter is written beside path, not over it, and only moved into
@@ -466,7 +497,7 @@ func createPolicy(args []string) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if _, err := tmp.WriteString(policyStarter(name)); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return err
@@ -476,20 +507,22 @@ func createPolicy(args []string) error {
 		return err
 	}
 
-	editor := editorCommand()
-	cmd := exec.Command(editor[0], append(editor[1:], tmpPath)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("%s: %w", editor[0], err)
-	}
+	if !piped {
+		editor := editorCommand()
+		cmd := exec.Command(editor[0], append(editor[1:], tmpPath)...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("%s: %w", editor[0], err)
+		}
 
-	if _, err := readPolicyFile(tmpPath); err != nil {
-		// Not written: path is exactly as it was before create ran (or
-		// still absent). The draft is left at tmpPath, named in the
-		// error, so it is not lost -- only not yet valid.
-		return fmt.Errorf("%s was not written: %w\nyour edit is still at %s",
-			path, err, tmpPath)
+		if _, err := readPolicyFile(tmpPath); err != nil {
+			// Not written: path is exactly as it was before create ran (or
+			// still absent). The draft is left at tmpPath, named in the
+			// error, so it is not lost -- only not yet valid.
+			return fmt.Errorf("%s was not written: %w\nyour edit is still at %s",
+				path, err, tmpPath)
+		}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
@@ -497,6 +530,14 @@ func createPolicy(args []string) error {
 	}
 	fmt.Printf("%s created\n", path)
 	return nil
+}
+
+// stdinPiped reports whether stdin is a pipe or a regular file, as `|`, `<`
+// and a heredoc give it. A terminal or /dev/null is neither, so create opens
+// the editor as before.
+func stdinPiped() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && (fi.Mode()&os.ModeNamedPipe != 0 || fi.Mode().IsRegular())
 }
 
 // policyStarter is a minimal, valid policy document to start editing from.
@@ -730,19 +771,16 @@ func howToUnbind(b []string) string {
 // printRoutes prints one indented row on stderr for each route of p, after
 // the policy name check has just printed on stdout. stdout stays one policy
 // name per line. A route as written can leave out its mode, so the row prints
-// the default. Each route gets a row per run path under it, from the route
-// mode table: where its mode is served, and the transport the guest reaches
-// the broker by there.
+// the mode of its preset, else the default. Each route gets a row per run
+// path under it, from the route mode table: where its mode is served, and the
+// transport the guest reaches the broker by there.
 func printRoutes(p policy.Policy) {
 	for _, r := range p.Spec.Routes {
 		preset := string(r.Preset)
 		if preset == "" {
 			preset = "(none)"
 		}
-		mode := r.Mode
-		if mode == "" {
-			mode = v1alpha1.ModeEndpoint
-		}
+		mode := routeMode(r)
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
 		// The row names the secrets so a reader can check the store holds
 		// them; it never reads a value.
@@ -756,10 +794,65 @@ func printRoutes(p policy.Policy) {
 			}
 			fmt.Fprintln(os.Stderr, row)
 		}
+		printAllow("    ", r.Request)
+		for _, svc := range r.Services {
+			printAllow("    service "+svc.Name+"  ", svc.Request)
+		}
 		for _, rec := range runtime.ModeRecords(mode) {
 			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
 		}
 	}
+}
+
+// printAllow prints the rows of a request.allow, so check shows the rules a
+// run enforces. It prints nothing for a route or service without rules. A GraphQL list that is left out allows nothing, so its row
+// says (none) rather than leave the list out.
+func printAllow(indent string, req *v1alpha1.RequestPolicy) {
+	if req == nil || req.Allow == nil {
+		return
+	}
+	a := req.Allow
+	row := ""
+	for _, l := range []struct {
+		name string
+		v    []string
+	}{{"methods", a.Methods}, {"paths", a.Paths}, {"repos", a.Repos}} {
+		if len(l.v) > 0 {
+			row += "  " + l.name + " " + strings.Join(l.v, ",")
+		}
+	}
+	if row != "" {
+		fmt.Fprintf(os.Stderr, "%sallow%s\n", indent, row)
+	}
+	if g := a.GraphQL; g != nil {
+		row := "  queries " + listOrNone(g.Queries) + "  mutations " + listOrNone(g.Mutations)
+		if len(g.Repos) > 0 {
+			row += "  repos " + strings.Join(g.Repos, ",")
+		}
+		fmt.Fprintf(os.Stderr, "%sallow graphql%s\n", indent, row)
+	}
+}
+
+// listOrNone joins l with commas, or returns (none) for an empty list.
+func listOrNone(l []string) string {
+	if len(l) == 0 {
+		return "(none)"
+	}
+	return strings.Join(l, ",")
+}
+
+// routeMode is the mode of r as a run serves it. A route that names a preset
+// and no mode takes the preset's, so check agrees with show and the run.
+func routeMode(r v1alpha1.Route) v1alpha1.RouteMode {
+	if r.Mode != "" {
+		return r.Mode
+	}
+	if r.Preset != "" {
+		if pr, err := policy.PresetRoute(r.Preset); err == nil && pr.Mode != "" {
+			return pr.Mode
+		}
+	}
+	return v1alpha1.ModeEndpoint
 }
 
 // routeModes lists the modes of the routes of ps in the order a boot checks
@@ -769,10 +862,7 @@ func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMod
 	byMode := map[v1alpha1.RouteMode][]string{}
 	for _, p := range ps {
 		for _, r := range p.Spec.Routes {
-			m := r.Mode
-			if m == "" {
-				m = v1alpha1.ModeEndpoint
-			}
+			m := routeMode(r)
 			byMode[m] = append(byMode[m], fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
 		}
 	}
@@ -1184,8 +1274,10 @@ func checkPolicy(args []string) error {
 	// so before one is tried. A microVM or a container guest reaches an
 	// endpoint route at brig.internal on its own gateway. See routeRefusal in
 	// internal/wrap.
+	// Detected once for both checks below: each detection may run the
+	// runtime's binary.
+	rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
 	if modes, byMode := routeModes(loaded); len(modes) > 0 {
-		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
 		for _, m := range modes {
 			err := detectErr
 			if err != nil {
@@ -1197,6 +1289,15 @@ func checkPolicy(args []string) error {
 				return fmt.Errorf("policy %s declares a route in mode %s, and brig refuses the run "+
 					"before boot: %w", strings.Join(byMode[m], ", "), m, err)
 			}
+		}
+	}
+	// A boot refuses egress rules its run path does not enforce, with exit 7,
+	// so check refuses them too rather than print its note and exit 0. With
+	// no runtime here there is no run path to ask, and the note stands.
+	if detectErr == nil {
+		if err := wrap.EgressServed(p, rt, loaded); err != nil {
+			return fmt.Errorf("the egress rules bound to %s cannot be enforced, and brig refuses "+
+				"the run before boot: %w", p.Name, err)
 		}
 	}
 	// A route is served on the sandbox's own gateway address, so a run with

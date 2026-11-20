@@ -329,6 +329,13 @@ func TestCompletePositions(t *testing.T) {
 		directive: dirNames,
 		exactly:   []string{"--dry-run"},
 	}, {
+		// --forget is what the refusal of a session on another runtime tells
+		// the reader to type, so completion offers it on the rm line too.
+		name:      "rm offers --forget beside a ref",
+		words:     []string{"rm", "claude-code", "--fo"},
+		directive: dirNames,
+		exactly:   []string{"--forget"},
+	}, {
 		name:      "and --all is offered only where the ref would have gone",
 		words:     []string{"rm", "--a"},
 		directive: dirNames,

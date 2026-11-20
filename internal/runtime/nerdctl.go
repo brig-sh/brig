@@ -138,7 +138,11 @@ func (n *nerdctl) Isolation(spec RunSpec) Isolation {
 		}
 		rootfs = orDefault(mode, "urunc default")
 	}
-	return containerdIsolation(n.driver(), shim, named, monitor, rootfs)
+	iso := containerdIsolation(n.driver(), shim, named, monitor, rootfs)
+	if iso.Boundary != BoundaryVM {
+		iso.Setting = n.boundarySetting()
+	}
+	return iso
 }
 
 // monitor is the hypervisor brig tells urunc to boot with, or "" when brig
@@ -170,12 +174,33 @@ func (n *nerdctl) Backend(spec RunSpec) string {
 // LinuxBundleBooter.
 func (n *nerdctl) BootsLinuxBundle() bool { return !n.isDocker() }
 
+// dockerDriver is what driver names docker as, which the isolation row and its
+// boundary both read.
+const dockerDriver = "docker"
+
 // driver is the binary in hand, by name. newNerdctl takes either.
 func (n *nerdctl) driver() string {
 	if n.isDocker() {
-		return "docker"
+		return dockerDriver
 	}
 	return "nerdctl"
+}
+
+// boundarySetting is what to change to move a boundary short of a microVM, for
+// Isolation.Setting. The shim variable is named only when it is set, as the row
+// does: that is when it decided the boundary, and the default needs nothing
+// undone. docker is a cause of its own, however the run came to drive it, and
+// brig cannot tell from here whether a choice or the fallback put it there.
+func (n *nerdctl) boundarySetting() string {
+	var causes []string
+	if os.Getenv("BRIG_CONTAINERD_RUNTIME") != "" {
+		causes = append(causes, "BRIG_CONTAINERD_RUNTIME")
+	}
+	if n.isDocker() {
+		causes = append(causes, "the docker binary in use (BRIG_RUNTIME_BIN, the profile's "+
+			"runtimeBin, or the fallback taken because nerdctl is not on PATH: install nerdctl)")
+	}
+	return strings.Join(causes, " and ")
 }
 
 // PinsDigest is true here: containerd's store is content-addressed, so a
@@ -251,6 +276,35 @@ func (n *nerdctl) Running(name string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// SandboxIsolation reads the shim a sandbox was created with, off the runtime
+// itself: `inspect` reports it as HostConfig.Runtime, the name the sandbox was
+// given at create. That is the shim that boots it whatever the environment says
+// now, which is what a run that joins the sandbox stands on. See
+// SandboxIsolator.
+//
+// A sandbox the runtime cannot find, an inspect that fails, and an answer with no
+// runtime in it are errors, none of them a guess: the caller is asking so that
+// it need not guess.
+func (n *nerdctl) SandboxIsolation(name string) (Isolation, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, n.bin, "inspect", "--format", "{{.HostConfig.Runtime}}", name)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		if said := strings.TrimSpace(errb.String()); said != "" {
+			return Isolation{}, fmt.Errorf("%s inspect %s: %w: %s", n.bin, name, err, firstLines(said, 3))
+		}
+		return Isolation{}, fmt.Errorf("%s inspect %s: %w", n.bin, name, err)
+	}
+	shim := strings.TrimSpace(out.String())
+	if shim == "" {
+		return Isolation{}, fmt.Errorf("%s inspect %s named no runtime", n.bin, name)
+	}
+	return existingIsolation(n.driver(), shim, name), nil
 }
 
 // Exists looks for the sandbox in List, which is `nerdctl ps -a` with no

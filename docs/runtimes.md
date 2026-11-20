@@ -1,6 +1,7 @@
 # The runtimes Brig drives
 
-Brig boots a sandbox through a runtime: `hull` on macOS, `nerdctl` on Linux.
+Brig boots a sandbox through a runtime: `hull` on macOS. On Linux it drives
+`hull` when a `hull` is on `PATH`, and `nerdctl` otherwise.
 See [A container runtime or a VMM](non-goals.md#a-container-runtime-or-a-vmm)
 for the reason.
 
@@ -28,7 +29,7 @@ The license column comes from the `LICENSE` file of each repository, read on
 | `hull` | CLI that pulls an OCI image and boots it as a microVM on Apple Silicon | [brig-sh/hull](https://github.com/brig-sh/hull) | Apache-2.0 |
 | `vz-runner` | Swift helper hull launches for its `vz` backend, which is what talks to Virtualization.framework | same repository as hull, installed beside it | Apache-2.0 |
 | `hvi` | separate microVM monitor for hull's `hvi` backend, which talks to Hypervisor.framework directly | [brig-sh/hvi-vmm](https://github.com/brig-sh/hvi-vmm), a git submodule of hull, installed beside hull | Apache-2.0 |
-| `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
+| `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
 | `containerd` | daemon underneath nerdctl: it holds the image store and hands each container to a shim | [containerd/containerd](https://github.com/containerd/containerd) | Apache-2.0 |
 | `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc), built by the Linux runtime bundle from the `feat/unchanged_containers-exec-fixes` branch | Apache-2.0 |
 | `cosign` | verifies the signature on a guest image before it boots. Optional, and verification degrades to a warning without it | [sigstore/cosign](https://github.com/sigstore/cosign) | Apache-2.0 |
@@ -52,7 +53,8 @@ backend.
 | hull on `vz` | Virtualization.framework, through the `vz-runner` helper | macOS, when neither the profile nor `BRIG_HYPERVISOR` names a backend | yes. It is the only backend that can show a graphical console | refused |
 | hull on `hvi` | Hypervisor.framework directly, through the `hvi` microVM monitor | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | yes. It is the only backend that runs a network gateway of its own |
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
-| nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux | refused | yes. Brig creates a network for each sandbox |
+| nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux, when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | refused | yes. Brig creates a network for each sandbox |
+| hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, by default when a `hull` is on `PATH`. brig-standalone-linux carries one from v0.1.0-rc22 | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
 
 The nine shipped profiles divide as follows on macOS:
 
@@ -79,18 +81,29 @@ comes from one table, shown in
 
 | run path | answer | condition |
 | --- | --- | --- |
-| hull on `hvi` | `enforced` | `network-gateway --help` exits zero within 30 seconds and lists `--egress-default` |
-| hull on `hvi` | `cannot enforce` | the gateway does not take `--egress-default`, so it cannot apply the rules |
-| hull on `hvi` | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
+| hull on `hvi`, with a capability report | `enforced` | `hull version --json` says `capabilities.gateway.egressDefault` is true |
+| hull on `hvi`, with a capability report | `cannot enforce` | the report says false, or has no such key |
+| hull on `hvi`, with no report | `enforced` | `network-gateway --help` exits zero within 30 seconds and lists `--egress-default` |
+| hull on `hvi`, with no report | `cannot enforce` | the gateway does not take `--egress-default`, so it cannot apply the rules |
+| hull on `hvi`, with no report | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
-| hull on Linux, on any monitor | `cannot enforce` | no probe runs. hull on Linux gives a sandbox no network of its own yet |
+| hull on Linux, on `hvi` (its default) | `enforced` | the same probe as hull on `hvi`, for the same gateway: the capability report, or else `network-gateway --help` listing `--egress-default`. A gateway that fails it answers `cannot enforce` or `unknown`, and the refusal names `hull on io.containerd.urunc.v2`. Measured on 2026-11-18 (hull `4bf76a6`, urunc `5c6bc70`, hvi 0.1.0-rc.3): `example.com` and `www.example.com` answered 200, while `github.com` and `one.one.one.one` failed with curl rc 6 and the gateway logged the refused queries. See [the manual test](manual-tests/egress-policy-hull-linux.md) |
+| hull on Linux, on another monitor | `cannot enforce` | no probe runs: urunc joins only `hvi` to a network gateway |
 | docker on any shim | `cannot enforce` | no probe runs |
 | hull on a backend that the policies table does not name | `unknown` | |
 
 Brig boots a policy-bound run only on `enforced`. The refusal names the
 property, the runtime and the backend, and Brig exits `7`. A sandbox with no
 policy runs no probe.
+
+A hull that has a capability report is asked for it, and Brig starts no
+probe: `hull version --json` reads nothing but the binary and starts no
+gateway. Brig believes the report when it holds `capabilities.gateway`. A
+hull whose `version --json` fails, prints something else, or has no
+`capabilities.gateway` is an older hull, and Brig probes it as before. `brig
+doctor` ends its `runtime` row with `gateway asked by report` or `gateway
+asked by probe`, for a hull on macOS.
 
 ### Route mode answers
 
@@ -104,13 +117,14 @@ transport where the mode is served.
 | hull on `hvi` | `enforced` over `brig.internal`, when its gateway takes `--divert` and the run has a network |
 | hull on `vz` | `cannot enforce`: vz takes its network from vmnet, and Brig routes `brig.internal` at the gateway only `hvi` uses |
 | hull on `qemu` | `cannot enforce`, as on `vz` |
-| hull on Linux, on any monitor | `cannot enforce`: hull on Linux gives a sandbox no network of its own yet, where Brig routes `brig.internal` |
+| hull on Linux, on `hvi` (its default) | `enforced` over `brig.internal`, as on `hvi`: the same gateway, the same probe for `--divert`, and the run has a network. A run on 2026-11-18 showed it. See [the record](manual-tests/hull-linux-gateway-2026-11-18.md) |
+| hull on Linux, on another monitor | `cannot enforce`: urunc joins only `hvi` to a network gateway, so Brig refuses a networked run with a route there with exit 7 |
 | nerdctl on urunc | `enforced` over `brig.internal`, when `nft` is installed. A run with a route takes the `isolated` posture |
 | nerdctl on runc | `cannot enforce`: Brig boots no shim that gives the guest the host's own kernel |
 | docker | `cannot enforce`: docker manages its own bridges and firewall |
 | hull on a backend, or nerdctl on a shim, that the table does not name | `unknown` |
 
-This build of Brig serves the `endpoint` mode alone. A route in any other
+This build of Brig serves the `endpoint` and `host` modes alone. A route in any other
 mode is refused on every run path, with exit `7`.
 
 A route that vends is also reached at the link-local address
@@ -181,6 +195,9 @@ hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>|<NAME>=<value>]... <name>
 hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
+hull version --json                     # what can this hull's gateway do? Asked first.
+                                        # A hull whose answer holds capabilities.gateway
+                                        # gets none of the next three.
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
                                         # does it route brig.internal? (--divert)
 hull network-gateway --socket <tmp>/p.sock      # does it divert 169.254.170.2? Asked
@@ -195,6 +212,7 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
      [--divert <gateway-ip>:443=<divert socket>           # a guest that reaches
       --host brig.internal=<gateway-ip>]                   # brig.internal
+     [--host <route>.brig.internal=<gateway-ip>]...       # each host route
      [--divert 169.254.170.2:80=<divert socket>]          # a route that vends
 ```
 
@@ -295,11 +313,15 @@ Brig finds the runtime in this order (`internal/runtime/runtime.go`):
 
 1. `BRIG_RUNTIME` names the runtime, `hull` or `nerdctl`. Brig refuses any
    other value by name. If the variable is unset, the runtime is `hull` on
-   macOS and `nerdctl` everywhere else.
+   macOS. Everywhere else it is `hull` when a `hull` is on `PATH`, and
+   `nerdctl` otherwise.
 2. `BRIG_RUNTIME_BIN` is the executable to run. Brig takes a path as it
    stands, and looks up a bare name on PATH. If the executable is missing or
    not executable, Brig reports that against the variable before anything
-   runs.
+   runs. Brig also refuses an executable that is the other runtime: under
+   `hull`, one named `nerdctl` or `docker`, or one of another name than
+   `hull` whose `--version` names one of them; under `nerdctl`, one named
+   `hull`.
 3. A `runtimeBin` in a profile does the same thing without a variable in each
    shell. `BRIG_RUNTIME_BIN` wins over it. Brig expands a leading `~`. If the
    path is missing or not executable, Brig reports that against the profile
@@ -313,6 +335,28 @@ If PATH has no `nerdctl` and Brig takes `docker`, Brig says so in one line:
 your choice and remove that line, name `docker` in `BRIG_RUNTIME_BIN`, or its
 full path in `runtimeBin`.
 
+A session stays on the runtime that booted it. Brig records that runtime
+with the session, and refuses a run, `brig sh`, `brig stop`, `brig rm <ref>`
+or `brig rm --target` of the session under another runtime. The refusal
+names the setting that selects the session's runtime. If that runtime is
+gone, `brig rm --forget <ref>` forgets the session, touches no sandbox and
+keeps its guest home. Brig never decides by itself that a runtime is gone: a
+runtime that `BRIG_RUNTIME_BIN` or a profile's `runtimeBin` reaches need not
+be on `PATH`, and its sandbox may still run. The runtimes do not see each
+other's sandboxes, so another runtime would boot a second VM on the same
+guest home. `brig ls` lists the sandboxes of the runtime that Brig finds,
+and the sessions of the other runtimes as `on <runtime>`. `brig rm --all`
+removes only the sandboxes of the runtime that Brig finds, and keeps the
+sessions of the other runtimes, but it revokes every session token the
+credential broker holds, including those of sandboxes that run on another
+runtime.
+
+An older release recorded no runtime with a session. On Linux every such
+session was booted on nerdctl, the default then. So hull on Linux refuses it
+as a session of nerdctl, and its `brig ls` lists it as `on nerdctl`.
+`BRIG_RUNTIME=nerdctl` reaches it, and a run there records nerdctl with it.
+On macOS such a session belongs to whichever runtime reads it.
+
 `brig info <ref>` prints the runtime that Brig found, as
 `runtime hull (/opt/homebrew/bin/hull)`. `brig doctor` reports the version of
 the runtime.
@@ -325,8 +369,8 @@ Brig asks the runtime few questions about itself:
 | which sandboxes exist, and in what state? | `ps`, on either runtime |
 | which network does a sandbox have? | `inspect`, on either runtime |
 | can this hull pin a digest? | `hull --version` |
-| does this hull enforce a policy? | `network-gateway --help`. See [Egress policy answers](#egress-policy-answers) |
-| does this hull route `brig.internal`? | `network-gateway --help` lists `--divert`. See [Route mode answers](#route-mode-answers) |
+| does this hull enforce a policy? | `version --json`, and `network-gateway --help` on a hull with no capability report. See [Egress policy answers](#egress-policy-answers) |
+| does this hull route `brig.internal`? | `version --json`, and on a hull with no capability report whether `network-gateway --help` lists `--divert`. See [Route mode answers](#route-mode-answers) |
 
 On an old build, Brig drops one feature at a time:
 
@@ -352,10 +396,24 @@ On an old build, Brig drops one feature at a time:
 - `exec -u root`. Brig uses it to mount a tmpfs inside a running sandbox.
   Container runtimes get their tmpfs at create time
   (`internal/wrap/secretfiles.go`).
-- `network-gateway`, for the `hvi` backend, which has no egress of its own.
-  Brig starts one gateway for each isolated sandbox and one shared gateway
-  for the sandboxes that request `shared`, and assigns the addresses on
-  those networks. Guests on one shared gateway can reach each other. See
+- `network-gateway`, for the `hvi` backend, which has no egress of its own,
+  and for every networked sandbox on hull on Linux, which urunc joins to the
+  gateway through `hvi`. Brig starts one gateway for each isolated sandbox
+  and one shared gateway for the sandboxes that request `shared`, and assigns
+  the addresses on those networks. Guests on one shared gateway can reach
+  each other. `brig rm --all` stops the shared gateway once no guest is on
+  it. On Linux the process table does not show the guests, so Brig asks the
+  gateway (`GET /members`) and checks that hull lists no instance on it. A
+  gateway from a hull too old to answer, or one whose API socket is gone,
+  goes once hull lists no instance on it. Brig keeps a gateway whose answer
+  fails, and one it cannot check.
+  On Linux, hvi joins the gateway as the image's user, and only the user
+  who runs Brig may write to the gateway's socket. A guest whose image user
+  maps to another host user boots with no network. On a rootless install
+  that is any image with a non-root `USER`. hull warns and the boot goes on,
+  and Brig prints that warning. Letting the image's user join is hull's and
+  urunc's to change.
+  See
   [Things Brig does not claim](security.md#things-brig-does-not-claim) for the
   answer per backend.
 
@@ -365,11 +423,20 @@ binary beside hull, a working gateway and the boot bundle.
 `BRIG_HYPERVISOR=vz` with `BRIG_NETWORK=shared` moves those profiles to
 `vz`, and overrides the isolation that `vz` cannot provide.
 
-<details><summary>A gateway started by an older Brig</summary>
+<details><summary>A gateway that cannot publish a port</summary>
 
 A gateway that an older Brig started has no API socket, so it cannot publish
-a port. The next boot replaces that gateway when no sandbox is on it and no
-other boot is starting on it.
+a port. On macOS, the next boot replaces that gateway when no sandbox is on
+it and no other boot is starting on it.
+
+On Linux, a boot reuses the shared gateway that it finds, and an upgrade of
+hull leaves a running gateway in place. A gateway there that cannot publish
+is one from a hull without the `/forwards` API, or one whose API socket is
+gone. `brig rm --all` removes every sandbox of the runtime, then stops that
+gateway once hull lists no instance on it. The next boot starts a new one.
+An isolated sandbox has a gateway of its own, which `brig stop` stops with
+the sandbox. With no sandbox running, stop the gateway process. Its pid is in
+`sandbox-<name>.pid` beside the gateway socket. The refusal names the path.
 
 </details>
 
@@ -397,7 +464,7 @@ guest that all of the sandbox's traffic crosses, and Brig owns it. The
 network belongs to the sandbox, and the user owns its namespace, rootless or
 not. The bridge covers any shim that attaches the sandbox to it. A filter
 inside the guest is one that the guest can remove, and the user-mode
-gateway of hull does not build on Linux.
+gateway of hull is not on nerdctl's path.
 
 **urunc** must read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the OCI spec of the container, and boot
@@ -408,6 +475,12 @@ that monitor and find its binary. An overlay root adds
 `com.urunc.unikernel.rootfsMode=overlay-block`, which needs the urunc of the
 `feat/linux-overlay-block` branch. See
 [The guest root of a generic boot](#the-guest-root-of-a-generic-boot).
+
+On hull on Linux, a networked sandbox joins its network gateway through
+`com.urunc.unikernel.netSocket`, `netAddress` and `netGateway`, which
+urunc reads from urunc-dev/urunc@5c6bc70 on. The runtime bundle
+v0.1.0-rc21 carries an older urunc, which ignores them. hull then refuses
+the start, so on that bundle no networked sandbox boots on hull.
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its
@@ -521,6 +594,23 @@ not by the tag:
   `HULL_BOOT_ASSETS_ALLOW_FOREIGN` is set. Brig does not set it.
 - With no verified digest and `BRIG_BOOT_ASSETS_REF` unset, Brig drops any
   `HULL_BOOT_ASSETS_REF` from the environment that it gives hull.
+
+## Limitations of hull on Linux
+
+Two limits come from hull and urunc, not from Brig. Until they are fixed
+there, run a root image.
+
+- hull refuses an image whose `USER` is a name. Its message says that hull on
+  Linux takes only a numeric uid and gid, or root, since resolving the name
+  would mean reading the image's files. The non-root tags of the community
+  images name their user, so they cannot run on hull on Linux, and the shipped
+  profiles pin the `:root` tags there.
+- A numeric non-root user joins the gateway as that user, and cannot write the
+  gateway's socket. The guest boots with no network. hull warns, and Brig
+  prints the warning after the boot.
+
+hull is the Linux default when a `hull` is on `PATH`. For an image these limits
+refuse, `BRIG_RUNTIME=nerdctl` runs it on nerdctl, which takes a named user.
 
 ## Swapping one out
 

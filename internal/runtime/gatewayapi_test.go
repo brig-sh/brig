@@ -27,6 +27,11 @@ type forwardAPI struct {
 	// sock is the control socket the client is given; the API socket is
 	// derived from it the way startGateway derives the one it passes.
 	sock string
+	// members is what GET /members answers. nil serves a gateway older than
+	// the endpoint, which answers 404.
+	members []map[string]any
+	// membersStatus, when set, is the status GET /members fails with.
+	membersStatus int
 }
 
 func newFakeGateway(t *testing.T, missing bool) *forwardAPI {
@@ -57,6 +62,18 @@ func (g *forwardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if r.URL.Path == "/members" {
+		if g.membersStatus != 0 {
+			http.Error(w, "the gateway failed", g.membersStatus)
+			return
+		}
+		if g.members == nil {
+			http.Error(w, "404 page not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(g.members)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		_ = json.NewEncoder(w).Encode(g.forwards)

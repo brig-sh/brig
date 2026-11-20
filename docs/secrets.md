@@ -558,6 +558,11 @@ answers 502 with `check=credential.malformed`. Store it again with
 `brig secret update` or `brig secret import`. This also refuses a raw token
 that starts with `{` and is not JSON.
 
+A route without `credential.field` does not send upstream a secret that is a
+whole JSON object, such as a pointer with no `kind` field: it answers 502
+with `check=credential.document`. Name the field to send with
+`credential.field`.
+
 ### An AWS profile behind a route
 
 The [aws preset](policies.md#the-aws-preset) hands the guest temporary AWS
@@ -711,8 +716,8 @@ without a `gcloud` source. See [The gcp preset](policies.md#the-gcp-preset).
 ## Renewal on the host
 
 `brig-broker` renews a secret this way for a run whose
-[route](policies.md#routes) serves it, on macOS with the `hvi` backend and
-on Linux with nerdctl and urunc ([Transports](broker.md#transports)). Every other run delivers
+[route](policies.md#routes) serves it, on macOS with the `hvi` backend, and
+on Linux with hull or with nerdctl and urunc ([Transports](broker.md#transports)). Every other run delivers
 `claude-credentials` as a file, as
 [What file delivery buys](security.md#what-file-delivery-buys-and-what-it-costs)
 describes.

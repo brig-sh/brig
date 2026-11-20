@@ -65,7 +65,7 @@ dry() { [ -n "${BRIG_DRY_RUN:-}" ] && [ "${BRIG_DRY_RUN}" != 0 ]; }
 # profile you edited in your installed one is the confusion worth ruling out
 # before reading any of the lines below.
 BRIG_BIN="${BRIG:-}"
-BRIG_FROM='$BRIG'
+BRIG_FROM="\$BRIG"
 if [ -z "$BRIG_BIN" ]; then
 	if BRIG_BIN="$(command -v brig 2>/dev/null)"; then
 		BRIG_FROM='PATH'
@@ -73,6 +73,7 @@ if [ -z "$BRIG_BIN" ]; then
 		BRIG_BIN="$(cd "$(dirname "$0")/.." && pwd)/brig"
 		BRIG_FROM='this checkout'
 		if [ ! -x "$BRIG_BIN" ]; then
+			# shellcheck disable=SC2016 # the backquotes are printed, not run
 			printf 'no brig found: put one on PATH, run `make build`, or set BRIG.\n' >&2
 			printf 'Nothing was checked.\n' >&2
 			exit 2
@@ -114,14 +115,23 @@ fi
 
 # --- the runtime ---
 # The checks exec into the sandbox brig booted, which means finding the same
-# runtime brig will find: BRIG_RUNTIME picks the backend, hull on macOS and
-# nerdctl elsewhere by default, and BRIG_RUNTIME_BIN then the profile's
-# runtimeBin pick the binary. See DetectFor in internal/runtime/runtime.go.
+# runtime brig will find: BRIG_RUNTIME picks the backend, and BRIG_RUNTIME_BIN
+# then the profile's runtimeBin pick the binary. Unset, the backend is hull on
+# macOS. Elsewhere it is hull when a hull is on PATH, and nerdctl otherwise.
+# A Linux host with hull boots through hull, and a nerdctl exec there finds no
+# sandbox of that name. See DetectFor in internal/runtime/runtime.go and
+# defaultKind in internal/runtime/default_other.go.
 KIND="${BRIG_RUNTIME:-}"
 if [ -z "$KIND" ]; then
 	case "$(uname -s)" in
 	Darwin) KIND=hull ;;
-	*) KIND=nerdctl ;;
+	*)
+		if command -v hull >/dev/null 2>&1; then
+			KIND=hull
+		else
+			KIND=nerdctl
+		fi
+		;;
 	esac
 fi
 case "$KIND" in
@@ -134,7 +144,9 @@ nerdctl) CANDIDATES='nerdctl docker' ;;
 esac
 RT="${BRIG_RUNTIME_BIN:-$PROFILE_RUNTIME_BIN}"
 case "$RT" in
-"~/"*) RT="$HOME/${RT#~/}" ;;
+# The ~ is escaped in the strip too: bash tilde-expands the pattern of
+# ${RT#~/}, which then removed nothing and left $HOME/~/... in RT.
+\~/*) RT="$HOME/${RT#\~/}" ;;
 esac
 if [ -z "$RT" ]; then
 	for candidate in $CANDIDATES; do
@@ -154,6 +166,7 @@ if dry; then
 	printf '  BRIG_IMAGE=%s BRIG_VERIFY=off %s run -d %s@image-check --home <scratch>\n' \
 		"$IMAGE" "$BRIG_BIN" "$PROFILE"
 	printf '  %s rm %s@image-check --home <scratch>\n' "$BRIG_BIN" "$PROFILE"
+	# shellcheck disable=SC2016 # the backquotes are printed, not run
 	printf 'and each requirement would run as `%s exec -u root <sandbox>`.\n' \
 		"$(basename "${RT:-$KIND}")"
 	exit 0
@@ -167,7 +180,7 @@ if [ -z "$RT" ]; then
 fi
 
 FAILED=0
-MODE=exec      # or "list", when the image would not boot
+MODE='exec'    # or "list", when the image would not boot
 NAME=""        # the sandbox, once brig has named it
 BOOT_FAILED="" # brig's create returned an error, whatever came up
 LISTED=""      # the container the fallback listing was taken from
@@ -180,6 +193,7 @@ WORKSPACE="$WORK/workspace"
 LISTING="$WORK/listing"
 BOOTLOG="$WORK/boot.log"
 
+# shellcheck disable=SC2329 # invoked by the trap below
 cleanup() {
 	# Unconditionally, not only when the boot printed a name: a create that
 	# failed after the sandbox was up leaves one behind holding the name, and
@@ -223,7 +237,9 @@ else
 fi
 
 # guest runs one command inside the sandbox as root, the way every privileged
-# brig exec runs. Output on stdout, everything else discarded.
+# brig exec runs. Output on stdout, everything else discarded. hull takes the
+# command after --, on macOS and on Linux alike. See execArgs in
+# internal/runtime/hull.go.
 guest() {
 	if [ "$KIND" = hull ]; then
 		"$RT" exec -u root "$NAME" -- "$@" 2>/dev/null
@@ -235,7 +251,7 @@ guest() {
 # The fallback: create the container without starting it and list its
 # filesystem. This is the only thing that works for an image that cannot run at
 # all, which is exactly the scratch case worth reporting on. hull has no such
-# verb, so on macOS there is nothing to fall back to.
+# verb, on macOS or on Linux, so under hull there is nothing to fall back to.
 build_listing() {
 	if [ "$KIND" = hull ]; then
 		return 1

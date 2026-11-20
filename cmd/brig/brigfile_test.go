@@ -5,12 +5,14 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/brigfile"
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
 )
@@ -516,7 +518,7 @@ func TestInitWritesAStarterThatLoads(t *testing.T) {
 func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
 	blob := starterBrigfile("demo")
 	first, _, _ := strings.Cut(string(blob), "\n")
-	want := "# yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+	want := "# yaml-language-server: $schema=" + starterSchemaURL(buildinfo.Read().Version)
 	if first != want {
 		t.Errorf("first line %q, want %q", first, want)
 	}
@@ -525,12 +527,81 @@ func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
 	}
 	// The path after the branch is a file in this repository. A schema that
 	// moved would leave every starter pointing an editor at nothing.
-	_, rel, ok := strings.Cut(starterSchemaURL, "/brig-sh/brig/main/")
-	if !ok {
-		t.Fatalf("starterSchemaURL %q is not a file on main of this repository", starterSchemaURL)
-	}
-	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(rel))); err != nil {
+	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(schemaURLPath))); err != nil {
 		t.Errorf("the schema the starter names is not in the repository: %v", err)
+	}
+}
+
+// A release points an editor at the schema of its own tag, so the editor
+// checks a Brigfile against the fields that binary reads. Every other build
+// has no tag of its own, and names main.
+func TestTheStarterSchemaURLIsTheReleasesOwn(t *testing.T) {
+	const onMain = "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+	for version, want := range map[string]string{
+		"v0.6.0":  "https://raw.githubusercontent.com/brig-sh/brig/v0.6.0/api/project/v1alpha1/brigfile.schema.json",
+		"v1.12.3": "https://raw.githubusercontent.com/brig-sh/brig/v1.12.3/api/project/v1alpha1/brigfile.schema.json",
+		// None of these is a tag brig can count on to hold a schema.
+		"dev":                                  onMain,
+		"":                                     onMain,
+		"v0.6.0+dirty":                         onMain,
+		"v0.6.0-rc.1":                          onMain,
+		"v0.5.3-0.20261114120000-b2b2b2b2b2b2": onMain,
+		"v0.6.0/../../../evil/repo/main":       onMain,
+		"0.6.0":                                onMain,
+		"v0.6":                                 onMain,
+	} {
+		if got := starterSchemaURL(version); got != want {
+			t.Errorf("starterSchemaURL(%q) = %q, want %q", version, got, want)
+		}
+	}
+}
+
+// The guide shows the modeline with the URL this binary builds, so a schema
+// that moves cannot leave the guide behind.
+func TestTheGuideShowsTheSchemaURLBrigWrites(t *testing.T) {
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "brigfile.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modeline := "# yaml-language-server: $schema=" + starterSchemaURL("") + "\n"
+	if n := strings.Count(string(guide), modeline); n != 1 {
+		t.Errorf("docs/brigfile.md shows the modeline brig writes %d times, want once", n)
+	}
+	if n := strings.Count(string(guide), schemaURLBase); n != 1 {
+		t.Errorf("docs/brigfile.md has %d URLs under %s, want only the modeline's", n, schemaURLBase)
+	}
+}
+
+// The editor setting in the guide names the schema of the newest release, so
+// that it follows each release with no edit. That URL resolves only while
+// each release carries the schema as an asset under that name, which is the
+// release configuration's to do.
+func TestTheGuidesEditorSettingNamesAnAssetEveryReleaseCarries(t *testing.T) {
+	const asset = "brigfile.schema.json"
+	if path.Base(schemaURLPath) != asset {
+		t.Fatalf("the schema file is %s, and the release asset would take that name, not %s", path.Base(schemaURLPath), asset)
+	}
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "brigfile.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setting := `"https://github.com/brig-sh/brig/releases/latest/download/` + asset + `": "Brigfile"`
+	if !strings.Contains(string(guide), setting) {
+		t.Errorf("docs/brigfile.md does not show the editor setting %s", setting)
+	}
+	release, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The entry sits under release:, the only place that makes a file an
+	// asset of the release instead of a member of an archive.
+	_, after, ok := strings.Cut(string(release), "\nrelease:\n")
+	if !ok {
+		t.Fatal(".goreleaser.yaml has no release section")
+	}
+	section, _, _ := strings.Cut(after, "\n\n")
+	if want := "  extra_files:\n    - glob: ." + schemaURLPath + "\n"; !strings.Contains(section+"\n", want) {
+		t.Errorf("the release section of .goreleaser.yaml does not publish the schema:\n%s", section)
 	}
 }
 

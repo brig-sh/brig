@@ -137,6 +137,8 @@ repository. Read the plan before you run a target. The plan shows:
 - each policy, and where it comes from
 - for each route, where it sends requests and which secrets in your store it
   uses
+- for each route, its preset, the git URLs it takes over in the guest, and
+  the guest variables that it sets
 
 `brig plan --target` takes the flags `--session`, `--image`, `--mem`,
 `--cpus`, `--network`, `--offline`, `--publish`, `--skills` and `--json`. It
@@ -407,6 +409,7 @@ sessions of profiles. Its columns are `TARGET`, `SESSION`, `SANDBOX`,
 | --- | --- | --- |
 | A target and a project | A session that Brig has a record of | `brig rm --target <name>` in that project |
 | `STATE` is `unlisted` | Brig has a record of the session, and the runtime did not list its sandbox | `brig rm --target <name>` |
+| `STATE` is `on <runtime>` | Another runtime booted the session, and Brig keeps it on that runtime | `brig rm --target <name>` under that runtime, or `brig rm --forget --target <name>` if that runtime is gone |
 | `TARGET` is `-` and `PROJECT` is `unknown` | The runtime has a sandbox of a target that Brig has no record of | `brig rm --all` |
 
 A session of a target has no ref, so `brig ls -q` prints no line for it. In
@@ -461,6 +464,64 @@ the plan, and a control character could change what your terminal shows.
 
 A profile Brig ships through `builtin:` is not limited this way.
 
+## What a repository policy may not set
+
+A policy from `file:` or `inline:` comes from whoever wrote the repository.
+Its routes are held to two rules.
+
+**A route may take over git only for the host it sends to.** Each prefix
+under `guest.git.insteadOf` must be a URL on the route's own upstream:
+
+```yaml
+routes:
+  - name: forge
+    upstream: https://git.example.com
+    credential: {secretRef: {name: forge-token}}
+    inject: {basicAuth: {username: x-access-token}}
+    guest:
+      git:
+        insteadOf:
+          - "https://git.example.com/"   # accepted
+          - "https://github.com/"        # refused
+```
+
+An `https://` prefix must also match the upstream's port, and must end the
+host with a slash.
+
+**A preset stays what Brig ships.** On a preset route, a repository policy
+names the secret. It may also move `github-token` to another host, which is
+how a repository reaches GitHub Enterprise:
+
+```yaml
+routes:
+  - name: github
+    preset: github-token
+    upstream: https://ghe.example.com
+    credential: {secretRef: {name: ghe-token}}
+    request: {allow: {repos: ["team/*"]}}
+```
+
+The preset's git rewrites follow the upstream, so this route takes over git
+for `ghe.example.com` and not for `github.com`. The plan row says that the
+preset is used in place of its own upstream.
+
+A repository policy may not change:
+
+| Field of a preset route | Why it is refused |
+| --- | --- |
+| `upstream` of `anthropic-api-key` or `github-api` | The guest finds those routes through a variable, which names no host to hold the route to |
+| `inject` | The preset says how the secret is sent |
+| `request` of `aws` | The preset says which requests it takes |
+
+`claude-code`, `aws` and `gcp` have no upstream that any policy can change.
+
+To send to another upstream some other way, a repository writes the route in
+full, with no `preset`. The plan row of every route names the upstream, the
+secret and the git URLs that the route takes over.
+
+A policy in your own policy directory is held to neither rule. There you can
+put a mirror in front of `github.com`.
+
 ## Where Brig looks
 
 Inside a Git checkout, Brig reads the `Brigfile` at the top of the
@@ -514,16 +575,19 @@ this line first in the file, so a starter needs nothing more:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json
 ```
 
-The URL resolves once the schema is on the default branch.
+That URL is the schema on `main`, which a build with no release tag writes.
+A release writes the URL of its own tag, with the tag in place of `main`, so
+your editor checks the file against the fields that release reads.
 
 To get the same check for every file named `Brigfile` in VS Code, install the
-YAML extension and add this to your settings:
+YAML extension and add this to your settings. The URL is the schema of the
+newest release, and it follows each release with no change from you:
 
 ```json
 {
   "files.associations": { "Brigfile": "yaml" },
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json": "Brigfile"
+    "https://github.com/brig-sh/brig/releases/latest/download/brigfile.schema.json": "Brigfile"
   }
 }
 ```

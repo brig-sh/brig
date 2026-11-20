@@ -161,7 +161,12 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 		if r.Vends() {
 			url = LinkLocalURL(sandbox, r.Name)
 		}
-		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
+		// A host route is reached at its own name, so {route.url} names that
+		// host and the path carries no sandbox or route.
+		if r.Mode == v1alpha1.ModeHost {
+			url = "https://" + v1alpha1.HostName(r.Name)
+		}
+		endpoint := r.Mode.AtBrigInternal()
 		if endpoint {
 			endpoints++
 		}
@@ -206,6 +211,8 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 					return nil, fmt.Errorf("route %s: the credential broker named no AWS region", r.Name)
 				}
 				vars = append(vars, runtime.Var{Name: name, Value: regions[r.Name]})
+			case v1alpha1.PlaceholderRouteHost:
+				vars = append(vars, runtime.Var{Name: name, Value: v1alpha1.HostName(r.Name)})
 			default:
 				// Validate refuses a literal; one here was not expanded.
 				return nil, fmt.Errorf("route %s: guest.env %s is %q, not a placeholder", r.Name, name, v)

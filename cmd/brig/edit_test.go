@@ -20,6 +20,15 @@ func stubEditor(t *testing.T, script string) {
 	}
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", path)
+	// brig policy create reads a piped stdin instead of opening the editor,
+	// so stdin is /dev/null here whatever the test runner was given.
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = null
+	t.Cleanup(func() { os.Stdin = old; null.Close() })
 }
 
 func TestEditOpensAFileBackedProfile(t *testing.T) {

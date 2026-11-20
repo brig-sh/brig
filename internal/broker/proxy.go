@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/http/httputil"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/graphql"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/tlspem"
 )
@@ -30,7 +32,8 @@ import (
 // goes back to the guest.
 const maxReplay = 8 << 20
 
-// ServeHTTP serves /<sandbox-id>/r/<route>/<rest>. The checks run in the order
+// ServeHTTP serves /<sandbox-id>/r/<route>/<rest>, and /<rest> at a host
+// route's own name <route>.brig.internal. The checks run in the order
 // of docs/broker.md, and a request that fails one never reaches the upstream.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := h.now()
@@ -70,21 +73,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, ok := splitRoutePath(r.URL)
-	if !ok {
-		a.check = "path"
-		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
-		return
-	}
-	// A request is served only for a sandbox that reaches the broker where it
-	// arrived. Any other sandbox's path gets the answer of one that does not
-	// exist, before a lookup or a token check could tell the two apart.
-	arrived, ok := h.arrival(p.sandbox, r.RemoteAddr)
-	a.arrived = arrived
-	if !ok {
-		a.check = "arrival"
-		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
-		return
+	// A request that names a host route by its Host is served for the sandbox
+	// whose divert socket it arrived on, and never for one it names itself.
+	var (
+		p        routePath
+		ok       bool
+		hostName string
+	)
+	if name, isHost := hostRoute(r.Host); isHost {
+		hostName = name
+		id, _ := h.arrival("", r.RemoteAddr)
+		a.arrived = id
+		// Loopback names no sandbox, and a clear-text arrival would expose the token.
+		if id == "" || (h.vendOnly != nil && h.vendOnly(r)) {
+			a.check = "arrival"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+		p = routePath{sandbox: id, route: name, rest: r.URL.Path, escapedRest: r.URL.EscapedPath()}
+		if p.rest == "" {
+			p.rest, p.escapedRest = "/", "/"
+		}
+		// OPTIONS * has no slash, and rest must start with one.
+		if !strings.HasPrefix(p.rest, "/") {
+			a.check = "path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+	} else {
+		p, ok = splitRoutePath(r.URL)
+		if !ok {
+			a.check = "path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+		// A request is served only for a sandbox that reaches the broker where it
+		// arrived. Any other sandbox's path gets the answer of one that does not
+		// exist, before a lookup or a token check could tell the two apart.
+		var arrived string
+		arrived, ok = h.arrival(p.sandbox, r.RemoteAddr)
+		a.arrived = arrived
+		if !ok {
+			a.check = "arrival"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
 	}
 	a.sandbox, a.route, a.path = p.sandbox, p.route, p.rest
 	sb := h.sandbox(p.sandbox)
@@ -107,9 +140,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	// A route in another mode is not served here. Its policy did not ask for
-	// an endpoint, so its token opens none.
-	if rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint {
+	// A route is served only the way its mode asks: a host route by its name,
+	// an endpoint by its path, and a route in any other mode not here.
+	if (hostName != "" && rt.spec.Mode != v1alpha1.ModeHost) ||
+		(hostName == "" && rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint) {
 		a.check = "route.mode"
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
@@ -201,8 +235,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	// request.allow matches the path the upstream serves, so a path that
-	// the upstream could resolve to another one is refused first.
+	// request.allow matches the path the upstream serves (on github-api, the
+	// path gh sent), so a path that the upstream could resolve to another one
+	// is refused first.
 	repos := rt.spec.Request != nil && rt.spec.Request.Allow != nil && len(rt.spec.Request.Allow.Repos) > 0
 	var objects map[int]bool
 	if rt.services != nil {
@@ -214,7 +249,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	if rt.spec.Request != nil {
+	// With request.allow.graphql, only that rule governs /api/graphql, and
+	// the rest of the API is read-only under methods and paths.
+	gq := graphQLRules(rt)
+	isGraphQL := false
+	if gq != nil {
+		var reason string
+		isGraphQL, reason = graphQLEndpoint(r, p)
+		if reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql", reason)
+			return
+		}
+	}
+	if rt.spec.Request != nil && !isGraphQL {
 		if ref := allow(rt.spec.Request.Allow, r.Method, p.rest); ref != nil {
 			refuseRule(rec, a, rt, p, "request.allow."+ref.field, ref.rule(routeRule(p.route)), ref.reason)
 			return
@@ -223,6 +270,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A route with services forwards to the host of the service its path
 	// names, the path after the service.
 	upstream, out := rt.upstream, p
+	// gh addresses a GitHub Enterprise host; api.github.com serves the same
+	// calls under other paths. Any other path is refused before the
+	// credential is read.
+	if rt.spec.Preset == v1alpha1.PresetGitHubAPI {
+		var ok bool
+		if out, ok = githubAPIPath(p); !ok {
+			a.check = "github-api.path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+	}
+	var gqWant graphql.Result
+	if isGraphQL {
+		var reason string
+		if gqWant, reason = checkGraphQL(r, held, gq); reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql", reason)
+			return
+		}
+	}
 	if rt.services != nil {
 		var ok bool
 		if upstream, out, ok = serviceTarget(rec, r, a, rt, p, objects); !ok {
@@ -263,6 +329,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if value, err = h.credential(r, p, rt, cred, doc); err != nil {
 			credentialRefusal(rec, a, p, err)
+			return
+		}
+	}
+	if isGraphQL && len(gq.Repos) > 0 {
+		reason, err := h.confirmRepos(r, rt, upstream, value, gqWant.Repos)
+		if err == nil && reason == "" {
+			a.resolved, reason, err = h.confirmNodes(r, rt, upstream, value, gqWant.Nodes, gq.Repos)
+		}
+		if err != nil {
+			a.check, a.cause = "upstream", err.Error()
+			http.Error(rec, "brig broker: the upstream of route "+p.route+" could not be reached", http.StatusBadGateway)
+			return
+		}
+		if reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql.repos", reason)
 			return
 		}
 	}
@@ -690,6 +771,49 @@ type routePath struct {
 	rest, escapedRest string
 }
 
+// githubAPIPath maps the paths gh sends to a GitHub Enterprise host onto
+// api.github.com: /api/v3/<x> to /<x> and /api/graphql to /graphql. The
+// decoded and the escaped path must cut the same way, so the one that is
+// forwarded is the one that was checked.
+func githubAPIPath(p routePath) (routePath, bool) {
+	cut := func(path string) (string, bool) {
+		switch {
+		case path == "/api/graphql":
+			return "/graphql", true
+		case path == "/api/v3":
+			return "/", true
+		case strings.HasPrefix(path, "/api/v3/"):
+			return strings.TrimPrefix(path, "/api/v3"), true
+		}
+		return "", false
+	}
+	rest, ok := cut(p.rest)
+	if !ok {
+		return p, false
+	}
+	escaped, ok := cut(p.escapedRest)
+	if !ok {
+		return p, false
+	}
+	p.rest, p.escapedRest = rest, escaped
+	return p, true
+}
+
+// hostRoute reads the route out of a Host of the form <route>.brig.internal.
+// A port, case and one trailing dot are dropped; bare brig.internal and a
+// name with more than one label are not a host route.
+func hostRoute(host string) (string, bool) {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	name, ok := strings.CutSuffix(host, v1alpha1.HostName(""))
+	if !ok || strings.Contains(name, ".") || v1alpha1.CheckRouteName(name) != nil {
+		return "", false
+	}
+	return name, true
+}
+
 // splitRoutePath splits /<sandbox>/r/<route>/<rest>. A sandbox id and a route
 // name hold no character that needs escaping, so the escaped path has the
 // same prefix as the decoded one.
@@ -887,14 +1011,20 @@ type auditLine struct {
 	// cert and certNotAfter name the client certificate a request presented:
 	// a short digest of the leaf and its expiry. Never the certificate.
 	cert, certNotAfter string
+	// resolved lists the node IDs a mutation named and the repository of
+	// each, as ID=owner/name. Node IDs are references, not credentials.
+	resolved string
+	// cause is why a lookup the broker made upstream failed.
+	cause string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
 // the broker's port can send a request, and the audit log must not grow by
 // what the sender chooses to write.
 const (
-	maxAuditMethod = 16
-	maxAuditPath   = 256
+	maxAuditMethod   = 16
+	maxAuditPath     = 256
+	maxAuditResolved = 1024
 )
 
 // clip cuts s to n bytes.
@@ -961,6 +1091,12 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.cert != "" {
 		attrs = append(attrs, slog.String("cert", a.cert), slog.String("cert.notAfter", a.certNotAfter))
+	}
+	if a.resolved != "" {
+		attrs = append(attrs, slog.String("resolved", clip(a.resolved, maxAuditResolved)))
+	}
+	if a.cause != "" {
+		attrs = append(attrs, slog.String("cause", clip(a.cause, maxAuditResolved)))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }

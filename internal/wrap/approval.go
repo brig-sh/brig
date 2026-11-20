@@ -290,8 +290,8 @@ func (c *Config) approvalSettings() []ApprovalSetting {
 // approvalExempt. A new setting is then a decision about the approval, not
 // one more value an approval ignores.
 var approvalAgentSettings = []string{
-	"ALLOW_DENIED", "ALLOW_REFS", "COSIGN_BIN", "CPUS", "FORWARD_ENV", "GIT_CONFIG", "GIT_EMAIL",
-	"GIT_HOSTS", "GIT_IDENTITY", "GIT_NAME", "GIT_USER", "HYPERVISOR", "IMAGE", "MEM", "NETWORK", "PULL",
+	"ALLOW_DENIED", "ALLOW_REFS", "COSIGN_BIN", "CPUS", "FORWARD_ENV", "FORWARD_GITHUB_TOKEN",
+	"GIT_CONFIG", "GIT_EMAIL", "GIT_HOSTS", "GIT_IDENTITY", "GIT_NAME", "GIT_USER", "HYPERVISOR", "IMAGE", "MEM", "NETWORK", "PULL",
 	"ROOTFS_MODE", "ROOTFS_TYPE", "SKILLS", "TRUST_WORKSPACE", "VERIFY", "VERIFY_IDENTITY",
 	"VERIFY_ISSUER", "VERIFY_REGISTRY", "VERIFY_RUNTIME_IDENTITY", "VERIFY_RUNTIME_ISSUER",
 }
@@ -442,6 +442,9 @@ func ApprovalChanges(was, now ApprovalSubject) []string {
 			}
 			if a.Policy != b.Policy || a.Preset != b.Preset || a.Mode != b.Mode || a.Vends != b.Vends {
 				add("%s changed its policy, preset or mode", k)
+			}
+			if !slices.Equal(a.GitInsteadOf, b.GitInsteadOf) || !slices.Equal(a.GuestEnv, b.GuestEnv) {
+				add("%s changed the git URLs it takes over or the variables it sets in the guest", k)
 			}
 		})
 	if !slices.Equal(was.KeptOnHost, now.KeptOnHost) {

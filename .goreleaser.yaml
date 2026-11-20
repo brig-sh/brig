@@ -186,6 +186,12 @@ release:
   # only, goreleaser >= v2.5; the workflow pins `~> v2`.)
   use_existing_draft: true
   prerelease: auto
+  # The Brigfile schema, as an asset of its own. GitHub serves the newest
+  # release's copy at releases/latest/download/brigfile.schema.json, which is
+  # the one URL an editor setting can hold and still follow each release.
+  # docs/brigfile.md names that URL, and a test holds the name to this entry.
+  extra_files:
+    - glob: ./api/project/v1alpha1/brigfile.schema.json
 
 # The Homebrew tap. `brews` generated formulas that installed pre-compiled
 # binaries; goreleaser deprecated that in favour of casks, which is what

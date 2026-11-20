@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,6 +48,7 @@ func (r *linkLocalRig) add(t *testing.T, id, internal string) injector.AddRespon
 	if added.DivertSocket == "" {
 		t.Fatal("the broker named no divert socket for a brig.internal sandbox")
 	}
+	r.settle(t)
 	return added
 }
 
@@ -314,5 +316,35 @@ func TestVendOnlyReadsTheConnectionMarker(t *testing.T) {
 	ll := &arrivedConn{remote: arrivalAddr{prefix: linkLocalArrival, sandbox: "brig-a"}}
 	if !vendOnly(req(divertContext(bg, ll))) {
 		t.Error("a link-local request was not treated as clear text")
+	}
+}
+
+// The read count the tests above rely on does not depend on when the broker
+// gets round to settling a journal. Here that work is held back past the
+// point a test takes its starting count, then run: it reads nothing, because
+// add settled the journal first. Without that, this is the one stray read
+// that failed TestLinkLocalRefusesARouteThatDoesNotVend now and then.
+func TestALateJournalRecoveryReadsNothingAfterAdd(t *testing.T) {
+	rig := newLinkLocalRig(t)
+	var mu sync.Mutex
+	var held []func()
+	rig.srv.creds.spawn = func(work func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		held = append(held, work)
+	}
+	rig.add(t, "brig-a", internalA)
+	mu.Lock()
+	late := held
+	mu.Unlock()
+	if len(late) == 0 {
+		t.Fatal("registration started no journal recovery, so this test holds nothing back")
+	}
+	before := rig.reads()
+	for _, work := range late {
+		work()
+	}
+	if n := rig.reads() - before; n != 0 {
+		t.Errorf("recovery that ran late read the store %d times", n)
 	}
 }

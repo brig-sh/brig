@@ -52,7 +52,8 @@ brig: no runtime found on PATH: brig drives hull on macOS, and none was there.
 See https://github.com/brig-sh/brig/blob/main/docs/install.md, or point BRIG_RUNTIME_BIN at a build
 ```
 
-On Linux the runtime is `nerdctl`, and the message names it:
+On Linux the runtime is `hull` when a `hull` is on `PATH`, and `nerdctl`
+otherwise. So with neither on `PATH`, the message names nerdctl:
 
 ```
 brig: no runtime found on PATH: install nerdctl, or point BRIG_RUNTIME_BIN at one
@@ -823,8 +824,8 @@ The plan has no `REFUSED` row.
 
 ### Policy refused on Linux
 
-On Linux, only nerdctl can enforce an egress policy. With docker, the
-refusal says to use nerdctl or to detach the policy.
+On Linux, hull and nerdctl enforce an egress policy, and docker cannot. With
+docker, the refusal says to use nerdctl or to detach the policy.
 
 On nerdctl, when Brig cannot put the rules in place, the refusal reads
 `whether nerdctl on <shim> enforces the egress policy is unknown`. Then:
@@ -899,6 +900,61 @@ brig plan claude
 
 The plan has no `REFUSED` row, and its `ISOLATION` row names
 `io.containerd.urunc.v2`.
+
+Brig allows a shim that it cannot place, such as another microVM shim, unless
+the run names `--isolation microvm`. See
+[A run that requires a microVM is refused](#a-run-that-requires-a-microvm-is-refused).
+
+## A run that requires a microVM is refused
+
+```
+brig: --isolation microvm: this run would stand on unknown (nerdctl over
+containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell
+whether that shim boots a kernel of its own), and brig will not boot a sandbox
+it cannot establish as a microVM. Change BRIG_CONTAINERD_RUNTIME to get one, or
+drop --isolation microvm
+```
+
+**Exit code:** `7`
+
+**Cause:** The run named `--isolation microvm`, and its `ISOLATION` row does not
+say `microVM`. Three things put it there. A shim that shares the host kernel
+gives `container`. A shim that Brig cannot place gives `unknown`. docker also
+gives `unknown`, because Brig tells docker to use the shim and cannot see
+whether docker has it. The last sentence of the refusal names the setting: the
+shim variable, or the docker binary in use (`BRIG_RUNTIME_BIN`, a profile's
+`runtimeBin`, or the fallback taken when nerdctl is not on `PATH`).
+
+A run that finds its sandbox already up checks that sandbox as well. Brig reads
+the shim the sandbox was created with from the runtime, so a sandbox booted
+earlier on a shim that is not a microVM is refused even after you unset the
+variable that chose it. The refusal says `already up` and names the sandbox
+instead of a setting. If Brig cannot read what the sandbox stands on, it refuses
+that too.
+
+**Fix:** Change the setting the refusal names. For the shim, unset the
+variable. For docker, install nerdctl, or point `BRIG_RUNTIME_BIN` at it. For a
+sandbox that is already up, remove it with `brig rm <ref>`, and the next run
+boots a new one on the shim you have now.
+
+```bash
+unset BRIG_CONTAINERD_RUNTIME
+brig plan --isolation microvm claude
+```
+
+**Confirm:** The plan has no `REFUSED` row, and its `ISOLATION` row says
+`microVM`.
+
+If the shim is a microVM that Brig has no way to recognise, there is no way
+to satisfy the flag today. Run without it, and the `ISOLATION` row still says
+what Brig can and cannot tell.
+
+The flag stands before the profile, or before the first word that is the
+agent's. A line such as `brig run claude -p hi --isolation microvm` exits `2`
+and says where to put it, because Brig would otherwise leave the flag to the
+agent and boot without the requirement. After `--`, and in the command of
+`brig sh`, the flag is the agent's or the guest's own, and Brig does not read
+it.
 
 ## Sandbox restarted on `brig sh`
 

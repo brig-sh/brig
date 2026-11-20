@@ -53,10 +53,10 @@ use a delivered credential, as any holder can, for as long as it holds it.
 
 | Case | Posture |
 | --- | --- |
-| New sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
+| New sandbox on `hvi`, or on Linux with nerdctl or hull | `isolated` |
 | The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
-| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl and `hvi`. The backend fallback on `vz`, `qemu` or hull on Linux |
-| Custom profile without a network choice, on `vz`, `qemu` or hull on Linux | `shared`. `brig info` names that fallback |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl, `hvi` and hull on Linux. The backend fallback on `vz` or `qemu` |
+| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
 | Existing sandbox | Its recorded posture |
 | Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
 
@@ -76,13 +76,23 @@ The sandbox is a microVM on macOS and on Linux.
 | Host | How the microVM boots |
 | --- | --- |
 | macOS | [hull](https://github.com/brig-sh/hull) boots it. Its `hvi` backend uses Hypervisor.framework, and seven of the nine shipped profiles ask for `hvi`. Its `vz` backend uses Virtualization.framework, and `claude-desktop` and `cursor` run on `vz`. `BRIG_HYPERVISOR` overrides the profile. See [Run paths compared](runtimes.md#run-paths-compared). `brew install --cask brig` installs hull |
-| Linux | Brig drives `nerdctl` and hands the container to the urunc shim (`io.containerd.urunc.v2`) by default. The guest gets its own kernel |
+| Linux | Brig drives `hull` when a `hull` is on `PATH`, and `nerdctl` otherwise. `BRIG_RUNTIME` names either one. Both hand the container to the urunc shim (`io.containerd.urunc.v2`), which on nerdctl is the default. The guest gets its own kernel |
 
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
-name that shim. Brig refuses a shim that it knows shares the host kernel:
-`runc`, `crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`,
-by name or by path. A container that shares the host kernel is not the
+name that shim on nerdctl. hull does not read it. Brig refuses a shim that it
+knows shares the host kernel: `runc`, `crun` or the runc shim binaries
+`containerd-shim-runc-v1` and `-v2`, by name or by path. A container that shares the host kernel is not the
 boundary Brig provides.
+
+`--isolation microvm` goes further and refuses every run whose `ISOLATION` row
+is not `microVM`, with exit `7`. That includes a shim that Brig cannot place,
+and docker: Brig tells docker to use the shim and cannot see whether docker
+has it, so docker reads `unknown`. The flag is the only way to state the
+requirement. No variable sets it, so none can weaken it. A run that joins a
+sandbox that is already up is checked against the shim that sandbox was created
+with, read off the runtime, and not only against what a new boot would get. A
+profile cannot name it yet, because the profile format has no schema version to
+name it in.
 
 The `ISOLATION` row of the execution envelope names the boundary this run
 resolved. `brig info` prints it and boots nothing. `brig --verbose run`
@@ -97,6 +107,7 @@ ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hyperviso
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
 ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
 ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
+ISOLATION    unknown (docker over containerd, io.containerd.urunc.v2: brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own)
 ```
 
 Brig can boot with a shim it does not recognise, but cannot tell from the
@@ -124,8 +135,8 @@ credential for itself, so you must deliver each credential explicitly. See
 
 Nothing on the host can open a connection into the sandbox until you publish
 a port. To publish a port, use `--publish` on a run. On macOS, `brig network
-publish` also opens one on a sandbox that is up. On Linux a port can be
-published only when the sandbox is created. `brig network unpublish` closes
+publish` also opens one on a sandbox that is up, and so does hull on
+Linux. On nerdctl a port can be published only when the sandbox is created. `brig network unpublish` closes
 the port.
 
 **The port binds to loopback by default.** A published port binds to
@@ -186,14 +197,14 @@ Brig does with the answers. They do not stop the reads.
 A credential reaches the guest by one of two channels, which the profile
 picks for each secret. A third channel, `broker`, keeps the credential on
 the host. A policy's [route](policies.md#routes) names the secret, and the
-guest gets a session token for the route in its place. Routes work on `hvi`
-and on Linux with nerdctl.
+guest gets a session token for the route in its place. Routes work on `hvi`,
+and on Linux with hull or nerdctl.
 
 | Channel | What it does |
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
-| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The client certificate, private key and CA bundle of a route's `inject.tls` stay there too. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The client certificate, private key and CA bundle of a route's `inject.tls` stay there too. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped, and so are `GH_TOKEN` and `GITHUB_TOKEN` on a run with a `github-token` or `github-api` route to GitHub |
 
 `brig info --json` names the channel of each credential as its `source`:
 `environment`, `secret`, `file` or `broker`.
@@ -325,7 +336,8 @@ proxy (see
 A [route](policies.md#routes) is the exception. There the sandbox sees a
 session token, which works through its route until it expires or the
 sandbox is stopped. On a run with a route, the guest also trusts the brig
-CA, for `brig.internal` alone. The `aws` route is not such an exception: its
+CA, for `brig.internal` and its subdomains. The CA's name constraint already
+allowed subdomains, so the trust boundary does not move. The `aws` route is not such an exception: its
 guest holds temporary AWS keys. See [The aws route](#the-aws-route).
 
 A route with a client certificate gives the token the certificate's
@@ -333,6 +345,17 @@ identity. The guest never holds the key, but whoever holds the route's
 session token can send requests that the upstream sees as the certificate
 holder's. Only the route's `request.allow` limits them, so make it as narrow
 as the certificate's purpose.
+
+A `github-api` route with `request.allow.graphql` limits the GraphQL
+operations the session token can run, and makes the REST API read-only.
+With `repos`, it also limits the repository a query starts at and the
+repository of each node ID a mutation names: the broker looks up each ID
+before it forwards the mutation, and refuses an ID it cannot place in a
+listed repository. For a pull request, both its base and its head
+repository must be listed. It does not limit what a query or a mutation's
+response reads by following edges into other repositories, or an issue that
+a closing keyword such as `Fixes other/repo#5` closes on merge. The token's
+scope is the limit there. See [GraphQL requests](broker.md#graphql-requests).
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
@@ -962,6 +985,17 @@ source of a secret, a variable from your environment, the shared network or a
 hypervisor. See
 [What a repository profile may not set](brigfile.md#what-a-repository-profile-may-not-set).
 
+**A route of a repository policy may take over git only for the host it
+sends to.** A prefix under `guest.git.insteadOf` that names another host is
+refused, so git that the agent addresses to one host does not go, with the
+route's secret, to another.
+
+**A repository policy may not change how a preset sends its secret.** It
+names the secret. It may move `github-token` to another host, and the
+preset's git rewrites move with it. It may not move a preset that the guest
+finds through a variable. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
 ### What reading a Brigfile does
 
 **A file that a Brigfile names must lie inside the project.** A path that is
@@ -1017,6 +1051,11 @@ other path that boots a sandbox, refuses one.
 - **A secret in your store can go to an upstream the repository names.** The
   plan shows each route with its upstream and its secrets, and the approval
   covers each pair. Read those rows before you approve.
+- **A route sets variables in the guest, and Brig does not judge what they
+  mean.** A route can give the guest a variable that an agent reads as the
+  address of a service. The row lists the git URLs that the route takes over
+  and the guest variables that it sets. Brig holds the git URLs of a
+  repository's route to its upstream. It cannot do the same for a variable.
 - **An image named by a tag can change after you approve.** The approval
   covers the reference, not the bytes. The prompt says so when the image is a
   tag. [Image verification](#guest-images) runs at every boot, as for any
@@ -1329,7 +1368,7 @@ If you find an excluded item in a payload, that is a bug. Report it as
 
 ### Network egress
 
-To restrict egress, attach a policy on `hvi` or on Linux with nerdctl.
+To restrict egress, attach a policy on `hvi`, or on Linux with hull or nerdctl.
 `--network offline` is the one posture with no route out at all, on every
 backend.
 
@@ -1339,9 +1378,9 @@ A sandbox with no policy has unrestricted egress, and that is what
 
 | Backend | Where a policy is enforced |
 | --- | --- |
-| `hvi` | At the network gateway Brig gives that sandbox |
+| `hvi`, hull on Linux | At the network gateway Brig gives that sandbox |
 | Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
-| `vz`, `qemu`, docker, hull on Linux | No policy is available. Outbound traffic is whatever the runtime allows |
+| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
 
 Both enforcement points are outside the guest's kernel.
 
@@ -1395,12 +1434,11 @@ reaches only the broker. See [Transports](broker.md#transports).
 ### Sandbox to sandbox
 
 If two agents must not reach each other, run both with `--network isolated`
-on `hvi` or on Linux with nerdctl. On `vz` and on `qemu`, where that posture
-is refused, run them on separate hosts. hull on Linux refuses it too: use
-nerdctl there.
+on `hvi`, or on Linux with nerdctl or hull. On `vz` and on `qemu`, where that
+posture is refused, run them on separate hosts.
 
-`isolated` is the guarantee. It is the default for new `hvi` and nerdctl
-sandboxes unless another posture is named (see
+`isolated` is the guarantee. It is the default for new `hvi`, nerdctl and
+hull on Linux sandboxes unless another posture is named (see
 [Network posture](#network-posture)). `--network isolated` also moves an
 existing shared sandbox onto it.
 
@@ -1408,10 +1446,33 @@ existing shared sandbox onto it.
 that network, whatever the backend does with a shared one. A sandbox that
 carries an egress policy is isolated whether or not it asked to be.
 
-`isolated` is **refused** on `vz`, on `qemu` and on hull on Linux, where Brig
-owns no network to give. A run that asks for it there is stopped and told which backend
+`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network
+to give. A run that asks for it there is stopped and told which backend
 implements it. It is never booted onto the shared network under a row that
 claims otherwise.
+
+hull on Linux gives each networked sandbox a hull network gateway, as `hvi`
+does on macOS: one of its own when it is isolated, and one shared gateway for
+every `shared` sandbox. Brig never puts a sandbox on hull's own CNI bridge,
+where every sandbox is on one L2 segment whatever its posture. A gateway
+needs `hvi`, so a networked run on another monitor is refused. hvi joins the
+gateway as the image's user, and only the user who runs Brig may write to
+its socket. So a guest whose image user maps to another host user has no
+network at all. On a rootless install that is any image with a non-root
+`USER`. Brig prints hull's warning when that happens.
+
+An egress policy is enforced on that gateway, as on `hvi`. A run on
+2026-11-18 on brig-standalone-linux v0.1.0-rc22 (hull `4bf76a6`, urunc
+`5c6bc70`, hvi 0.1.0-rc.3) served `example.com` and `www.example.com` and
+refused `github.com` and `one.one.one.one`, and the gateway logged the
+refused queries. See
+[the measurement](manual-tests/egress-policy-hull-linux.md). A divert,
+`brig.internal` and a published port ride the same gateway, as on `hvi`.
+The same run showed the gateway answering `brig.internal` with its own
+address, diverting its port 443 and `169.254.170.2:80` to their sockets,
+refusing a gateway port with no divert, and installing and withdrawing a
+published port through its API. See
+[the record](manual-tests/hull-linux-gateway-2026-11-18.md).
 
 The guarantee is about reachability, not resources. An isolated sandbox
 costs one more network on the host. `brig rm --all`
@@ -1423,7 +1484,7 @@ network. A sandbox gets `shared` in these cases:
 - A flag, a setting or a profile chooses it.
 - An older sandbox keeps it, if it was recorded or recovered from the
   runtime.
-- `vz`, `qemu` and hull on Linux use it when no posture is named.
+- `vz` and `qemu` use it when no posture is named.
 
 Whether the shared network forwards traffic from one guest to another is the
 runtime's behaviour, not Brig's. The measurements are in
@@ -1434,6 +1495,7 @@ runtime's behaviour, not Brig's. The measurements are in
 | `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. An earlier hull release gave "no" on the shared network. What changed the answer is not known |
 | `vz` on macOS | not measured on a current hull |
 | `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
+| Linux, hull/urunc microVMs | **yes** on `shared`. Measured on 2026-11-16 with hull `28f4238`, urunc `5c6bc70` and the `hvi` of brig-standalone-linux v0.1.0-rc21: one microVM fetched the other's marker over the shared gateway. With each on a gateway of its own, the same request timed out while an outbound connection and the listener's self-check passed. Before Brig moved hull on Linux to the gateway, a sandbox was on hull's CNI bridge, where one sandbox reached another's listener whatever posture either had |
 | Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker. On separate isolated networks, the same request timed out while connection controls passed. The [ARM run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented console and runtime setup workarounds. The [amd64 run](manual-tests/sandbox-reachability.md#2026-10-02-linux-amd64-with-the-stock-runtime) on 2026-10-02 gave the same results with the shipped runtime, unmodified |
 
 So on Linux and on `hvi`, two agents on `shared` that you gave *different*
@@ -1514,6 +1576,14 @@ Read the report before you post it.
 The file is 0600, in `~/.brig/host/reports` unless `-o` names another
 place. No sandbox mounts that directory. `brig report` creates the file new
 each time, so it refuses a file or a link that is already at that name.
+
+### Where a Brigfile sends a secret
+
+Brig does not choose the upstream of a route that a repository wrote, and
+does not check that the upstream is the service the route's name or its
+guest variables suggest. The plan shows the upstream, the secret and the
+variables, and your approval is the control. See
+[Limits of the approval](#limits-of-the-approval).
 
 ### The guest home
 

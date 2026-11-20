@@ -71,6 +71,19 @@ func (n *narration) explain(err error) error {
 	return fmt.Errorf("%w\n%s", err, indent(said))
 }
 
+// warnings is each line the child began with "warning:", as it said them.
+// Only a boot that worked asks: on one that failed, explain quotes them with
+// the rest.
+func (n *narration) warnings() []string {
+	var out []string
+	for _, line := range strings.Split(n.buf.String(), "\n") {
+		if strings.HasPrefix(line, "warning:") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 // lastLines is the final n lines of s, which is where a tool that ran for a
 // while and then died says why. firstLines beside it is for a command that
 // fails immediately and prints one line about it.

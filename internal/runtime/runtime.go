@@ -4,9 +4,10 @@
 // brig is not a container runtime and does not want to be one. It adds
 // workspace-as-home, host-resolved credentials with per-exec forwarding, the
 // billing denylist and the git plumbing, and delegates every mechanical
-// operation -- boot this image, exec in it, stop it -- to hull on macOS and
-// nerdctl on Linux. Both sit behind this one interface, so the logic above it
-// is written once and neither OS gets a forked copy.
+// operation -- boot this image, exec in it, stop it -- to hull on macOS, and on
+// Linux to hull when a hull is on PATH and to nerdctl otherwise. Both sit
+// behind this one interface, so the logic above it is written once and neither
+// OS gets a forked copy.
 package runtime
 
 import (
@@ -232,6 +233,10 @@ type Divert struct {
 	// BrigInternalAddr reports, and to divert that address on
 	// BrigInternalPort to Socket. Every other port of it is refused.
 	BrigInternal bool
+	// Hosts are the names of the host routes, sorted, which the runtime
+	// answers with the same address as brig.internal. Set only with
+	// BrigInternal.
+	Hosts []string
 }
 
 // The name a guest reaches the broker by, and the one port of it that is
@@ -577,19 +582,20 @@ func DetectFor(pref Preference) (Runtime, error) {
 		kind = defaultKind()
 	}
 	bin := os.Getenv("BRIG_RUNTIME_BIN")
+	setting := ""
 	switch {
 	case bin != "":
 		resolved, err := runtimeBinFromEnv(bin)
 		if err != nil {
 			return nil, err
 		}
-		bin = resolved
+		bin, setting = resolved, "BRIG_RUNTIME_BIN"
 	case pref.Bin != "":
 		resolved, err := runtimeBinFromProfile(pref.Bin)
 		if err != nil {
 			return nil, err
 		}
-		bin = resolved
+		bin, setting = resolved, "this profile's runtimeBin"
 	}
 	var rt Runtime
 	var err error
@@ -604,8 +610,69 @@ func DetectFor(pref Preference) (Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	if setting != "" {
+		if other := otherRuntimeBin(kind, rt); other != "" {
+			return nil, fmt.Errorf("%w: brig drives %s here, and %s is %s, which is %s. "+
+				"Point %s at %s, or unset it", ErrBadRuntime, kind, setting, bin, other, setting, kind)
+		}
+	}
 	telemetry.SetRuntime(rt.Kind())
 	return rt, nil
+}
+
+// OnPath reports whether the binary brig looks the runtime of kind up under
+// is on PATH. It is not whether the runtime is installed: BRIG_RUNTIME_BIN and
+// a profile's runtimeBin reach a binary PATH does not hold. brig words a
+// refusal by it and acts on nothing it says. A kind brig does not know reads
+// as on PATH.
+func OnPath(kind string) bool {
+	switch kind {
+	case "hull", "nerdctl", "docker":
+		_, err := exec.LookPath(kind)
+		return err == nil
+	}
+	return true
+}
+
+// otherRuntimeBin names the runtime that a binary named by a setting is,
+// when that is not the runtime brig drives it as, and is "" otherwise.
+//
+// The runtime and its binary are two settings, and nothing tied them: a shell
+// that sourced the bundle's environment for nerdctl and then exported
+// BRIG_RUNTIME=hull drove nerdctl as hull. brig doctor printed nerdctl's
+// version as hull's, and a run failed on nerdctl's answer to a hull command.
+//
+// A binary is known by its name, and a hull of another name by the first
+// word of its --version too: a wrapper of another name is still caught when it
+// runs nerdctl or docker. A binary named hull is taken by its name. Reading
+// its --version is a process that brig on macOS otherwise does not start on a
+// verb such as info or env, and a binary of that name is the build the
+// setting means. A binary that names neither runtime passes, since a build or
+// wrapper may print anything. The nerdctl adapter drives docker as well, so
+// docker is the other runtime only to hull.
+func otherRuntimeBin(kind string, rt Runtime) string {
+	base := filepath.Base(rt.Bin())
+	switch kind {
+	case "hull":
+		if base == "nerdctl" || base == "docker" {
+			return base
+		}
+		h, ok := rt.(*hull)
+		if !ok || base == "hull" {
+			return ""
+		}
+		if f := strings.Fields(h.version()); len(f) > 0 {
+			switch word := strings.ToLower(f[0]); word {
+			case "nerdctl", "docker":
+				return word
+			}
+		}
+	case "nerdctl":
+		if base == "hull" {
+			return "hull"
+		}
+	}
+	return ""
 }
 
 // runtimeBinFromProfile resolves the path a profile named.

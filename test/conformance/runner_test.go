@@ -46,6 +46,14 @@ type fakeBrig struct {
 	restarted      bool
 	// rmFails makes brig rm fail on a sandbox that is there, and leave it.
 	rmFails bool
+	// pinsOut is what brig-ctl version prints, and pinsCode its exit status.
+	pinsOut  string
+	pinsCode int
+	// nerdctlExits makes a failed probe exit 1 with nerdctl's error line,
+	// as brig on nerdctl does (#469).
+	nerdctlExits bool
+	// bootedByTag makes nerdctl name the sandbox's image by its tag.
+	bootedByTag bool
 }
 
 func newFake(t *testing.T) *fakeBrig {
@@ -53,6 +61,7 @@ func newFake(t *testing.T) *fakeBrig {
 }
 
 const (
+	fakeNFT    = "nftables v1.0.9 (Old Doc Yak #3)"
 	fakeHVI    = "hvi 0.1.0 (core 0.1.0)"
 	fakeDigest = "sha256:1e1a12685b539e2b89de428be712254858b8b86ad5a46f377d4c373a7a8dd0c3"
 	fakeAssets = "ghcr.io/nofireai/hull-assets:darwin-arm64"
@@ -64,6 +73,13 @@ func (f *fakeBrig) exec(_ context.Context, env []string, name string, args ...st
 	switch {
 	case filepath.Base(name) == "hvi":
 		return fakeHVI + "\n", "", 0, nil
+	case filepath.Base(name) == "brig-ctl":
+		if f.pinsCode != 0 {
+			return "", "brig-ctl: not found\n", f.pinsCode, nil
+		}
+		return f.pinsOut, "", 0, nil
+	case name == "nft":
+		return fakeNFT + "\n", "", 0, nil
 	case name != "brig":
 		return f.runtimeCall(args)
 	}
@@ -93,11 +109,17 @@ func (f *fakeBrig) exec(_ context.Context, env []string, name string, args ...st
 		}
 		f.running = false
 		return "", "brig: removed egress-conformance\n", 0, nil
-	case "sh":
+	case "sh", "exec":
 		if !f.running {
 			return "", "brig: no such sandbox\n", 3, nil
 		}
 		rest := args[2:]
+		if args[0] == "exec" {
+			if rest[0] != "--" {
+				f.t.Fatalf("exec without -- before the guest command: %q", args)
+			}
+			rest = rest[1:]
+		}
 		var env []string
 		if rest[0] == "env" {
 			rest = rest[1:]
@@ -122,7 +144,12 @@ func (f *fakeBrig) exec(_ context.Context, env []string, name string, args ...st
 					"brig:   ↳ brig restarts it, and any other session using this sandbox will be disconnected\n"
 			}
 		}
-		return fmt.Sprintf("%s %s %s detail\n", o, rest[1], rest[len(rest)-1]), stderr, probeExit[o], nil
+		code := probeExit[o]
+		if f.nerdctlExits && code != 0 {
+			stderr += fmt.Sprintf("time=\"2026-10-23T01:48:44+03:00\" level=fatal msg=\"exec failed with exit code %d\"\n", code)
+			code = 1
+		}
+		return fmt.Sprintf("%s %s %s detail\n", o, rest[1], rest[len(rest)-1]), stderr, code, nil
 	}
 	f.t.Fatalf("unexpected brig call %q", args)
 	return "", "", 1, nil
@@ -134,7 +161,18 @@ func (f *fakeBrig) runtimeCall(args []string) (string, string, int, error) {
 	case "assets":
 		return "directory: /nowhere/assets\nreference: " + fakeAssets + "\nfetched from: " + fakeAssets +
 			"\nsignature: verified against sha256:0e8f69d1ff8a\n", "", 0, nil
+	case "image":
+		return "ghcr.io/brig-sh/claude-code-stock@" + fakeDigest + "\n", "", 0, nil
 	case "inspect":
+		if len(args) == 4 && args[1] == "--format" && args[2] == "{{.Image}}" {
+			if !f.running {
+				return "", "no such container: " + args[3] + "\n", 1, nil
+			}
+			if f.bootedByTag {
+				return defaultImage + "\n", "", 0, nil
+			}
+			return "ghcr.io/brig-sh/claude-code-stock@" + fakeDigest + "\n", "", 0, nil
+		}
 		if !f.running {
 			return "", "instance not found: " + args[1] + "\n", 1, nil
 		}
@@ -632,8 +670,22 @@ func TestRecordPath(t *testing.T) {
 		"hull":                    "",
 		"hull ../../etc/passwd":   "",
 	} {
-		if got := recordPath("hvi", line); got != want {
+		if got := recordPath("hvi", versionOf(line), ""); got != want {
 			t.Errorf("%q: %q, want %q", line, got, want)
+		}
+	}
+	// On Linux the version is the bundle's, read from its pins rather than
+	// picked out of a line, and it goes into the file name all the same.
+	for version, want := range map[string]string{
+		"v0.1.0-rc17":   "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17.md",
+		"":              "",
+		"../../x":       "",
+		"v0.1/../../x":  "",
+		"v0.1.0 rc17":   "",
+		"v0.1.0-rc17\n": "",
+	} {
+		if got := recordPath("nerdctl", version, ""); got != want {
+			t.Errorf("%q: %q, want %q", version, got, want)
 		}
 	}
 }

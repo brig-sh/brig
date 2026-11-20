@@ -395,9 +395,11 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	t.Setenv("BRIG_STATE_DIR", dir)
 
 	index := filepath.Join(dir, "sessions.json")
+	// Recorded on hull, the runtime that lists them. On Linux hull reads an
+	// entry with no runtime as nerdctl's and keeps it.
 	body := `{` +
-		`"claude-code@kept": {"home": "/ws/kept", "sandbox": "brig-claude-code-kept"},` +
-		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone"}}`
+		`"claude-code@kept":{"home": "/ws/kept", "sandbox": "brig-claude-code-kept", "runtime": "hull"},` +
+		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone", "runtime": "hull"}}`
 	if err := os.WriteFile(index, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +407,7 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	// What the runtime lists: the stopped sandbox brig still has, and one
 	// container of somebody else's, which is why the prune is handed the whole
 	// list rather than brig's own share of it.
-	pruneSessionIndex([]runtime.Instance{
+	pruneSessionIndex("hull", []runtime.Instance{
 		{Name: "brig-claude-code-kept", State: "stopped"},
 		{Name: "some-other-container", State: "running"},
 	})
@@ -429,7 +431,7 @@ func TestListingForAReportPrunesNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pruneUnlessKept(nil)
+	pruneUnlessKept(nil, nil)
 	if got := wrap.WorkspaceOfSandbox("brig-claude-code-stuck"); got != "/ws/stuck" {
 		t.Errorf("the listing for a report pruned the stuck session: %q", got)
 	}

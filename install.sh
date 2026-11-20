@@ -9,11 +9,12 @@
 # first `brig run` fails -- and cosign, which is what verifies the kernel,
 # initrd and guest agent every sandbox boots.
 #
-# On Linux the runtime is nerdctl over containerd with the urunc shim, none of
-# which is brig's to build, so this delegates to the bundle that packages it
-# (brig-standalone-linux). brig and brigd still come from the brig release: the
-# bundle's own copies are replaced with them, so the runtime and brig are
-# versioned separately.
+# On Linux the runtime is hull when a hull is on PATH, and nerdctl otherwise.
+# Both run over containerd with the urunc shim, which is not brig's to build,
+# so this delegates to the bundle that packages them (brig-standalone-linux),
+# which carries hull since v0.1.0-rc22. brig and brigd still come from the
+# brig release: the bundle's own copies are replaced with them, so the runtime
+# and brig are versioned separately.
 #
 # Homebrew is still the better path on macOS. It tracks upgrades, and it
 # installs the shell completions this script leaves in the archive for you
@@ -61,9 +62,14 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc21 is the pin. It records the sha256 of its kernel and
-# initrd, and keeps that record with the release's signed checksums.txt where
-# brig checks it before a boot. Its guest kernel is the 6.18 LTS with Landlock,
+# asset it wanted. rc22 is the pin. It carries hull, built from a pinned
+# commit, and the urunc that reads hull's gateway annotations, so a sandbox on
+# hull on Linux joins a network gateway; its kernel and initrd are the
+# hull-assets release signed for that urunc, and its hvi fails the boot when it
+# cannot use the gateway socket, where the one before booted the guest with no
+# network. It records the sha256 of its kernel and initrd, and keeps that
+# record with the release's signed checksums.txt where brig checks it before a
+# boot. Its guest kernel is the 6.18 LTS with Landlock,
 # its amd64 kernel brings up every vCPU --cpus asks for, and its urunc boots
 # arm64 guests under cloud-hypervisor. Its cloud-hypervisor is v54.0, which
 # keeps the virtio-net offloads off by default. It ships hvi, the monitor brig
@@ -74,7 +80,7 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 # model is. A user install makes the host packages and the subuid range itself
 # when the user has sudo.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc21
+RUNTIME_VERSION=v0.1.0-rc22
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 

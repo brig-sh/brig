@@ -69,9 +69,10 @@ func ParseNetworkStrict(s, source string) (Network, error) {
 // follows DetectFor; a Linux run must never inherit the macOS fallback just
 // because its portable profile has no hypervisor field.
 //
-// hull on Linux shares one network whatever the hypervisor, and is named
-// linuxHullBackend rather than vz: told vz, a Linux host was sent to hvi,
-// which it cannot run isolated either.
+// hull on Linux needs none. It gives a networked sandbox a hull network
+// gateway on hvi, one of its own when it is isolated, as hvi does on macOS,
+// whatever BRIG_HYPERVISOR says: vz is a macOS backend, and a Linux host
+// boots it on hvi. Its unset posture is isolated, as on hvi and nerdctl.
 func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 	kind := os.Getenv("BRIG_RUNTIME")
 	if rt != nil {
@@ -80,7 +81,7 @@ func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 		kind = "hull"
 	}
 	if runtime.IsLinuxHull(rt) || (rt == nil && kind == "hull" && goruntime.GOOS == "linux") {
-		return linuxHullBackend
+		return ""
 	}
 	if kind == "hull" {
 		switch hypervisor {
@@ -92,9 +93,6 @@ func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 	}
 	return ""
 }
-
-// linuxHullBackend is what sharedNetworkBackend calls hull on Linux.
-const linuxHullBackend = "hull on Linux"
 
 func networkFromRuntime(word string) (Network, error) {
 	for _, n := range AllNetworks() {
@@ -176,6 +174,70 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 	}
 }
 
+// requireMicroVM is the refusal for a run that required a microVM and would not
+// get one the ISOLATION row can establish, or nil when nothing was required.
+//
+// It reads what the row reads, so the row and the refusal cannot disagree. A
+// run with no runtime in hand establishes nothing, and is refused too: this
+// check is the one that must not be waved through on a missing answer.
+func (c *Config) requireMicroVM(hypervisor string) error {
+	if !c.needMicroVM {
+		return nil
+	}
+	got := runtime.Isolation{Boundary: runtime.BoundaryUnknown,
+		Detail: "no runtime, so brig cannot tell what a sandbox here would stand on"}
+	if c.Runtime != nil {
+		got = c.Runtime.Isolation(c.backendSpec(hypervisor))
+	}
+	if err := runtime.RequireMicroVM(got); err != nil {
+		return err
+	}
+	return c.requireJoinedMicroVM()
+}
+
+// requireJoinedMicroVM is the second half of the requirement, for a run that
+// finds its sandbox already up. Such a run boots nothing, so what a boot would
+// get says nothing about the guest it uses: that guest stands on the shim it was
+// created with, which the environment may no longer name, and joining it with
+// the variable unset used to pass (#30). It is read off the runtime.
+//
+// Both answers must be a microVM, not either. The sandbox can be recreated, and
+// then the environment as it is now is what boots, so a shim brig cannot place
+// refuses the run even over a microVM that is up.
+//
+// A sandbox that is not up is booted fresh, and the answer for a boot has
+// already decided. A runtime that cannot be asked whether it is up is left to
+// EnsureRunning, which refuses to boot over a sandbox it cannot see. A runtime
+// that cannot say what a sandbox stands on is not a guess here: hull has no
+// shim, so what it would boot is what is running, and any other that fails to
+// read it is refused as a boundary brig cannot establish.
+func (c *Config) requireJoinedMicroVM() error {
+	reader, ok := c.Runtime.(runtime.SandboxIsolator)
+	if !ok {
+		return nil
+	}
+	if up, err := c.Runtime.Running(c.VMName); err != nil || !up {
+		return nil
+	}
+	got, err := reader.SandboxIsolation(c.VMName)
+	if err != nil {
+		return runtime.RequireMicroVM(runtime.Isolation{
+			Boundary: runtime.BoundaryUnknown,
+			Detail:   fmt.Sprintf("the sandbox %s is already up and brig could not read what it stands on: %v", c.VMName, err),
+			Setting: fmt.Sprintf("the running sandbox %s (brig rm removes it, and the next run boots a new one)",
+				c.VMName),
+		})
+	}
+	return runtime.RequireMicroVM(got)
+}
+
+// IsolationRefusal is what this line's requirement for a microVM refuses, or nil
+// when it required none. It is the check a run makes first, asked of a verb that
+// boots nothing, so `brig info` can answer the question a script puts to it.
+func (c *Config) IsolationRefusal() error {
+	return c.requireMicroVM(c.hypervisor())
+}
+
 // checkBackend refuses a run this backend cannot honour, before anything is
 // started -- and, unlike the check inside Run, on the path that finds the
 // sandbox already up and boots nothing.
@@ -185,6 +247,13 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 // run and waved through on every one after, printing a POLICY row over a
 // sandbox filtering nothing. A runtime with no opinion is not asked.
 func (c *Config) checkBackend(hypervisor string) error {
+	// First, so a run that required a microVM gets this refusal and its code
+	// for everything short of one. CanRun refuses a shim brig knows shares the
+	// host kernel on its own, as exit 1, and a script that asked for a microVM
+	// reads 7 for every way of not getting one.
+	if err := c.requireMicroVM(hypervisor); err != nil {
+		return err
+	}
 	var err error
 	if checker, ok := c.Runtime.(runtime.RunChecker); ok {
 		err = checker.CanRun(c.backendSpec(hypervisor))
@@ -224,11 +293,6 @@ func (c *Config) profileIsolationOnFallback(hypervisor string) string {
 	backend := sharedNetworkBackend(c.Runtime, hypervisor)
 	if backend == "" {
 		return ""
-	}
-	if backend == linuxHullBackend {
-		return fmt.Sprintf("%s sets network: isolated, and hull on Linux cannot give a "+
-			"sandbox its own network yet. Pass --network shared or set BRIG_NETWORK=shared to run it "+
-			"on the shared network, or use nerdctl (BRIG_RUNTIME=nerdctl)", c.profileNoun())
 	}
 	// An unset hypervisor on hull is that same fallback. Quoting the empty
 	// string would blame a variable the user did not set.

@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -49,6 +50,7 @@ func (c *Config) Status(set creds.Set) {
 	}
 	c.reportDeny(set)
 	c.reportOverride()
+	c.reportGitHubToken(set)
 
 	if c.GitConfig {
 		c.sayf("guest git over HTTPS: on, user %q (hosts: %s)", c.GitUser,
@@ -170,8 +172,11 @@ func (c *Config) reportDeny(set creds.Set) {
 	// never set sends them looking for a variable that is not there.
 	override := c.env.setting("ALLOW_DENIED")
 	if len(forwarded) > 0 {
-		c.sayf("DENYLIST OVERRIDDEN by %s, forwarding: %s "+
-			"(this moves the sandbox onto metered billing)", override, strings.Join(forwarded, " "))
+		why := ""
+		if slices.ContainsFunc(forwarded, profile.Billing) {
+			why = " (this moves the sandbox onto metered billing)"
+		}
+		c.sayf("DENYLIST OVERRIDDEN by %s, forwarding: %s%s", override, strings.Join(forwarded, " "), why)
 	}
 	if len(withheld) == 0 {
 		return
@@ -181,8 +186,23 @@ func (c *Config) reportDeny(set creds.Set) {
 			"if set: %s", c.Profile.Name, override, strings.Join(withheld, " "))
 		return
 	}
-	c.sayf("never forwarded for %s: %s (they would move this sandbox onto metered billing)",
-		c.Profile.Name, strings.Join(withheld, " "))
+	// A profile file may deny a variable for a reason other than billing,
+	// such as GH_TOKEN when gh goes through a route.
+	var billing, other []string
+	for _, name := range withheld {
+		if profile.Billing(name) {
+			billing = append(billing, name)
+		} else {
+			other = append(other, name)
+		}
+	}
+	if len(billing) > 0 {
+		c.sayf("never forwarded for %s: %s (they would move this sandbox onto metered billing)",
+			c.Profile.Name, strings.Join(billing, " "))
+	}
+	if len(other) > 0 {
+		c.sayf("never forwarded for %s: %s (on its deny list)", c.Profile.Name, strings.Join(other, " "))
+	}
 }
 
 // reportOverride says when the profile being run came out of a file rather
@@ -260,4 +280,18 @@ var nowMilli = defaultNowMilli
 // wrong, because nothing fails to make it visible.
 func (c *Config) reportVerify() {
 	c.sayf("image verification: %s", c.verifyLine())
+}
+
+// reportGitHubToken says when a GitHub token is in the guest and no route
+// reaches GitHub, because a route would keep it on the host. With a route,
+// Load already withheld the token or warned that it did not.
+func (c *Config) reportGitHubToken(set creds.Set) {
+	if api, git := githubRoutes(c.routes); api != "" || git != "" {
+		return
+	}
+	for _, name := range githubTokenVars {
+		if set.Has(name) {
+			c.sayf("%s is in the guest; a github-api or github-token route keeps it on the host, see https://www.brig.sh/docs/broker/#the-github-api-preset", name)
+		}
+	}
 }

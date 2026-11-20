@@ -45,6 +45,8 @@ flags:
       --skills        copy your ~/.claude skills and plugins into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
       --publish PORT  open a guest port on the host; repeatable
       --json          run the agent as a child and print one JSON line after it
 
@@ -83,6 +85,8 @@ flags:
       --skills        copy your ~/.claude skills and plugins into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
       --publish PORT  open a guest port on the host; repeatable
       --json          run the command as a child and print one JSON line after it
 
@@ -171,6 +175,8 @@ flags:
       --home PATH     host directory to mount as the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
       --publish PORT  open a guest port on the host; repeatable
       --json          print the envelope as JSON
 
@@ -208,6 +214,8 @@ flags:
       --skills        copy your ~/.claude skills and plugins into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
       --publish PORT  open a guest port on the host; repeatable
       --json          print the plan as JSON
 

@@ -253,6 +253,11 @@ onto metered API billing without a notice.
 
 `BRIG_ALLOW_DENIED=1` is the override for a user who wants metered billing.
 
+A profile can also deny a variable for another reason, such as `GH_TOKEN`
+when `gh` reaches GitHub through a route. Brig gives the billing reason only
+for a variable that a profile it ships denies. For any other, `brig info`
+says `on its deny list`, and the refusal names the deny list alone.
+
 Limits:
 
 - `deny` guards only the environment. Brig does not check a `files:` binding
@@ -376,7 +381,7 @@ where `brig secret import` finds it:
 secrets:
   - name: claude-credentials
     required: false                     # warn and boot, instead of refusing
-    expiryField: expiresAt              # found at any depth; drives the stale warning
+    expiryField: claudeAiOauth.expiresAt  # the login, not an MCP entry; drives the stale warning
     sources:                            # where `brig secret import` looks
       - from: keychain
         service: Claude Code-credentials
@@ -426,6 +431,13 @@ Limits of `field:` and `expiryField:`:
   must yield the same document shape.
 - An absent `field:` stores the value verbatim, which suits a file-shaped
   secret.
+- A dotted name, such as `claudeAiOauth.expiresAt`, is first a path from the
+  top of the document. Brig then tries a top-level key that holds the whole
+  name, and only then searches at any depth. A search at depth that finds
+  two different values finds nothing. So `field:` refuses the import, and
+  `expiryField:` records no expiry. Claude's document holds `expiresAt` for
+  the login and again for each MCP server that signed in with OAuth, which
+  is why the shipped profiles name the path.
 - A credential whose two host locations differ in shape needs two secrets.
   A `files:` binding names one secret, and Brig refuses two bindings on one
   `path:`. So one portable profile cannot yet serve an agent whose
@@ -500,6 +512,10 @@ env:
 | --- | --- |
 | `ref: secrets.<name>` | The named secret, out of Brig's own store |
 | `ref: env.<name>` | The named variable, out of Brig's own environment |
+
+A run whose policy has a `github-token` or `github-api` route to GitHub
+does not forward `GH_TOKEN` or `GITHUB_TOKEN`, from any `ref`. See
+[What the guest gets](broker.md#what-the-guest-gets).
 
 Limits:
 
@@ -757,7 +773,8 @@ cpus: 2
 Brig never modifies the image, and it runs as it does anywhere else. The
 profile is the same on macOS and Linux.
 
-On Linux it needs `nerdctl` and the urunc that the runtime bundle builds.
+On Linux it needs `hull` or `nerdctl`, and the urunc that the runtime bundle
+builds.
 Brig refuses docker up front. See
 [runtimes.md](runtimes.md#what-brig-requires-of-each).
 

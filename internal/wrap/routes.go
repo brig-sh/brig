@@ -125,7 +125,7 @@ func (c *Config) routeRefusal() error {
 	}
 	if c.brigInternal() {
 		if err := c.endpointCheck(); err != nil {
-			return fmt.Errorf("policy %s declares a route in mode endpoint, which the guest reaches at %s: %w",
+			return fmt.Errorf("policy %s declares a route in mode endpoint or host, which the guest reaches at %s: %w",
 				c.endpointList(), injector.BrigInternal, err)
 		}
 	}
@@ -212,11 +212,11 @@ func (c *Config) vendList() string {
 	return strings.Join(names, ", ")
 }
 
-// endpointRoutes are this run's routes in mode endpoint.
+// endpointRoutes are this run's routes in mode endpoint or host.
 func (c *Config) endpointRoutes() []v1alpha1.Route {
 	var out []v1alpha1.Route
 	for _, r := range c.routes {
-		if r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint {
+		if r.Mode.AtBrigInternal() {
 			out = append(out, r)
 		}
 	}
@@ -503,4 +503,66 @@ func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alp
 	t.Env = keepBinding(t.Env)
 	bindings = keepBinding(bindings)
 	return t, bindings, slices.Sorted(maps.Keys(brokered))
+}
+
+// githubTokenVars are the variables gh and git read a GitHub token from.
+var githubTokenVars = []string{"GH_TOKEN", "GITHUB_TOKEN"}
+
+// githubRoutes returns the names of the first github-api and github-token
+// routes whose upstream is the preset's own, or "". A preset route moved to
+// another host does not reach github.com, so it does not count.
+func githubRoutes(routes []v1alpha1.Route) (api, git string) {
+	for _, r := range routes {
+		switch {
+		case api == "" && r.Preset == v1alpha1.PresetGitHubAPI && r.Upstream == "https://api.github.com":
+			api = r.Name
+		case git == "" && r.Preset == v1alpha1.PresetGitHubToken && r.Upstream == "https://github.com":
+			git = r.Name
+		}
+	}
+	return api, git
+}
+
+// withoutGitHubToken drops GH_TOKEN and GITHUB_TOKEN when a route reaches
+// GitHub. The route keeps the token on the host, and forwarding it as well
+// would put the real token in the guest beside the route's session token.
+// withRoutes drops them only when the route brokers the same secret. With
+// forward set, both stay, and the warning says where the token is. forward
+// is its own setting, not BRIG_ALLOW_DENIED: the billing denylist is a
+// separate decision. override is the setting to quote, such as
+// BRIG_FORWARD_GITHUB_TOKEN=1. Without a
+// github-token route, the notice says that git has no token: the guest's git
+// credential helper reads GH_TOKEN.
+func withoutGitHubToken(t profile.Profile, bindings []profile.EnvBinding, routes []v1alpha1.Route,
+	forward bool, override string) (profile.Profile, []profile.EnvBinding, []string) {
+	api, git := githubRoutes(routes)
+	route := firstNonEmpty(git, api)
+	if route == "" {
+		return t, bindings, nil
+	}
+	gitNote := ""
+	if git == "" {
+		gitNote = "; git over HTTPS to github.com needs a github-token route"
+	}
+	var warnings []string
+	for _, b := range bindings {
+		if !slices.Contains(githubTokenVars, b.Name) {
+			continue
+		}
+		if forward {
+			warnings = append(warnings, fmt.Sprintf("forwarding %s because %s is set: the real token is in the guest beside route %s", b.Name, override, route))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("not forwarding %s: this sandbox reaches GitHub through route %s, which keeps the token on the host%s", b.Name, route, gitNote))
+		}
+	}
+	if forward {
+		return t, bindings, warnings
+	}
+	drop := func(in []profile.EnvBinding) []profile.EnvBinding {
+		return slices.DeleteFunc(slices.Clone(in), func(b profile.EnvBinding) bool {
+			return slices.Contains(githubTokenVars, b.Name)
+		})
+	}
+	t.Env = drop(t.Env)
+	return t, drop(bindings), warnings
 }

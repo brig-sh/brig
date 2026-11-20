@@ -66,6 +66,16 @@ case "$verb" in
     case "$v" in *'('*) ;; *) v="$v (go1.26.8, darwin/arm64)" ;; esac
     printf 'hull version %s\n' "$v"
     ;;
+  version)
+    # `version --json`. A hull new enough says what its gateway can do, and
+    # brig then starts no probe. Off by default, so every other case drives
+    # brig the way an older hull does: by the probes below.
+    if [ -n "${STUB_HULL_REPORT:-}" ]; then
+      printf '{"version": "v0.2.0", "capabilities": {"gateway": {"api": true, "egressDefault": true, "divert": true, "divertLinkLocal": true}}}\n'
+    else
+      printf '{"version": "v0.1.0"}\n'
+    fi
+    ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
     [ -f "$STUB_STATE" ] && printf '%s running\n' "$(cat "$STUB_STATE")"
@@ -823,7 +833,7 @@ rc=$?
 if [ "$rc" = 0 ]; then
   bad "a run bound to a route was booted on vz, which has no gateway to answer brig.internal"
 else
-  [ "$rc" = 7 ] && grep -q 'declares a route in mode endpoint, which the guest reaches at brig.internal: .*vz takes its network from vmnet' "$WORK/routes-run.out" \
+  [ "$rc" = 7 ] && grep -q 'declares a route in mode endpoint or host, which the guest reaches at brig.internal: .*vz takes its network from vmnet' "$WORK/routes-run.out" \
     && ok "a run bound to a route on vz is refused with exit 7, naming why" \
     || bad "the route refusal on vz does not say why -- got $rc: $(cat "$WORK/routes-run.out")"
 fi
@@ -977,6 +987,29 @@ else
     && ok "every rule of an attached policy reaches the gateway" \
     || bad "rules missing from the gateway command line:$missing -- got: $(cat "$WORK/gw-on.argv")"
 fi
+
+# That run met a hull with no capability report, so it asked the gateway's
+# help. A hull that has the report is asked that, and a run of the same
+# policy starts no probe: the only gateway in the log is the sandbox's.
+grep -q '^argv: network-gateway --help' "$STUB_LOG" \
+  && ok "a hull with no capability report is asked through its gateway's help" \
+  || bad "a hull with no capability report was not probed: $(grep '^argv: network-gateway\|^argv: version' "$STUB_LOG")"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi STUB_HULL_REPORT=1 "$WORK/brig" run claude -d > "$WORK/pol-report.out" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+  bad "the run carrying a policy on a hull with a capability report failed: $(cat "$WORK/pol-report.out")"
+elif grep -q '^argv: network-gateway --help' "$STUB_LOG" || [ "$(grep -c '^argv: network-gateway' "$STUB_LOG")" != 1 ]; then
+  bad "a run on a hull with a capability report probed the gateway: $(grep '^argv: network-gateway' "$STUB_LOG")"
+elif ! grep -q '^argv: version --json' "$STUB_LOG"; then
+  bad "a run on a hull with a capability report never asked for the report: $(cat "$STUB_LOG")"
+elif ! grep -q '^argv: network-gateway --socket.*--egress-default deny' "$STUB_LOG"; then
+  bad "the rules did not reach the gateway on a hull with a capability report: $(grep '^argv: network-gateway' "$STUB_LOG")"
+else
+  ok "a run on a hull with a capability report starts the sandbox's gateway and no probe"
+fi
+grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-on.argv"
 
 # A rule set is only enforceable if the guest is behind the gateway carrying
 # it, so the boot has to name that gateway -- this exact socket, not merely
@@ -1143,10 +1176,29 @@ for missing in absent nostore; do
     || bad "brig plan refuses the run whose secret store answers $missing, and its BROKER row says why -- got: $out"
 done
 out="$(env "${ep_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
-printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint$' \
+printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint, host$' \
   && ! printf '%s\n' "$out" | grep -q '^REFUSED' \
   && ok "brig plan has a BROKER row for a run with a route" \
   || bad "brig plan has a BROKER row for a run with a route -- got: $out"
+# A plan of a route asks whether the gateway can divert, before anything is
+# approved or booted. A hull with a capability report is asked for the report
+# and the gateway is not started; one without is asked through its help.
+: > "$STUB_LOG"
+out="$(env "${ep_env[@]}" STUB_HULL_REPORT=1 "$WORK/brig-stored" plan claude 2>&1)"; rc=$?
+if [ "$rc" != 0 ] || printf '%s\n' "$out" | grep -q '^REFUSED'; then
+  bad "plan of a route on a hull with a capability report -- got $rc: $out"
+elif grep -q '^argv: network-gateway' "$STUB_LOG"; then
+  bad "a plan on a hull with a capability report started the gateway: $(grep '^argv: network-gateway' "$STUB_LOG")"
+elif ! grep -q '^argv: version --json' "$STUB_LOG"; then
+  bad "a plan on a hull with a capability report never asked for the report: $(cat "$STUB_LOG")"
+else
+  ok "a plan on a hull with a capability report asks for the report and starts no gateway"
+fi
+: > "$STUB_LOG"
+env "${ep_env[@]}" "$WORK/brig-stored" plan claude > /dev/null 2>&1
+grep -q '^argv: network-gateway --help' "$STUB_LOG" \
+  && ok "a plan on a hull with no capability report asks the gateway's help" \
+  || bad "a plan on a hull with no capability report did not probe: $(cat "$STUB_LOG")"
 : > "$STUB_LOG"
 rm -f "$STUB_STATE".fed.*
 env "${ep_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/ep-on.out" 2>&1
@@ -2359,20 +2411,162 @@ STUB
   grep -q '^argv: run ' "$nrc/argv.log" \
     && ok "the urunc shim does reach run, so the log can show one" \
     || bad "the urunc shim reaches run -- got: $(cat "$nrc/argv.log")"
+
+  # --isolation microvm (#30) refuses every way of not getting a microVM, with
+  # exit 7, and a shim brig cannot place is one of them: without the flag it
+  # boots, which the control below shows, so the refusal is the flag's.
+  nrc_iso() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME="$1" "$WORK/brig" run --isolation microvm claude -p hi
+  }
+  for shim in io.containerd.kata.v2 runc containerd-shim-runc-v2; do
+    : > "$nrc/argv.log"
+    nrc_iso "$shim" > /dev/null 2> "$nrc/iso.err"; rc=$?
+    [ "$rc" = 7 ] && ok "--isolation microvm on $shim exits 7" \
+      || bad "--isolation microvm on $shim exits 7 -- got $rc: $(cat "$nrc/iso.err")"
+    grep -q 'BRIG_CONTAINERD_RUNTIME' "$nrc/iso.err" \
+      && ok "the refusal for $shim names the setting" \
+      || bad "the refusal for $shim names the setting -- got: $(cat "$nrc/iso.err")"
+    if grep -E '^argv: (run|create|start|pull|exec|load|build|network create) ' "$nrc/argv.log" > "$nrc/started.log"; then
+      bad "--isolation microvm on $shim reached the runtime -- got: $(cat "$nrc/started.log")"
+    else
+      ok "--isolation microvm on $shim reaches no run, create or pull"
+    fi
+  done
+  : > "$nrc/argv.log"
+  nrc_brig io.containerd.kata.v2 > /dev/null 2>&1
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "a shim brig cannot place boots without the flag" \
+    || bad "a shim brig cannot place boots without the flag -- got: $(cat "$nrc/argv.log")"
+  : > "$nrc/argv.log"
+  nrc_iso io.containerd.urunc.v2 > /dev/null 2>&1; rc=$?
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "--isolation microvm on the urunc shim reaches run" \
+    || bad "--isolation microvm on the urunc shim reaches run -- got $rc: $(cat "$nrc/argv.log")"
+
+  # The flag is refused where it would be handed to the agent, and the run boot
+  # without the requirement, and only there. After -- it is the agent's, and in
+  # the command of exec it is the guest's: both went through before the flag
+  # existed, and the advice to put it before the profile is wrong for them.
+  nrc_tail() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME=io.containerd.urunc.v2 "$WORK/brig" "$@"
+  }
+  : > "$nrc/argv.log"
+  nrc_tail run claude -p hi --isolation microvm > /dev/null 2> "$nrc/tail.err"; rc=$?
+  { [ "$rc" = 2 ] && grep -q 'before the profile' "$nrc/tail.err"; } \
+    && ok "--isolation in the agent's arguments exits 2 and says where it goes" \
+    || bad "--isolation in the agent's arguments exits 2 -- got $rc: $(cat "$nrc/tail.err")"
+  if grep -E '^argv: (run|create|start|pull) ' "$nrc/argv.log" > /dev/null; then
+    bad "--isolation in the agent's arguments reached the runtime"
+  else
+    ok "--isolation in the agent's arguments boots nothing"
+  fi
+  : > "$nrc/argv.log"
+  nrc_tail run claude --resume -- --isolation x > /dev/null 2> "$nrc/tail.err"
+  grep -q "stands here in the agent's arguments" "$nrc/tail.err" \
+    && bad "--isolation after -- was refused: $(cat "$nrc/tail.err")" \
+    || ok "--isolation after -- is the agent's and is not refused"
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "the line with --isolation after -- boots" \
+    || bad "the line with --isolation after -- boots -- got: $(cat "$nrc/argv.log")"
+  nrc_tail exec claude mytool --isolation strict > /dev/null 2> "$nrc/tail.err"
+  grep -q "stands here in the agent's arguments" "$nrc/tail.err" \
+    && bad "--isolation in an exec command was refused: $(cat "$nrc/tail.err")" \
+    || ok "--isolation in an exec command is the guest's and is not refused"
+
+  # brig info boots nothing, and a script uses it as the check before a run, so
+  # with the requirement it refuses on the ground run does: the same exit 7, and
+  # no report printed. Without the flag it reports as before.
+  nrc_info() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME="$1" "$WORK/brig" info "${@:2}"
+  }
+  for shim in io.containerd.kata.v2 runc; do
+    out="$(nrc_info "$shim" --isolation microvm claude 2> "$nrc/info.err")"; rc=$?
+    { [ "$rc" = 7 ] && [ -z "$out" ] && grep -q 'BRIG_CONTAINERD_RUNTIME' "$nrc/info.err"; } \
+      && ok "info --isolation microvm on $shim exits 7, names the setting and prints no report" \
+      || bad "info --isolation microvm on $shim -- got $rc: $out $(cat "$nrc/info.err")"
+  done
+  out="$(nrc_info io.containerd.urunc.v2 --isolation microvm claude 2> /dev/null)"; rc=$?
+  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ISOLATION'; } \
+    && ok "info --isolation microvm on the urunc shim reports" \
+    || bad "info --isolation microvm on the urunc shim -- got $rc: $out"
+  out="$(nrc_info io.containerd.kata.v2 claude 2> /dev/null)"; rc=$?
+  { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ISOLATION'; } \
+    && ok "info without the flag still reports on a shim brig cannot place" \
+    || bad "info without the flag on a shim brig cannot place -- got $rc: $out"
+
+  # A run that finds its sandbox already up boots nothing, so what a boot would
+  # get says nothing about the guest it uses: that guest stands on the shim it
+  # was created with, which the environment may no longer name. The stub below is
+  # a nerdctl whose sandbox is up, and inspect says which shim it was created
+  # with. The variable that chose a shim brig cannot place is unset, so only the
+  # sandbox itself can show the problem.
+  nrj="$WORK/nrj"
+  mkdir -p "$nrj/ws" "$nrj/state" "$nrj/gw"
+  cat > "$nrj/nerdctl" <<'STUB'
+#!/bin/sh
+{ printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$NRJ_LOG"
+case "$1" in
+ps)
+  case "$*" in
+  *" -a "*) printf 'brig-claude-code\tUp 5 minutes\n' ;;
+  *) echo brig-claude-code ;;
+  esac ;;
+inspect) case "$*" in *HostConfig.Runtime*) echo "$NRJ_SHIM" ;; esac ;;
+esac
+exit 0
+STUB
+  chmod +x "$nrj/nerdctl"
+  nrj_brig() {
+    NRJ_LOG="$nrj/argv.log" NRJ_SHIM="$1" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrj/nerdctl" \
+      BRIG_WORKSPACE="$nrj/ws" BRIG_STATE_DIR="$nrj/state" BRIG_GATEWAY_DIR="$nrj/gw" \
+      BRIG_CONTAINERD_RUNTIME="" "$WORK/brig" run --isolation microvm claude -p hi
+  }
+  for shim in io.containerd.kata.v2 io.containerd.runc.v2; do
+    : > "$nrj/argv.log"
+    nrj_brig "$shim" > /dev/null 2> "$nrj/join.err"; rc=$?
+    { [ "$rc" = 7 ] && grep -q 'already up' "$nrj/join.err" && grep -q 'brig rm' "$nrj/join.err"; } \
+      && ok "--isolation microvm over a running sandbox on $shim exits 7 and says to remove it" \
+      || bad "--isolation microvm over a running sandbox on $shim -- got $rc: $(cat "$nrj/join.err")"
+    if grep -E '^argv: (run|create|start|exec) ' "$nrj/argv.log" > "$nrj/started.log"; then
+      bad "--isolation microvm over a running sandbox on $shim reached the runtime -- got: $(cat "$nrj/started.log")"
+    else
+      ok "--isolation microvm over a running sandbox on $shim joins nothing"
+    fi
+  done
+  # Over a microVM the run is not refused for its isolation, and the runtime was
+  # asked what the sandbox stands on. The stub answers nothing a joined run asks
+  # about its network, so what happens after that is not this test's business.
+  : > "$nrj/argv.log"
+  nrj_brig io.containerd.urunc.v2 > /dev/null 2> "$nrj/join.err"
+  grep -q 'this run would stand on' "$nrj/join.err" \
+    && bad "--isolation microvm over a running microVM was refused for its isolation: $(cat "$nrj/join.err")" \
+    || ok "--isolation microvm over a running microVM is not refused for its isolation"
+  grep -q '^argv: inspect --format {{.HostConfig.Runtime}} brig-claude-code' "$nrj/argv.log" \
+    && ok "the runtime was asked what the running sandbox stands on" \
+    || bad "the runtime was asked what the running sandbox stands on -- got: $(cat "$nrj/argv.log")"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
 
 echo "== hull on Linux: refusals and run line =="
 # A hull built for Linux ends its --version with linux/<arch>, and brig drives
-# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. That
-# hull has no network gateway yet, so a policy and --network isolated are
-# refused before the runtime is asked to boot. So is a policy with
-# BRIG_HYPERVISOR=hvi: the hvi row is the macOS gateway's, and reading it here
-# called the policy enforced. The unit tests hold each refusal; this holds that
-# the binary reaches them from the version string alone, and a control run
-# shows the log would show a boot if brig made one. brig asks the binary only
-# on Linux, so on a Mac the stub is the macOS hull and the section is skipped.
+# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. A
+# networked sandbox there joins a hull network gateway, its own when it is
+# isolated, and never hull's CNI bridge, which every sandbox shares. A policy
+# boots on that gateway with its rules, once the gateway has been probed for
+# them, whatever BRIG_HYPERVISOR says. A routed policy (brig.internal) boots
+# on that gateway too, and a published port is installed on it before the
+# boot.
+# The unit tests hold each case; this holds that the binary reaches them from
+# the version string alone, and a control run shows the log would show a boot
+# if brig made one. brig asks the binary only on Linux, so on a Mac the stub is
+# the macOS hull and the section is skipped.
 if [ "$(uname -s)" = Linux ]; then
   lh="$WORK/lh"
   mkdir -p "$lh/ws" "$lh/state" "$lh/gw" "$lh/policies"
@@ -2382,14 +2576,26 @@ if [ "$(uname -s)" = Linux ]; then
       BRIG_POLICY_DIR="$lh/policies" "$WORK/brig" "$@"
   }
 
+  # lh_gateway prints the gateway socket the last `hull run` named.
+  lh_gateway() {
+    grep '^words:\[run\]' "$lh/argv.log" | tail -1 | grep -o '\[--gateway-sock\]\[[^]]*\]' |
+      sed 's/^\[--gateway-sock\]\[//; s/\]$//'
+  }
+  lh_shared="$lh/gw/gateway-"
+
+  # --network isolated boots on a gateway of the sandbox's own, which is
+  # never the shared one. On hull's CNI bridge, which every sandbox shares,
+  # one sandbox reached another's listener.
   : > "$lh/argv.log"
   lh_brig run claude --network isolated -d > "$lh/iso.out" 2>&1; rc=$?
-  [ "$rc" != 0 ] && grep -q 'hull on Linux cannot do yet' "$lh/iso.out" \
-    && ok "hull on Linux refuses --network isolated" \
-    || bad "hull on Linux refuses --network isolated -- got $rc: $(cat "$lh/iso.out")"
-  grep -q '^argv: run ' "$lh/argv.log" \
-    && bad "hull on Linux was asked to boot --network isolated" \
-    || ok "nothing reached hull on Linux for --network isolated"
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots --network isolated" \
+    || bad "hull on Linux boots --network isolated -- got $rc: $(cat "$lh/iso.out")"
+  case "$(lh_gateway)" in
+    "$lh/gw/sandbox-"*.sock) ok "an isolated sandbox on hull on Linux joins a gateway of its own" ;;
+    *) bad "an isolated sandbox on hull on Linux joins a gateway of its own -- got: $(lh_gateway)" ;;
+  esac
+  lh_brig rm --all -y > /dev/null 2>&1
 
   cat > "$lh/policies/lh-deny.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
@@ -2403,29 +2609,100 @@ YAML
   for hv in hvi vz; do
     : > "$lh/argv.log"
     BRIG_HYPERVISOR=$hv lh_brig run claude -d > "$lh/pol.out" 2>&1; rc=$?
-    [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/pol.out" \
-      && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/pol.out" \
-      && ok "hull on Linux refuses a policy on $hv with exit 7, naming its path and nerdctl" \
-      || bad "hull on Linux refuses a policy on $hv with exit 7 -- got $rc: $(cat "$lh/pol.out")"
-    grep -q '^argv: run ' "$lh/argv.log" \
-      && bad "hull on Linux was asked to boot a policy on $hv it cannot enforce" \
-      || ok "nothing reached hull on Linux for a policy on $hv"
+    [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+      && ok "hull on Linux boots a policy on $hv" \
+      || bad "hull on Linux boots a policy on $hv -- got $rc: $(cat "$lh/pol.out")"
+    grep -q '^argv: network-gateway --help' "$lh/argv.log" \
+      && ok "the gateway was probed for the rules on $hv before the boot" \
+      || bad "the gateway was not probed on $hv: $(grep '^argv: network-gateway' "$lh/argv.log")"
+    grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--egress-default deny.*api.anthropic.com' \
+      && ok "the rules are on the gateway line on $hv" \
+      || bad "the rules are not on the gateway line on $hv: $(grep '^argv: network-gateway' "$lh/argv.log")"
+    case "$(lh_gateway)" in
+      "$lh/gw/sandbox-"*.sock) ok "the policy's sandbox on $hv joins a gateway of its own" ;;
+      *) bad "the policy's sandbox on $hv joins a gateway of its own -- got: $(lh_gateway)" ;;
+    esac
+    lh_brig rm --all -y > /dev/null 2>&1
   done
   lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
 
+  # A routed policy boots: the gateway answers brig.internal with its own
+  # address and diverts port 443 of it to the broker, as on hvi. The run goes
+  # through brig-stored, whose store holds the route's secret, and the broker
+  # helper. Offline there is no gateway to route through, so the same policy
+  # is refused with exit 7, naming the path, and nothing reaches hull.
+  cat > "$lh/policies/lh-route.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: lh-route
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+  lh_brig policy attach lh-route claude-code > /dev/null 2>&1
+  lh_stored() {
+    STUB_HULL_VERSION='dev (go1.26.8, linux/amd64)' STUB_LOG="$lh/argv.log" STUB_STATE="$lh/sandbox" \
+      BRIG_WORKSPACE="$lh/ws" BRIG_STATE_DIR="$lh/state" BRIG_GATEWAY_DIR="$lh/gw" \
+      BRIG_POLICY_DIR="$lh/policies" BRIG_BROKER_BIN="$WORK/brig-broker-helper" \
+      BRIG_TEST_SECRETS=claude-credentials "$WORK/brig-stored" "$@"
+  }
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=hvi lh_stored run claude -d > "$lh/route.out" 2>&1; rc=$?
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots a routed policy" \
+    || bad "hull on Linux boots a routed policy -- got $rc: $(cat "$lh/route.out")"
+  grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--host brig.internal=' \
+    && grep '^argv: network-gateway --socket' "$lh/argv.log" | grep -q -- '--divert [0-9.]*:443=' \
+    && ok "the routed sandbox's gateway answers brig.internal and diverts its port 443" \
+    || bad "the routed sandbox's gateway has no brig.internal record or divert: $(grep '^argv: network-gateway --socket' "$lh/argv.log")"
+  lh_stored rm --all -y > /dev/null 2>&1
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=hvi lh_stored run claude --offline -d > "$lh/route-off.out" 2>&1; rc=$?
+  [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/route-off.out" \
+    && ok "hull on Linux refuses a routed policy offline with exit 7, naming its path" \
+    || bad "hull on Linux refuses a routed policy offline with exit 7 -- got $rc: $(cat "$lh/route-off.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot a routed policy offline" \
+    || ok "nothing reached hull on Linux for a routed policy offline"
+  lh_brig policy detach lh-route claude-code > /dev/null 2>&1
+
+  # A published port rides the shared gateway and is installed before the
+  # boot, as on hvi. The stub's gateway opens no API socket, so it cannot
+  # publish: the run is refused before anything reaches hull, with the remedy
+  # of hull on Linux, and `brig rm --all`, the remedy it names, stops that
+  # gateway once hull lists no sandbox on it.
+  : > "$lh/argv.log"
+  lh_brig run claude --publish 3000 -d > "$lh/pub.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'brig rm --all' "$lh/pub.out" \
+    && ok "hull on Linux refuses a port its gateway cannot publish, naming brig rm --all" \
+    || bad "hull on Linux refuses a port its gateway cannot publish, naming brig rm --all -- got $rc: $(cat "$lh/pub.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot a port its gateway cannot publish" \
+    || ok "nothing reached hull on Linux for a port its gateway cannot publish"
+  lh_brig rm --all -y > /dev/null 2>&1
+  # ps is read into a file first, so the grep does not find its own argv.
+  ps -A -ww -o command= > "$lh/ps.out" 2>/dev/null
+  grep -qF -- "--socket $lh_shared" "$lh/ps.out" \
+    && bad "brig rm --all left the shared gateway that cannot publish on hull on Linux running" \
+    || ok "brig rm --all stops the shared gateway that cannot publish on hull on Linux"
+
   # The shipped profile sets network: isolated, which this section otherwise
-  # never reads, since BRIG_NETWORK=shared is set for the whole run. The
-  # refusal names the profile and nerdctl, not a flag nobody typed or hvi.
+  # never reads, since BRIG_NETWORK=shared is set for the whole run. It used
+  # to be refused here. It boots on the sandbox's own gateway, as on hvi.
   : > "$lh/argv.log"
   BRIG_NETWORK= lh_brig run claude -d > "$lh/prof.out" 2>&1; rc=$?
-  [ "$rc" != 0 ] && grep -q 'profile sets network: isolated, and hull on Linux' "$lh/prof.out" \
-    && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/prof.out" \
-    && ! grep -q -e '--network isolated gives' -e 'run it on hvi' "$lh/prof.out" \
-    && ok "hull on Linux refuses the profile's isolated network, naming the profile and nerdctl" \
-    || bad "hull on Linux refuses the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
-  grep -q '^argv: run ' "$lh/argv.log" \
-    && bad "hull on Linux was asked to boot the profile's isolated network" \
-    || ok "nothing reached hull on Linux for the profile's isolated network"
+  [ "$rc" = 0 ] && grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "hull on Linux boots the profile's isolated network" \
+    || bad "hull on Linux boots the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
+  case "$(lh_gateway)" in
+    "$lh/gw/sandbox-"*.sock) ok "the profile's isolated sandbox joins a gateway of its own" ;;
+    *) bad "the profile's isolated sandbox joins a gateway of its own -- got: $(lh_gateway)" ;;
+  esac
+  lh_brig rm --all -y > /dev/null 2>&1
 
   # firecracker has no shared filesystem, and every run shares its workspace,
   # so brig plan refuses it as the run does, and nothing reaches `hull run`.
@@ -2449,15 +2726,16 @@ YAML
     || bad "a plain run on hull on Linux reaches run -- got: $(cat "$lh/plain.out")"
 
   # The command line of that run, as hull on Linux takes it: the network
-  # is named, vz (a macOS backend) boots on the bundle's hvi, the kernel and
-  # initrd go as urunc annotations, the workspace is a share, and the guest
-  # stays up on sleep infinity. Nothing of the macOS line reaches it: no
-  # gateway, rootfs type or window. A forwarded credential goes by name, and
-  # its value only through the environment, which is the second promise.
-  # Read from the words: line, so each argument is matched whole.
+  # is named and is the shared gateway, vz (a macOS backend) boots on the
+  # bundle's hvi, the kernel and initrd go as urunc annotations, the workspace
+  # is a share, and the guest stays up on sleep infinity. Nothing else of the
+  # macOS line reaches it: no rootfs type or window. A forwarded credential
+  # goes by name, and its value only through the environment, which is the
+  # second promise. Read from the words: line, so each argument is matched
+  # whole.
   words="$(grep '^words:\[run\]' "$lh/argv.log" | tail -1)"
-  for want in '[--net][shared]' '[--hypervisor][hvi]' '[--snapshotter][' \
-      "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
+  for want in '[--net][shared]' "[--gateway-sock][$lh_shared" '[--gateway-cidr][' \
+      '[--hypervisor][hvi]' '[--snapshotter][' "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
     case "$words" in
       *"$want"*) ok "hull on Linux's run line carries $want" ;;
       *) bad "hull on Linux's run line carries $want -- got: $words" ;;
@@ -2471,7 +2749,7 @@ YAML
     *) bad "hull on Linux's run line ends on sleep infinity -- got: $words" ;;
   esac
   case "$words" in
-    *'[--gateway'*|*'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
+    *'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
       bad "hull on Linux's run line carries a macOS flag -- got: $words" ;;
     *) ok "hull on Linux's run line carries no macOS flag" ;;
   esac
@@ -2482,6 +2760,9 @@ YAML
     && ok "the forwarded value reaches hull on Linux through its environment" \
     || bad "the forwarded value reaches hull on Linux through its environment -- got: $(grep '^env-gh:' "$lh/argv.log")"
   lh_brig rm --all -y > /dev/null 2>&1
+  # The rm stops the stub's shared gateway, which has no API socket, once hull
+  # lists no sandbox on it. This takes whatever a failed case left behind.
+  pkill -f "$lh/gw/" > /dev/null 2>&1
 else
   echo "  --   not Linux, skipping hull on Linux"
 fi
@@ -3427,6 +3708,16 @@ rc=$?
 grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
   && ok "doctor names the runtime version" \
   || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
+# The runtime row says how brig learns what the gateway can do: by the
+# capability report of a hull that has one, and by probes otherwise.
+grep -q '^  ok  runtime .*, gateway asked by probe' "$WORK/doctor.out" \
+  && ok "doctor says a hull with no capability report is asked by probe" \
+  || bad "doctor says a hull with no capability report is asked by probe -- got: $(grep runtime "$WORK/doctor.out")"
+out="$(STUB_HULL_REPORT=1 "$WORK/brig" doctor 2>/dev/null | grep '^  ok  runtime ')"
+case "$out" in
+  *", gateway asked by report"*) ok "doctor says a hull with a capability report is asked by report" ;;
+  *) bad "doctor says a hull with a capability report is asked by report -- got: $out" ;;
+esac
 # The first row is the build that produced the report, the same line
 # `brig version` prints after the word brig.
 build="$("$WORK/brig" version | sed 's/^brig //')"
@@ -3483,6 +3774,24 @@ case "$rc:$out" in
   "1:"*"$WORK/bf-refused"*"runtimeBin"*) ok "a refused Brigfile exits 1 and names the file and the field" ;;
   *) bad "a refused Brigfile exits 1 and names the file and the field -- got $rc: $out" ;;
 esac
+# A route of a repository policy may take over git only for the host it
+# sends to. One that takes git for github.com and sends to another host is
+# refused when the file is read: by config, and by plan before it asks the
+# runtime anything.
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: "builtin:claude-code"}\npolicies:\n  gh:\n    inline:\n      apiVersion: brig.sh/v1alpha1\n      kind: Policy\n      metadata: {name: gh}\n      spec:\n        routes:\n          - {name: github, upstream: "https://git.example.com", credential: {secretRef: {name: gh-token}}, inject: {basicAuth: {username: x-access-token}}, guest: {git: {insteadOf: ["https://github.com/"]}}}\ntargets:\n  dev: {profile: c, policies: [gh]}\n' \
+  > "$WORK/bf-githost"
+out="$(cd "$proj" && "$WORK/brig" config --target dev -f "$WORK/bf-githost" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"route github"*"https://github.com/"*"is not git on git.example.com"*"repository policy may take over git only"*)
+    ok "config refuses a repository route that takes over git for another host" ;;
+  *) bad "config refuses a repository route that takes over git for another host -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" plan --target dev -f "$WORK/bf-githost" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"route github"*"https://github.com/"*"is not git on git.example.com"*"repository policy may take over git only"*)
+    ok "plan refuses a repository route that takes over git for another host" ;;
+  *) bad "plan refuses a repository route that takes over git for another host -- got $rc: $out" ;;
+esac
 [ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
   && ok "the Brigfile verbs ran nothing" \
   || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"
@@ -3516,6 +3825,14 @@ case "$rc:$out" in
   "0:"*"TARGET       ci, from "*"/bf-plan"*"SANDBOX      brig--ci-"*"route collector to https://collector.example with your secret prod-db"*"2 vCPUs from target ci"*)
     ok "plan --target names the target, its own sandbox and each route's upstream and secret" ;;
   *) bad "plan --target names the target, its own sandbox and each route's upstream and secret -- got $rc: $out" ;;
+esac
+# The row of a route says which git URLs it takes over in the guest. A
+# preset on another host takes git for that host, and the row says the
+# preset is not on its own upstream.
+case "$out" in
+  *"route collector to https://collector.example with your secret prod-db, from "*"; preset github-token, in place of its own upstream https://github.com; git in the guest uses it for https://collector.example/, git@collector.example:"*)
+    ok "plan --target says which git URLs a route takes over, and that a preset was moved" ;;
+  *) bad "plan --target says which git URLs a route takes over, and that a preset was moved -- got: $out" ;;
 esac
 out="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>&1)"; rc=$?
 case "$rc:$out" in

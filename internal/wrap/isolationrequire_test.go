@@ -1,0 +1,424 @@
+package wrap
+
+import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/verify"
+)
+
+// logStub is a runtime binary that records every command it is given and
+// answers none of them. A test reads the log to see whether the run got as far
+// as starting anything.
+func logStub(t *testing.T, dir, name string) (bin, log string) {
+	t.Helper()
+	log = filepath.Join(t.TempDir(), name+".log")
+	bin = filepath.Join(dir, name)
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin, log
+}
+
+// startedSomething reports whether the stub was asked to boot a sandbox: a run,
+// a create or a start. Anything else, such as asking whether a sandbox is up,
+// is reading, which a refusal is entitled to do.
+func startedSomething(t *testing.T, log string) bool {
+	t.Helper()
+	b, err := os.ReadFile(log)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		switch strings.Fields(line + " x")[0] {
+		case "run", "create", "start":
+			return true
+		}
+	}
+	return false
+}
+
+// loadRequiring resolves a run of the test profile that requires a microVM,
+// with the real nerdctl adapter over the stub binary at bin, or over whichever
+// runtime Detect finds when bin is empty. Only the binary is fake, so the
+// isolation the run resolves is the one the adapter reports on a host.
+func loadRequiring(t *testing.T, bin, isolation string) *Config {
+	t.Helper()
+	isolateState(t)
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	if bin != "" {
+		t.Setenv("BRIG_RUNTIME_BIN", bin)
+	}
+	rt, err := runtime.Detect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(testProfile(t, planProfile), Options{Workspace: t.TempDir(), Isolation: isolation}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Out, c.Err, c.Progress = io.Discard, io.Discard, io.Discard
+	c.Verify = verify.Off
+	return c
+}
+
+// Each way a run can end up on less than a microVM is refused when the run
+// requires one, with exit 7's error, the row that says what it would have been
+// and the setting to change. This is the test per downgrade path #30 asks for:
+// the row used to say what a run stood on and the run went on regardless.
+func TestARunRequiringAMicroVMIsRefusedOnEachDowngradePath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// shim is BRIG_CONTAINERD_RUNTIME; driver is the name the binary goes by.
+		shim, driver string
+		// fallback leaves BRIG_RUNTIME_BIN unset and puts only docker on PATH,
+		// which is how nerdctl's absence takes a run to docker without a word.
+		fallback bool
+		want     []string
+	}{
+		{name: "BRIG_CONTAINERD_RUNTIME names runc", shim: "runc", driver: "nerdctl",
+			want: []string{"the guest shares the host kernel", "BRIG_CONTAINERD_RUNTIME"}},
+		{name: "BRIG_CONTAINERD_RUNTIME names a path to runc", shim: "/usr/bin/runc", driver: "nerdctl",
+			want: []string{"the guest shares the host kernel", "BRIG_CONTAINERD_RUNTIME"}},
+		{name: "BRIG_CONTAINERD_RUNTIME names the runc shim binary", shim: "containerd-shim-runc-v2", driver: "nerdctl",
+			want: []string{"the guest shares the host kernel", "BRIG_CONTAINERD_RUNTIME"}},
+		{name: "BRIG_CONTAINERD_RUNTIME names a shim brig cannot place", shim: "io.containerd.kata.v2", driver: "nerdctl",
+			want: []string{"cannot tell whether that shim boots a kernel of its own", "BRIG_CONTAINERD_RUNTIME"}},
+		{name: "BRIG_RUNTIME_BIN points at docker", driver: "docker",
+			want: []string{"cannot tell whether docker has that shim", "BRIG_RUNTIME_BIN"}},
+		{name: "nerdctl is missing and docker is taken in its place", driver: "docker", fallback: true,
+			want: []string{"cannot tell whether docker has that shim", "install nerdctl"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", tc.shim)
+			dir := t.TempDir()
+			bin, log := logStub(t, dir, tc.driver)
+			if tc.fallback {
+				// Only the stub is on PATH, so there is no nerdctl to find.
+				t.Setenv("PATH", dir)
+				bin = ""
+			}
+			c := loadRequiring(t, bin, "microvm")
+			if tc.fallback {
+				// The case is about the silent fallback, so it has to be one.
+				if fr, ok := c.Runtime.(runtime.FallbackReporter); !ok || fr.Fallback() == "" {
+					t.Fatalf("the run did not fall back to docker: %T", c.Runtime)
+				}
+			}
+
+			err := c.checkBackend(c.hypervisor())
+			var refusal *runtime.IsolationError
+			if !errors.As(err, &refusal) {
+				t.Fatalf("checkBackend = %v, want the isolation refusal", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%s", want, err)
+				}
+			}
+
+			// The run stops before it prepares anything or boots, and the plan
+			// says the same, with the reason the run prints.
+			plan := c.Plan()
+			if plan.Refused == nil || plan.Refused.Reason != err.Error() {
+				t.Errorf("the plan does not carry the refusal: %+v", plan.Refused)
+			}
+			runErr := c.EnsureRunning(creds.Set{})
+			if !errors.As(runErr, &refusal) {
+				t.Fatalf("EnsureRunning = %v, want the isolation refusal", runErr)
+			}
+			if startedSomething(t, log) {
+				b, _ := os.ReadFile(log)
+				t.Errorf("a refused run started something:\n%s", b)
+			}
+		})
+	}
+}
+
+// The same runs are not refused for isolation when nothing required it. A
+// known shared-kernel shim keeps its own refusal, which is not this one, and
+// the others boot as they always did. The requirement is opt-in.
+func TestARunNotRequiringAMicroVMIsNotRefusedForIsolation(t *testing.T) {
+	for _, tc := range []struct{ name, shim, driver string }{
+		{"a shim brig cannot place", "io.containerd.kata.v2", "nerdctl"},
+		{"docker", "", "docker"},
+		{"runc, which has its own refusal", "runc", "nerdctl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", tc.shim)
+			bin, _ := logStub(t, t.TempDir(), tc.driver)
+			c := loadRequiring(t, bin, "")
+
+			var refusal *runtime.IsolationError
+			if err := c.checkBackend(c.hypervisor()); errors.As(err, &refusal) {
+				t.Errorf("a run that required nothing was refused for its isolation: %v", err)
+			}
+		})
+	}
+}
+
+// The requirement is met by what the row establishes, and nothing else gets in
+// its way: urunc on nerdctl is a microVM, and so is hull on every backend.
+func TestARunRequiringAMicroVMThatGetsOneIsNotRefused(t *testing.T) {
+	t.Run("nerdctl on the default shim", func(t *testing.T) {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+		bin, _ := logStub(t, t.TempDir(), "nerdctl")
+		c := loadRequiring(t, bin, "microvm")
+
+		var refusal *runtime.IsolationError
+		if err := c.checkBackend(c.hypervisor()); errors.As(err, &refusal) {
+			t.Errorf("a microVM was refused: %v", err)
+		}
+	})
+	t.Run("hull", func(t *testing.T) {
+		c := envelopeConfig()
+		c.Runtime = &hullRecorder{}
+		c.needMicroVM = true
+
+		if err := c.checkBackend("hvi"); err != nil {
+			t.Errorf("a microVM was refused: %v", err)
+		}
+	})
+}
+
+// Nothing in the environment can weaken the requirement: it has one source, the
+// command line, and a variable that looks like a way to say otherwise is not
+// read. A shell profile that sets one cannot turn a refusal into a boot.
+func TestNoVariableWeakensTheIsolationRequirement(t *testing.T) {
+	for _, v := range []string{"BRIG_ISOLATION", "BRIG_REQUIRE_ISOLATION", "BRIG_CLAUDE_CODE_ISOLATION"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
+			t.Setenv(v, "container")
+			bin, _ := logStub(t, t.TempDir(), "nerdctl")
+			c := loadRequiring(t, bin, "microvm")
+
+			var refusal *runtime.IsolationError
+			if err := c.checkBackend(c.hypervisor()); !errors.As(err, &refusal) {
+				t.Errorf("%s=container lifted the requirement: %v", v, err)
+			}
+		})
+	}
+}
+
+// A runtime that cannot be asked is not one that establishes a microVM, so a
+// run that requires one and has none in hand is refused rather than waved
+// through the way a check on a missing runtime usually is.
+func TestARunRequiringAMicroVMWithNoRuntimeIsRefused(t *testing.T) {
+	c := envelopeConfig()
+	c.Runtime = nil
+	c.needMicroVM = true
+
+	var refusal *runtime.IsolationError
+	if err := c.checkBackend("hvi"); !errors.As(err, &refusal) {
+		t.Fatalf("checkBackend = %v, want the isolation refusal", err)
+	}
+}
+
+// A value Load does not know is refused, not read as no requirement: a typo in
+// a caller that is not the command line, brigd's request, must not boot the
+// sandbox the requirement was written to stop.
+func TestLoadRefusesAnIsolationRequirementItDoesNotKnow(t *testing.T) {
+	isolateState(t)
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	bin, _ := logStub(t, t.TempDir(), "nerdctl")
+	t.Setenv("BRIG_RUNTIME_BIN", bin)
+	rt, err := runtime.Detect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"container", "microVM", "micro-vm", " microvm", "auto", "true"} {
+		_, err := Load(testProfile(t, planProfile), Options{Workspace: t.TempDir(), Isolation: v}, rt)
+		if err == nil || !strings.Contains(err.Error(), "microvm") {
+			t.Errorf("Isolation %q: Load = %v, want a refusal that names microvm", v, err)
+		}
+	}
+}
+
+// The check a verb that boots nothing can ask for is the check a run makes:
+// brig info answers a script's question with this, so it has to refuse on the
+// same ground, with the same error, and say nothing when nothing was required.
+func TestIsolationRefusalIsTheCheckARunMakes(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
+	bin, _ := logStub(t, t.TempDir(), "nerdctl")
+
+	c := loadRequiring(t, bin, "microvm")
+	var refusal *runtime.IsolationError
+	err := c.IsolationRefusal()
+	if !errors.As(err, &refusal) {
+		t.Fatalf("IsolationRefusal = %v, want the isolation refusal", err)
+	}
+	if run := c.checkBackend(c.hypervisor()); run == nil || run.Error() != err.Error() {
+		t.Errorf("a run says %v, and the check for info says %v: they must be the same", run, err)
+	}
+
+	if err := loadRequiring(t, bin, "").IsolationRefusal(); err != nil {
+		t.Errorf("a line that required nothing was refused: %v", err)
+	}
+
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	if err := loadRequiring(t, bin, "microvm").IsolationRefusal(); err != nil {
+		t.Errorf("a microVM was refused: %v", err)
+	}
+}
+
+// joinStub is a nerdctl that logs every command and answers the two a run that
+// joins a sandbox asks: ps, which lists the sandbox when running is set, and
+// inspect, which prints the shim the sandbox was created with, or fails.
+func joinStub(t *testing.T, bin, log, sandbox string, running bool, shim string, inspectFails bool) {
+	t.Helper()
+	ps := ":"
+	if running {
+		ps = "echo " + sandbox
+	}
+	inspect := "echo " + shim
+	if inspectFails {
+		inspect = "echo 'cannot connect to the daemon' >&2; exit 1"
+	}
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\ncase \"$1\" in\nps) " + ps +
+		" ;;\ninspect) " + inspect + " ;;\nesac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// inspected reports whether the stub was asked what a sandbox stands on.
+func inspected(t *testing.T, log string) bool {
+	t.Helper()
+	b, _ := os.ReadFile(log)
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "inspect ") {
+			return true
+		}
+	}
+	return false
+}
+
+// A run that finds its sandbox already up boots nothing, and that sandbox stands
+// on the shim it was created with, which the environment may no longer name. So
+// a run that requires a microVM is checked against the sandbox it joins, read
+// off the runtime, as well as against what a new boot would get. Review of #577
+// found a sandbox booted on a shim brig cannot place joined with exit 0 once the
+// variable that chose it was unset: the requirement said nothing about the guest
+// the run used.
+func TestARunRequiringAMicroVMIsRefusedWhenItJoinsASandboxThatIsNotOne(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		shim string
+		want []string
+	}{
+		{"a shim brig cannot place", "io.containerd.kata.v2",
+			[]string{"already up", "io.containerd.kata.v2", "cannot tell whether that shim boots a kernel of its own"}},
+		{"the runc shim", "io.containerd.runc.v2",
+			[]string{"already up", "io.containerd.runc.v2", "the guest shares the host kernel"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The variable that booted it is gone: a fresh boot would be a
+			// microVM, so only the sandbox itself can show the problem.
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+			bin, log := logStub(t, t.TempDir(), "nerdctl")
+			c := loadRequiring(t, bin, "microvm")
+			joinStub(t, bin, log, c.VMName, true, tc.shim, false)
+
+			err := c.checkBackend(c.hypervisor())
+			var refusal *runtime.IsolationError
+			if !errors.As(err, &refusal) {
+				t.Fatalf("checkBackend = %v, want the isolation refusal", err)
+			}
+			for _, want := range append(tc.want, c.VMName, "brig rm") {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%s", want, err)
+				}
+			}
+
+			// The plan reports the same thing, and a refused run starts nothing.
+			if plan := c.Plan(); plan.Refused == nil || plan.Refused.Reason != err.Error() {
+				t.Errorf("the plan does not carry the refusal: %+v", plan.Refused)
+			}
+			if runErr := c.EnsureRunning(creds.Set{}); !errors.As(runErr, &refusal) {
+				t.Fatalf("EnsureRunning = %v, want the isolation refusal", runErr)
+			}
+			if startedSomething(t, log) {
+				b, _ := os.ReadFile(log)
+				t.Errorf("a refused run started something:\n%s", b)
+			}
+		})
+	}
+}
+
+// A sandbox that is a microVM is joined. And the answer for a new boot still
+// counts: a sandbox can be recreated, and then the environment as it is now is
+// what boots, so a variable that names a shim brig cannot place refuses the run
+// even over a microVM that is up. That is what #577 did before this change.
+func TestARunRequiringAMicroVMJoinsASandboxThatIsOne(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	bin, log := logStub(t, t.TempDir(), "nerdctl")
+	c := loadRequiring(t, bin, "microvm")
+	joinStub(t, bin, log, c.VMName, true, "io.containerd.urunc.v2", false)
+
+	var refusal *runtime.IsolationError
+	if err := c.checkBackend(c.hypervisor()); errors.As(err, &refusal) {
+		t.Errorf("a microVM that is up was refused: %v", err)
+	}
+
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
+	c = loadRequiring(t, bin, "microvm")
+	if err := c.checkBackend(c.hypervisor()); !errors.As(err, &refusal) {
+		t.Errorf("a new boot on a shim brig cannot place was waved through over a microVM that is up: %v", err)
+	}
+}
+
+// If what the sandbox stands on cannot be read, the run is refused: a guess here
+// is toward the stronger boundary, which is the one mistake the type exists to
+// rule out. The runtime's own account of what went wrong is in the message.
+func TestARunRequiringAMicroVMIsRefusedWhenTheSandboxCannotBeRead(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	bin, log := logStub(t, t.TempDir(), "nerdctl")
+	c := loadRequiring(t, bin, "microvm")
+	joinStub(t, bin, log, c.VMName, true, "", true)
+
+	err := c.checkBackend(c.hypervisor())
+	var refusal *runtime.IsolationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("checkBackend = %v, want the isolation refusal", err)
+	}
+	for _, want := range []string{"could not read what it stands on", "cannot connect to the daemon", c.VMName} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, err)
+		}
+	}
+}
+
+// The inspect is for a run that joins, and for one that required something. A
+// sandbox that is not up is booted fresh and the answer for a boot decides; a
+// run that required nothing never asks, so a shell function around a sandbox on
+// any shim does not gain a command it did not have.
+func TestTheSandboxIsOnlyInspectedByARunThatRequiresAMicroVMAndJoins(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	for _, tc := range []struct {
+		name     string
+		required string
+		running  bool
+		want     bool
+	}{
+		{"required and up", "microvm", true, true},
+		{"required and not up", "microvm", false, false},
+		{"nothing required and up", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, log := logStub(t, t.TempDir(), "nerdctl")
+			c := loadRequiring(t, bin, tc.required)
+			joinStub(t, bin, log, c.VMName, tc.running, "io.containerd.kata.v2", false)
+			_ = c.checkBackend(c.hypervisor())
+			if got := inspected(t, log); got != tc.want {
+				t.Errorf("inspected = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -37,6 +37,13 @@ type Isolation struct {
 	// runtime, which backend or shim, and for anything short of a microVM what
 	// that costs them.
 	Detail string
+	// Setting is what to change to get a microVM when the boundary is
+	// anything less: the variable or the choice of binary that decided it. It
+	// is empty on a microVM, where there is nothing to undo, and it is not
+	// printed in the row, which already names the cause in its detail. A
+	// refusal reads it, so it can say which setting to change and not only
+	// that the boundary was too weak (#30).
+	Setting string
 }
 
 // Line is the isolation as the envelope prints it: the boundary, then the
@@ -146,19 +153,104 @@ func sharesHostKernel(shim string) bool { return shimBoundary(shim) == BoundaryC
 // urunc reads either, so only the urunc row names them.
 func containerdIsolation(driver, shim, named, monitor, rootfs string) Isolation {
 	over := driver + " over containerd"
-	switch shimBoundary(shim) {
+	boundary := shimBoundary(shim)
+	// docker is told to use the shim, and brig cannot see whether docker has
+	// it registered. The name alone made this row say microVM for a docker
+	// that might boot a plain container with the default shim named in the
+	// row, which is the guess toward the stronger boundary this type must not
+	// make. A shim brig knows shares the host kernel stays that.
+	if driver == dockerDriver && boundary == BoundaryVM {
+		return Isolation{Boundary: BoundaryUnknown, Detail: fmt.Sprintf(
+			"%s, %s: brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own",
+			over, named)}
+	}
+	switch boundary {
 	case BoundaryVM:
 		detail := fmt.Sprintf("%s, %s, hypervisor %s",
 			over, named, orDefault(monitor, "urunc default"))
 		if rootfs != "" {
 			detail += ", rootfs " + rootfs
 		}
-		return Isolation{BoundaryVM, detail}
+		return Isolation{Boundary: BoundaryVM, Detail: detail}
 	case BoundaryContainer:
-		return Isolation{BoundaryContainer, fmt.Sprintf(
+		return Isolation{Boundary: BoundaryContainer, Detail: fmt.Sprintf(
 			"%s, %s: the guest shares the host kernel", over, named)}
 	default:
-		return Isolation{BoundaryUnknown, fmt.Sprintf(
+		return Isolation{Boundary: BoundaryUnknown, Detail: fmt.Sprintf(
 			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, named)}
 	}
+}
+
+// SandboxIsolator is a runtime that can say what a sandbox that already exists
+// stands on, which is not what Isolation says. Isolation answers for a boot the
+// run would make now, from the environment as it is now. A run that finds its
+// sandbox already up boots nothing, and that sandbox stands on whatever it was
+// created with, which the environment may no longer name: the variable that put
+// it on a shim brig cannot place may be unset since (#30).
+//
+// Optional and not on Runtime, unlike Isolation, because hull has no shim to
+// ask about. Every sandbox it runs is a microVM, so what it would boot now is
+// what is running, and a caller that finds this interface missing keeps
+// Isolation's answer.
+type SandboxIsolator interface {
+	// SandboxIsolation reads what the sandbox called name was created with. An
+	// error means it could not be read, and that is not an answer: a caller
+	// that needs the boundary must treat it as one it cannot establish.
+	SandboxIsolation(name string) (Isolation, error)
+}
+
+// existingIsolation is the boundary of a sandbox that is already up, from the
+// shim it was created with. It is containerdIsolation's reading of the shim
+// without what only a boot knows, the hypervisor and the rootfs, and with the
+// setting that names the sandbox itself, since an environment variable cannot
+// change a guest that is running.
+func existingIsolation(driver, shim, name string) Isolation {
+	base := fmt.Sprintf("%s over containerd, %s, in a sandbox that is already up", driver, shim)
+	remedy := fmt.Sprintf("the running sandbox %s (brig rm removes it, and the next run boots a new one)", name)
+	boundary := shimBoundary(shim)
+	// docker is told to use the shim and brig cannot see whether it has it, as
+	// in containerdIsolation, so a docker sandbox on a VM shim is not shown to
+	// be a VM either.
+	if driver == dockerDriver && boundary == BoundaryVM {
+		return Isolation{Boundary: BoundaryUnknown, Setting: remedy, Detail: base +
+			": brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own"}
+	}
+	switch boundary {
+	case BoundaryVM:
+		return Isolation{Boundary: BoundaryVM, Detail: base}
+	case BoundaryContainer:
+		return Isolation{Boundary: BoundaryContainer, Setting: remedy, Detail: base + ": the guest shares the host kernel"}
+	}
+	return Isolation{Boundary: BoundaryUnknown, Setting: remedy, Detail: base +
+		": brig cannot tell whether that shim boots a kernel of its own"}
+}
+
+// IsolationError refuses a run that required a microVM and would not get one
+// the row can establish. It carries the isolation the run resolved, so the
+// message names the same boundary and the same cause the ISOLATION row does,
+// and a caller can tell this refusal from any other failure by its type. The
+// exit code is 7, the class for a run path that cannot give what the run asks
+// for (#300).
+type IsolationError struct {
+	Got Isolation
+}
+
+func (e *IsolationError) Error() string {
+	msg := fmt.Sprintf("--isolation microvm: this run would stand on %s, and brig will not "+
+		"boot a sandbox it cannot establish as a microVM", e.Got.Line())
+	if e.Got.Setting != "" {
+		msg += ". Change " + e.Got.Setting + " to get one, or drop --isolation microvm"
+	}
+	return msg
+}
+
+// RequireMicroVM is the refusal for a run that asked for a microVM, or nil
+// when the isolation says it gets one. Unknown is refused with a container:
+// the requirement is for a boundary brig can show, not for one it cannot rule
+// out, and a shim brig cannot place is the case the unknown value exists for.
+func RequireMicroVM(i Isolation) error {
+	if i.Boundary == BoundaryVM {
+		return nil
+	}
+	return &IsolationError{Got: i}
 }

@@ -33,7 +33,10 @@ import (
 //   - shared: one gateway for the host, serving every sandbox that asked for
 //     the shared network. It is host-wide: every brig state dir and every
 //     session on this host uses the same socket, so whether anything is on it
-//     is read from the process table. See sharedGatewayProcs.
+//     is read from the process table on macOS (see sharedGatewayProcs), and
+//     from the gateway's guest list and hull's instances on hull on Linux,
+//     or from the instances alone for a gateway too old to list its guests
+//     or whose API socket is gone (see hull.PruneSharedNetwork).
 //   - isolated: a gateway per sandbox, each on a /30 of its own out of the
 //     same space. No other sandbox is on that network, whatever the backend
 //     would have done with a shared one.
@@ -268,7 +271,19 @@ func gatewayLogPath(sock string) string  { return strings.TrimSuffix(sock, ".soc
 // This runs before `hull run`, so the sandbox being booted is not yet in the
 // process table. The lease stands in for it until the release. See
 // leaseSharedGateway.
-func ensureGateway(bin string) (string, func(), error) {
+func ensureGateway(bin string) (string, func(), error) { return ensureSharedGateway(bin, true) }
+
+// ensureSharedGateway is ensureGateway. membersSeen says whether the process
+// table shows the guests on the gateway, which it does on macOS, where hvi's
+// argv names the socket. On hull on Linux it does not: urunc binds the socket
+// into hvi's root and hvi names it there, at a path every gateway guest
+// shares. With no way to tell an unused gateway from one with guests, an old
+// one is reused rather than stopped, and an upgrade of hull leaves it running.
+// One reused there may serve no /forwards API, or have lost its API socket,
+// and a run that publishes through it is refused by linuxUnpublishable. That
+// refusal names `brig rm --all`, because PruneSharedNetwork stops such a
+// gateway once hull lists no instance on it, and a boot here never does.
+func ensureSharedGateway(bin string, membersSeen bool) (string, func(), error) {
 	sock, err := gatewaySocket()
 	if err != nil {
 		return "", nil, err
@@ -279,7 +294,7 @@ func ensureGateway(bin string) (string, func(), error) {
 	}
 	if gatewayReachable(sock) {
 		// The API answering is the common case, and it costs no ps.
-		if !apiMissing(sock) || !stopOldGateway(sock, lease) {
+		if !membersSeen || !apiMissing(sock) || !stopOldGateway(sock, lease) {
 			return sock, release, nil
 		}
 		// Something still answers: a stop that failed, or a gateway another
@@ -494,13 +509,16 @@ func listensOn(pid int, sock string) bool {
 // ensureIsolatedGateway returns the control socket of the gateway serving this
 // sandbox alone, starting one if nothing answers on it.
 //
+// path is the run path a refusal names. hull on macOS and hull on Linux start
+// the same gateway, but a user is told the remedy of the path they are on.
+//
 // A gateway already running to serve something else is replaced rather than
 // reused. Its network and its rules are both read once, when it starts, so a
 // running one cannot be told a new rule or moved to another subnet -- and
 // reusing it would enforce the policy as it stood when the sandbox last
 // booted, or route guests on a network the process on the other end does not
 // serve. Restarting is safe here because this runs before the guest attaches.
-func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, error) {
+func ensureIsolatedGateway(bin string, path RunPath, name string, index int, policy Egress) (string, error) {
 	sock, err := isolatedSocket(name)
 	if err != nil {
 		return "", err
@@ -512,17 +530,17 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	// Below the reuse check, so the common path -- the same sandbox restarted
 	// under the same policy -- does not pay for a probe process on every boot.
 	if policy.Filtered() {
-		if err := gatewayEnforces(bin); err != nil {
+		if err := gatewayEnforcesOn(bin, path); err != nil {
 			return "", err
 		}
 	}
 	if policy.Divert.Requested() {
-		if err := gatewayDiverts(bin); err != nil {
+		if err := gatewayDivertsOn(bin, path); err != nil {
 			return "", err
 		}
 	}
 	if policy.Divert.linkLocal() {
-		if err := probeLinkLocal(bin); err != nil {
+		if err := probeLinkLocalOn(bin, path); err != nil {
 			return "", err
 		}
 	}
@@ -550,7 +568,7 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	// refusal of the route, with exit 7.
 	if err != nil && policy.Divert.Requested() {
 		prop, without := policy.Divert.refusal()
-		return "", &CapabilityError{Property: prop, Path: RunPath{"hull", "hvi"},
+		return "", &CapabilityError{Property: prop, Path: path,
 			State: Unknown, Why: "the network gateway that diverts the route's connections did not start",
 			Remedy: "Read the gateway log, or " + without, Err: err}
 	}
@@ -593,7 +611,8 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 	//
 	// Every hull release takes --api: network-gateway has had it since
 	// v0.1.0-rc3, the first tag. What a hull before rc29 lacks is the
-	// /forwards endpoint behind it, and unpublishable names that.
+	// /forwards endpoint behind it, and unpublishable and linuxUnpublishable
+	// name that.
 	args = append(args, "--api", gatewayAPISocket(sock))
 	args = append(args, policy.args()...)
 	// gatewayIP is one brig derived. Were it not an address, a divert of it
@@ -639,7 +658,7 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 		sock, gatewayReadyTimeout, logPath)
 }
 
-// gatewayProbeTimeout bounds the probe gatewayEnforces runs. Printing help
+// gatewayProbeTimeout bounds the probe gatewayEnforcesOn runs. Printing help
 // takes milliseconds, but the first run of a new binary on macOS can wait on
 // the system's security scan: a fresh script took 10.7s on its first run and
 // 8ms on its second. The probe refuses on a timeout, so a tight bound refuses
@@ -648,8 +667,9 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 // them with it.
 var gatewayProbeTimeout = 30 * time.Second
 
-// gatewayEnforces checks that this runtime's gateway takes egress rules at
-// all, and is called only when a policy was asked for.
+// gatewayEnforcesOn checks that this runtime's gateway takes egress rules at
+// all, and is called only when a policy was asked for. path is the run path a
+// refusal names.
 //
 // The flags arrived after hull 0.1.0-rc21, so a brig new enough to enforce a
 // policy can meet a hull that cannot. Without the check the rules reach a
@@ -665,11 +685,20 @@ var gatewayProbeTimeout = 30 * time.Second
 // brig is about to hand the rules to. Letting the boot continue was the old
 // behaviour, and it booted a sandbox under a policy nothing had confirmed
 // (#171).
-func gatewayEnforces(bin string) error {
+func gatewayEnforcesOn(bin string, path RunPath) error {
+	// A hull that reports what its gateway can do is asked that, and no
+	// probe runs. See gatewayReportOf.
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.EgressDefault {
+			return nil
+		}
+		return noEgressDefault(bin, path)
+	}
 	probe := bin + " network-gateway --help"
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "network-gateway", "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
 	// Without WaitDelay a child the runtime left behind holds the output
 	// pipe open past the kill, and the probe hangs anyway. See
 	// agentCallWaitDelay.
@@ -678,13 +707,12 @@ func gatewayEnforces(bin string) error {
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
 	}
-	// The table answers enforced for hvi, and this is where that answer
-	// meets the binary that starts the gateway. A probe that failed confirms
-	// neither answer, so it is unknown. A gateway that runs and lacks the
-	// flag is known not to enforce.
-	hvi := RunPath{"hull", "hvi"}
+	// The table answers enforced for hvi and for hull on Linux. This is
+	// where that answer meets the binary that starts the gateway on both. A
+	// probe that failed confirms neither answer, so it is unknown. A gateway
+	// that runs and lacks the flag is known not to enforce.
 	if err != nil {
-		return &CapabilityError{Property: EgressPolicy, Path: hvi, State: Unknown,
+		return &CapabilityError{Property: EgressPolicy, Path: path, State: Unknown,
 			Why:    fmt.Sprintf("the probe `%s` failed", probe),
 			Remedy: "Fix the runtime, or detach the policy",
 			Err:    err}
@@ -692,7 +720,19 @@ func gatewayEnforces(bin string) error {
 	if strings.Contains(string(out), "--egress-default") {
 		return nil
 	}
-	return &CapabilityError{Property: EgressPolicy, Path: hvi, State: CannotEnforce,
+	return noEgressDefault(bin, path)
+}
+
+// gatewayEnforces is gatewayEnforcesOn for the macOS hull, whose gateway runs
+// on hvi.
+func gatewayEnforces(bin string) error {
+	return gatewayEnforcesOn(bin, macGatewayPath)
+}
+
+// noEgressDefault is the refusal of a gateway that takes no egress rules,
+// whether its help or its report said so. path is the run path it names.
+func noEgressDefault(bin string, path RunPath) error {
+	return &CapabilityError{Property: EgressPolicy, Path: path, State: CannotEnforce,
 		Why:    fmt.Sprintf("the network-gateway of %s has no --egress-default", bin),
 		Remedy: "Upgrade the runtime, or detach the policy"}
 }
@@ -729,6 +769,9 @@ func (e Egress) divertArgs(gw netip.Addr) []string {
 	}
 	if e.Divert.BrigInternal {
 		args = append(args, "--host", BrigInternalName+"="+gw.String())
+		for _, h := range e.Divert.Hosts {
+			args = append(args, "--host", h+"="+gw.String())
+		}
 	}
 	return args
 }
@@ -738,27 +781,48 @@ func gatewayDivert(r DivertRoute, socket string) string {
 	return r.arg() + "=" + socket
 }
 
-// gatewayDiverts checks that this runtime's gateway takes --divert, which
+// gatewayDivertsOn checks that this runtime's gateway takes --divert, which
 // brig.internal needs. A hull that lacks it refuses the flag at start, so the
 // run is refused before the gateway is asked. A probe that fails refuses too,
-// for the reason gatewayEnforces gives.
+// for the reason gatewayEnforces gives. path is the run path a refusal names:
+// hull on macOS and hull on Linux start the same gateway, and a user is told
+// the path they are on.
+func gatewayDivertsOn(bin string, path RunPath) error {
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.Divert {
+			return nil
+		}
+		return helpLacksOn(bin, path, "--divert", "network-gateway")
+	}
+	return helpListsOn(bin, path, "--divert", "network-gateway")
+}
+
+// gatewayDiverts is gatewayDivertsOn for the macOS hull.
 func gatewayDiverts(bin string) error {
-	return helpLists(bin, "--divert", "network-gateway")
+	return gatewayDivertsOn(bin, macGatewayPath)
 }
 
 // linkLocalProbes holds the answer of gatewayDivertsLinkLocal per hull
-// binary. The run's refusal check and the gateway's start both ask.
+// binary. The run's refusal check and the gateway's start both ask. It is
+// keyed by the binary alone: one binary runs on one OS, so on one run path.
 var linkLocalProbes sync.Map
 
-// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary for a yes
-// or a no. An unknown answer, such as a probe that timed out under load, is
-// not kept, so the next run asks again.
-func probeLinkLocal(bin string) error {
+// probeLinkLocalOn is gatewayDivertsLinkLocalOn, asked once per binary for a
+// yes or a no. An unknown answer, such as a probe that timed out under load,
+// is not kept, so the next run asks again. path is the run path a refusal
+// names.
+func probeLinkLocalOn(bin string, path RunPath) error {
 	if err, ok := linkLocalProbes.Load(bin); ok {
 		err, _ := err.(error)
 		return err
 	}
-	err := gatewayDivertsLinkLocal(bin)
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.DivertLinkLocal {
+			return nil
+		}
+		return noLinkLocalDivertOn(bin, path)
+	}
+	err := gatewayDivertsLinkLocalOn(bin, path)
 	var ce *CapabilityError
 	if err == nil || errors.As(err, &ce) && ce.State == CannotEnforce {
 		linkLocalProbes.Store(bin, err)
@@ -766,7 +830,10 @@ func probeLinkLocal(bin string) error {
 	return err
 }
 
-// gatewayDivertsLinkLocal checks that this runtime's gateway takes a --divert
+// probeLinkLocal is probeLinkLocalOn for the macOS hull.
+func probeLinkLocal(bin string) error { return probeLinkLocalOn(bin, macGatewayPath) }
+
+// gatewayDivertsLinkLocalOn checks that this runtime's gateway takes a --divert
 // of LinkLocalDivert. An older hull has --divert and refuses a link-local
 // address while it parses its flags, so its help cannot tell, and the run
 // would be refused only when the sandbox's gateway starts.
@@ -777,12 +844,11 @@ func probeLinkLocal(bin string) error {
 // its flags, before it opens a socket. A hull that got past them would serve
 // on the probe's own directory, which is removed after it, and never the
 // gateway directory. Any other answer, exit 0 among them, confirms nothing,
-// and refuses the run as unknown.
-func gatewayDivertsLinkLocal(bin string) error {
-	hvi := RunPath{"hull", "hvi"}
+// and refuses the run as unknown. path is the run path a refusal names.
+func gatewayDivertsLinkLocalOn(bin string, path RunPath) error {
 	dir, err := os.MkdirTemp("", "brig-probe")
 	if err != nil {
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 			Why:    "brig could not make a directory for the probe of a link-local divert",
 			Remedy: "Fix the runtime, or detach the policy", Err: err}
 	}
@@ -794,6 +860,8 @@ func gatewayDivertsLinkLocal(bin string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	// Plumbing, as every probe here is: hull sends no event for it.
+	c.Env = mergeEnv(telemetryEnv(false))
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	var exit *exec.ExitError
@@ -803,45 +871,79 @@ func gatewayDivertsLinkLocal(bin string) error {
 	case errors.As(err, &exit) && strings.Contains(string(out), "diverted twice"):
 		return nil
 	case errors.As(err, &exit) && strings.Contains(string(out), "link-local"):
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
-			Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
-				"refuses it", LinkLocalDivert.Host, bin),
-			Remedy: "Upgrade hull, or detach the policy"}
+		return noLinkLocalDivertOn(bin, path)
 	case err == nil:
 		err = errors.New("the gateway took two identical diverts")
 	default:
 		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 		Why:    fmt.Sprintf("the probe `%s` failed", probe),
 		Remedy: "Fix the runtime, or detach the policy", Err: err}
 }
 
-// helpLists runs `bin <cmd...> --help` and refuses, as a capability of the
-// endpoint mode on hvi, a binary whose help does not list flag.
-func helpLists(bin, flag string, cmd ...string) error {
+// gatewayDivertsLinkLocal is gatewayDivertsLinkLocalOn for the macOS hull.
+func gatewayDivertsLinkLocal(bin string) error {
+	return gatewayDivertsLinkLocalOn(bin, macGatewayPath)
+}
+
+// noLinkLocalDivertOn is the refusal of a gateway that cannot divert a
+// link-local address, whether the probe or the report said so. path is the
+// run path it names.
+func noLinkLocalDivertOn(bin string, path RunPath) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path,
+		State: CannotEnforce,
+		Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
+			"refuses it", LinkLocalDivert.Host, bin),
+		Remedy: "Upgrade hull, or detach the policy"}
+}
+
+// noLinkLocalDivert is noLinkLocalDivertOn for the macOS hull.
+func noLinkLocalDivert(bin string) error { return noLinkLocalDivertOn(bin, macGatewayPath) }
+
+// helpListsOn runs `bin <cmd...> --help` and refuses, as a capability of the
+// endpoint mode on path, a binary whose help does not list flag.
+func helpListsOn(bin string, path RunPath, flag string, cmd ...string) error {
 	args := append(append([]string(nil), cmd...), "--help")
 	probe := bin + " " + strings.Join(args, " ")
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	// Plumbing, as every probe here is: hull sends no event for it.
+	c.Env = mergeEnv(telemetryEnv(false))
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
 	}
-	hvi := RunPath{"hull", "hvi"}
 	if err != nil {
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path, State: Unknown,
 			Why:    fmt.Sprintf("the probe `%s` failed", probe),
 			Remedy: "Fix the runtime, or detach the policy", Err: err}
 	}
 	if listsFlag(string(out), flag) {
 		return nil
 	}
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
+	return helpLacksOn(bin, path, flag, cmd...)
+}
+
+// helpLists is helpListsOn for the macOS hull.
+func helpLists(bin, flag string, cmd ...string) error {
+	return helpListsOn(bin, macGatewayPath, flag, cmd...)
+}
+
+// helpLacksOn is the refusal of a hull whose cmd has no flag, as a
+// capability of the endpoint mode on path.
+func helpLacksOn(bin string, path RunPath, flag string, cmd ...string) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: path,
+		State:  CannotEnforce,
 		Why:    fmt.Sprintf("`%s` of %s has no %s", strings.Join(cmd, " "), bin, flag),
 		Remedy: "Upgrade hull, or detach the policy"}
+}
+
+// helpLacks is helpLacksOn for the macOS hull.
+func helpLacks(bin, flag string, cmd ...string) error {
+	return helpLacksOn(bin, macGatewayPath, flag, cmd...)
 }
 
 // listsFlag returns whether help lists flag as an option: the first word of
@@ -883,6 +985,9 @@ func gatewaySpec(index int, e Egress) string {
 	}
 	if e.Divert.BrigInternal {
 		diverts = append(diverts, "host "+BrigInternalName+"="+sandboxGatewayIP(index))
+		for _, h := range e.Divert.Hosts {
+			diverts = append(diverts, "host "+h+"="+sandboxGatewayIP(index))
+		}
 	}
 	slices.Sort(diverts)
 	if !e.Filtered() {
@@ -933,7 +1038,7 @@ func recordedSpec(sock string) string {
 // depends on it, and there is no answer to "the kill failed" worth
 // interrupting a `brig rm` with. The shared gateway is never stopped here: it
 // serves sandboxes this one knows nothing about. PruneSharedNetwork stops it,
-// once the process table shows nothing on it.
+// once nothing is on it.
 func shutDownGateway(name string) {
 	sock, err := isolatedSocket(name)
 	if err != nil {

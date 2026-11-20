@@ -45,6 +45,19 @@ func TestHullVersionPinsDigest(t *testing.T) {
 		{"hull v0.1.0-rc29+dirty (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
 		// No version word at all: the date is not one.
 		{"hull dev (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
+		// A checkout without hull's tags builds as Go's untagged
+		// pseudo-version. It names no release, so it is a build from source
+		// and pins; read as 0.0.0 it left a current hull booting by tag.
+		{"hull v0.0.0-20261111171032-fb41d4a05d4a (fb41d4a, 2026-11-11, go1.26.8, linux/amd64)\n", true},
+		{"hull v0.0.0-20261111171032-fb41d4a05d4a+dirty (fb41d4a, 2026-11-11, go1.26.8, linux/amd64)\n", true},
+		// A pseudo-version after a tag still reads by the tag before it.
+		{"hull v0.1.1-0.20261111171032-fb41d4a05d4a (fb41d4a, 2026-11-11, go1.26.8, linux/amd64)\n", true},
+		// Negative: only that exact form is unknown. A 0.0.x version that is
+		// not one is still older than rc23, and a release before rc23 still
+		// boots by tag.
+		{"hull v0.0.9 (abc1234, 2026-08-01, go1.26.5, darwin/arm64)\n", false},
+		{"hull v0.0.0-2026111117103-fb41d4a05d4a (abc1234, 2026-08-01, go1.26.5, darwin/arm64)\n", false},
+		{"hull v0.1.0-rc22 (fb41d4a, 2026-11-11, go1.26.8, linux/amd64)\n", false},
 	}
 	for _, tc := range cases {
 		if got := hullVersionPinsDigest(tc.out); got != tc.want {

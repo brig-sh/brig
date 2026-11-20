@@ -15,46 +15,52 @@ import (
 // linuxHull is the adapter as newHull builds it on a Linux host.
 func linuxHull() *hull { return &hull{bin: "hull", linux: true} }
 
-// A policy on hull on Linux is refused, and BRIG_HYPERVISOR=hvi does not get
-// it past: the hvi row is the macOS gateway's, and nothing on Linux puts the
-// rules anywhere yet. The refusal names the Linux path, so the remedy is the
-// one that works there.
-func TestLinuxHullRefusesAPolicyOnEveryMonitor(t *testing.T) {
-	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor"} {
+// A policy is served on hvi, the only monitor urunc joins to a gateway, and
+// the gateway probe at boot is what can still refuse it there. Every other
+// monitor refuses it as unenforced, exit 7, on hull on Linux's own path:
+// BRIG_HYPERVISOR=hvi does not make the run read the macOS hvi row.
+func TestLinuxHullServesAPolicyOnlyOnHvi(t *testing.T) {
+	for _, hv := range []string{"", "vz", "hvi"} {
 		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv,
 			Egress: Egress{Default: "deny"}}
-		err := linuxHull().CanRun(spec)
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("hypervisor %q: a policy was refused on hull on Linux: %v", hv, err)
+		}
+		if got := RoutePath(linuxHull(), hv); got != linuxHullPath {
+			t.Errorf("hypervisor %q: the run reads %s, not %s", hv, got, linuxHullPath)
+		}
+	}
+	for _, hv := range []string{"cloud-hypervisor", "qemu", "firecracker"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv,
+			Egress: Egress{Default: "deny"}}
 		var ce *CapabilityError
-		if !errors.As(err, &ce) {
-			t.Fatalf("hypervisor %q: a policy was not refused with a CapabilityError: %v", hv, err)
-		}
-		if ce.Path != linuxHullPath || ce.State != CannotEnforce || ce.Property != EgressPolicy {
-			t.Errorf("hypervisor %q: refused as %s on %s (%s), want %s on %s (%s)", hv,
-				ce.Property, ce.Path, ce.State, EgressPolicy, linuxHullPath, CannotEnforce)
-		}
-		if strings.Contains(err.Error(), "BRIG_HYPERVISOR=hvi") {
-			t.Errorf("hypervisor %q: the refusal sends a Linux user to hvi: %v", hv, err)
+		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath || ce.State != CannotEnforce {
+			t.Errorf("hypervisor %q: a policy was not refused as unenforced on %s: %v", hv, linuxHullPath, err)
 		}
 	}
 }
 
-// brig.internal, and any diverted destination, are refused the same way: a
-// connection the broker should take would be routed directly instead.
+// brig.internal and a diverted destination ride the gateway on a networked
+// run and are refused on an offline one, which has no gateway to carry them.
 func TestLinuxHullRefusesADivert(t *testing.T) {
 	for name, d := range map[string]Divert{
 		"brig.internal": {BrigInternal: true, Socket: "/tmp/divert.sock"},
 		"a route":       {Routes: []DivertRoute{{Host: "169.254.170.2", Port: 80, Mode: v1alpha1.ModeEndpoint}}, Socket: "/tmp/divert.sock"},
 	} {
 		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: "hvi", Egress: Egress{Divert: d}}
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("%s: refused on %s: %v", name, linuxHullPath, err)
+		}
+		spec.Net = "none"
 		var ce *CapabilityError
 		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath {
-			t.Errorf("%s: not refused on %s: %v", name, linuxHullPath, err)
+			t.Errorf("%s offline: not refused on %s: %v", name, linuxHullPath, err)
 		}
 	}
 }
 
 // The rest of what hull on Linux cannot do yet is refused rather than booted
-// without: a window, a network of the sandbox's own, a published port, and a
+// without: a window, a network of the sandbox's own, an offline publish, and a
 // monitor or a rootfs mode it would not boot.
 //
 // Each is checked for its own reason, so a case refused by an earlier check
@@ -68,9 +74,10 @@ func TestLinuxHullRefusesWhatItCannotRunYet(t *testing.T) {
 		spec RunSpec
 		want string
 	}{
-		"gui":              {RunSpec{GUI: true}, "cannot display on Linux"},
-		"isolated":         {RunSpec{Net: "isolated"}, "--network isolated"},
-		"publish":          {RunSpec{Net: "shared", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "cannot publish a port yet"},
+		"gui": {RunSpec{GUI: true}, "cannot display on Linux"},
+		"isolated, on cloud-hypervisor": {RunSpec{Net: "isolated", GenericBoot: true, Hypervisor: "cloud-hypervisor"},
+			"a network only on hvi"},
+		"shared, on qemu":  {RunSpec{Net: "shared", GenericBoot: true, Hypervisor: "qemu"}, "a network only on hvi"},
 		"offline publish":  {RunSpec{Net: "none", Publish: []Publication{{HostPort: 3000, GuestPort: 3000}}}, "--network offline"},
 		"unknown monitor":  {RunSpec{GenericBoot: true, Hypervisor: "xen"}, "not one urunc runs on Linux"},
 		"unknown rootfs":   {RunSpec{GenericBoot: true, RootfsMode: "tmpfs"}, "is not a rootfs mode"},
@@ -107,7 +114,7 @@ func TestHullOnLinuxBootsTheRootfsModeDoctorReports(t *testing.T) {
 		if row := h.Isolation(spec).Detail; !strings.Contains(row, "rootfs "+RootfsModeOverlayBlock) {
 			t.Errorf("%q: the ISOLATION row is %q, want the overlay root", asked, row)
 		}
-		args, _, err := linuxRunArgs(spec, nil)
+		args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 		if err != nil {
 			t.Errorf("%q: the boot refused what doctor reports available: %v", asked, err)
 			continue
@@ -194,16 +201,21 @@ func TestMacOSHullNamesTheHypervisorAsked(t *testing.T) {
 	}
 }
 
-// What hull on Linux can run, it runs: no policy, on the shared bridge or
-// offline, a monitor urunc runs or none.
+// What hull on Linux can run, it runs: no policy, on the shared gateway, on
+// one of its own or offline, on hvi, which vz and no setting at all boot on.
+// Offline, it runs on another monitor urunc runs too.
 func TestLinuxHullAcceptsAPlainRun(t *testing.T) {
-	for _, net := range []string{"", "shared", "none"} {
-		for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor"} {
+	for _, net := range []string{"", "shared", "isolated", "none"} {
+		for _, hv := range []string{"", "vz", "hvi"} {
 			spec := RunSpec{Name: "brig-s", Image: "img", Net: net, Hypervisor: hv, GenericBoot: true}
 			if err := linuxHull().CanRun(spec); err != nil {
 				t.Errorf("net %q, hypervisor %q: %v", net, hv, err)
 			}
 		}
+	}
+	if err := linuxHull().CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "none",
+		Hypervisor: "cloud-hypervisor", GenericBoot: true}); err != nil {
+		t.Errorf("offline on cloud-hypervisor: %v", err)
 	}
 	// Offline satisfies every rule set, here as on every other path.
 	if err := linuxHull().CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "none",
@@ -212,16 +224,16 @@ func TestLinuxHullAcceptsAPlainRun(t *testing.T) {
 	}
 }
 
-// The route mode table answers for hull on Linux under its own path, so a
-// route never reads as served there, whatever BRIG_HYPERVISOR says.
+// The route mode table answers for hull on Linux under its own path, so the
+// modes it serves never read from another row, whatever BRIG_HYPERVISOR says.
 func TestLinuxHullServesNoRouteMode(t *testing.T) {
 	for _, hv := range []string{"", "hvi"} {
 		path := RoutePath(linuxHull(), hv)
 		if path != linuxHullPath {
 			t.Errorf("hypervisor %q: route path %s, want %s", hv, path, linuxHullPath)
 		}
-		if modes := ServedModes(path); len(modes) != 0 {
-			t.Errorf("hypervisor %q: hull on Linux serves %v", hv, modes)
+		if modes := ServedModes(path); len(modes) == 0 {
+			t.Errorf("hypervisor %q: hull on Linux serves no route mode", hv)
 		}
 	}
 	// The macOS hull keeps its path.
@@ -274,6 +286,12 @@ func TestDoctorAsksHullOnLinuxTheUruncMonitor(t *testing.T) {
 	}
 }
 
+// The gateway the run line tests hand linuxRunArgs, as runLinux would.
+const (
+	testGatewaySock = "/gw/sandbox-brig-s.sock"
+	testGatewayCIDR = "10.45.0.6/30"
+)
+
 // linuxBootSpec is a generic boot as wrap hands it to hull on Linux, with its
 // boot assets already resolved, a writable home, a read-only share, a value
 // the runtime reads for itself and a stored secret.
@@ -297,7 +315,7 @@ func linuxBootSpec() RunSpec {
 // value in the environment only; the read-only share keeps its :ro.
 func TestLinuxHullRunArgs(t *testing.T) {
 	overlayHost(t)
-	args, env, err := linuxRunArgs(linuxBootSpec(), nil)
+	args, env, err := linuxRunArgs(linuxBootSpec(), testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +325,7 @@ func TestLinuxHullRunArgs(t *testing.T) {
 		"--annotation", annotationBootKernel + "=/assets/vmlinux",
 		"--annotation", annotationBootInitrd + "=/assets/initrd",
 		"--annotation", annotationRootfsMode + "=" + RootfsModeOverlayBlock,
+		"--gateway-sock", testGatewaySock, "--gateway-cidr", testGatewayCIDR,
 		"--snapshotter", "overlayfs",
 		"--shared-dir", "/host/home:/home/agent",
 		"--shared-dir", "/host/ref:/ref:ro",
@@ -323,19 +342,19 @@ func TestLinuxHullRunArgs(t *testing.T) {
 	}
 }
 
-// Nothing of the macOS command line reaches the Linux hull: it has no gateway,
-// no rootfs type, no window and no HULL_ROOTFS_MODE. vz, a macOS backend, boots
+// Nothing of the macOS command line but the gateway reaches the Linux hull: no
+// rootfs type, no window and no HULL_ROOTFS_MODE. vz, a macOS backend, boots
 // on the bundle's hvi.
 func TestLinuxHullRunArgsLeaveOutTheMacOSFlags(t *testing.T) {
 	overlayHost(t)
 	spec := linuxBootSpec()
 	spec.Hypervisor, spec.RootfsType, spec.GUI, spec.GUITitle = "vz", "virtiofs", true, "title"
-	args, env, err := linuxRunArgs(spec, nil)
+	args, env, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := strings.Join(args, " ")
-	for _, flag := range []string{"--gateway-sock", "--gateway-cidr", "--rootfs-type", "--gui", "--gui-title"} {
+	for _, flag := range []string{"--rootfs-type", "--gui", "--gui-title"} {
 		if slices.Contains(args, flag) {
 			t.Errorf("the Linux run line carries %s: %s", flag, line)
 		}
@@ -355,7 +374,7 @@ func TestLinuxHullRunArgsLeaveOutTheMacOSFlags(t *testing.T) {
 func TestLinuxHullRunArgsOfAnImageWithItsOwnKernel(t *testing.T) {
 	spec := linuxBootSpec()
 	spec.GenericBoot = false
-	args, _, err := linuxRunArgs(spec, nil)
+	args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,25 +387,46 @@ func TestLinuxHullRunArgsOfAnImageWithItsOwnKernel(t *testing.T) {
 	}
 }
 
-// Offline is --net none. An isolated run never becomes a shared one on the
-// command line, even for a caller that skipped CanRun.
+// Offline is --net none, with no gateway. A networked run is --net shared on
+// the gateway it was given, which is how hull takes an isolated one too. With
+// no gateway, no networked run reaches the command line, even for a caller
+// that skipped runLinux: hull's --net shared alone is its CNI bridge, which
+// every sandbox shares.
 func TestLinuxHullRunArgsNetwork(t *testing.T) {
 	spec := linuxBootSpec()
 	spec.Net = "none"
-	args, _, err := linuxRunArgs(spec, nil)
+	args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
 	if err != nil || !strings.Contains(strings.Join(args, " "), "--net none ") {
 		t.Errorf("offline: %v: %s", err, strings.Join(args, " "))
 	}
-	spec.Net = "isolated"
-	if args, _, err := linuxRunArgs(spec, nil); err == nil {
-		t.Errorf("an isolated run reached the command line: %s", strings.Join(args, " "))
+	if slices.Contains(args, "--gateway-sock") || slices.Contains(args, "--gateway-cidr") {
+		t.Errorf("an offline run joins a gateway: %s", strings.Join(args, " "))
+	}
+	for _, net := range []string{"", "shared", "isolated"} {
+		spec.Net = net
+		args, _, err := linuxRunArgs(spec, testGatewaySock, testGatewayCIDR, nil)
+		line := strings.Join(args, " ")
+		if err != nil || !strings.Contains(line, "--net shared ") ||
+			!strings.Contains(line, "--gateway-sock "+testGatewaySock+" --gateway-cidr "+testGatewayCIDR+" ") {
+			t.Errorf("%q: %v: %s", net, err, line)
+		}
+		for _, gw := range [][2]string{{"", ""}, {testGatewaySock, ""}, {"", testGatewayCIDR}} {
+			if args, _, err := linuxRunArgs(spec, gw[0], gw[1], nil); err == nil {
+				t.Errorf("%q with gateway %q reached the command line: %s", net, gw, strings.Join(args, " "))
+			}
+		}
 	}
 }
 
 // Run on hull on Linux runs one command, `hull run` with the Linux command
-// line. It starts no network gateway, which the Linux hull does not have.
+// line, on the shared gateway that is already up.
 func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
 	overlayHost(t)
+	sharedGatewayAt(t, "brig-s", 5)
+	sock, err := gatewaySocket()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	log := filepath.Join(dir, "argv.log")
 	bin := filepath.Join(dir, "hull")
@@ -405,7 +445,13 @@ func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("hull was run %d times, want once: %q", len(calls), calls)
 	}
+	// The address the shared network gave brig-s, which it keeps.
+	cidr, err := gatewayCIDR("brig-s")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasPrefix(calls[0], "run --detach --name brig-s --net shared ") ||
+		!strings.Contains(calls[0], " --gateway-sock "+sock+" --gateway-cidr "+cidr+" ") ||
 		!strings.HasSuffix(calls[0], " sleep infinity") {
 		t.Errorf("hull was run as: %s", calls[0])
 	}
@@ -470,7 +516,7 @@ func TestLinuxHullSandboxNetworkReadsTheNetworkLabel(t *testing.T) {
 // back to hvi. So is the same run without a share, which is the spec brig
 // plan and the early check hold: refused on the shares alone, plan accepted
 // a run that Run then refused. A share on each monitor that takes one goes
-// through.
+// through, offline: off hvi there is no gateway to give it a network on.
 func TestLinuxHullRefusesAShareOnAMonitorWithoutOne(t *testing.T) {
 	share := []Share{{Host: "/host/work", Guest: "/work"}}
 	spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: "firecracker", Shares: share}
@@ -483,7 +529,7 @@ func TestLinuxHullRefusesAShareOnAMonitorWithoutOne(t *testing.T) {
 		t.Errorf("firecracker as brig plan asks: %v, want the refusal Run gives", err)
 	}
 	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor", "qemu"} {
-		spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: hv, Shares: share}
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "none", GenericBoot: true, Hypervisor: hv, Shares: share}
 		if err := linuxHull().CanRun(spec); err != nil {
 			t.Errorf("a share on %q: %v", hv, err)
 		}
@@ -539,5 +585,86 @@ func TestLinuxHullResolvesBootAssetsThroughOras(t *testing.T) {
 	}
 	if asked, err := os.ReadFile(hullLog); err == nil {
 		t.Errorf("hull was asked about the boot assets: %q", asked)
+	}
+}
+
+// Negative: a hull on Linux whose gateway cannot take the rules, or cannot be
+// asked, boots nothing under a policy. The refusal names hull on
+// io.containerd.urunc.v2 and never BRIG_HYPERVISOR=hvi, which would send a
+// Linux user to a macOS backend.
+func TestLinuxHullRefusesAPolicyItsGatewayCannotTake(t *testing.T) {
+	for _, tc := range []struct {
+		name, help, exit string
+		state            Capability
+	}{
+		{"no flag", "   --socket string\n", "0", CannotEnforce},
+		{"failed probe", egressHelp, "2", Unknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newLinuxHullDouble(t, tc.help, tc.exit)
+			spec := linuxBootSpec()
+			spec.Net, spec.Egress = "isolated", Egress{Default: "deny"}
+			err := h.Run(spec)
+			var ce *CapabilityError
+			if !errors.As(err, &ce) {
+				t.Fatalf("a policy on a gateway that cannot take it was not refused: %v", err)
+			}
+			if ce.Property != EgressPolicy || ce.State != tc.state || ce.Path != linuxHullPath {
+				t.Errorf("refused as %s on %s (%s), want %s on %s (%s)", ce.Property, ce.Path, ce.State,
+					EgressPolicy, linuxHullPath, tc.state)
+			}
+			switch tc.state {
+			case CannotEnforce:
+				if !strings.Contains(err.Error(), "--egress-default") {
+					t.Errorf("the refusal does not say what the gateway lacks: %v", err)
+				}
+			case Unknown:
+				if ce.Err == nil {
+					t.Errorf("the refusal of a failed probe carries no cause: %v", err)
+				}
+				assertProbeRefusal(t, err, d.bin)
+			}
+			if bootedOn(d) {
+				t.Errorf("hull booted a guest under a policy it was refused: %s", d.calls())
+			}
+			if strings.Contains(err.Error(), "BRIG_HYPERVISOR=hvi") {
+				t.Errorf("the refusal sends a Linux user to hvi: %v", err)
+			}
+			if !strings.Contains(err.Error(), "io.containerd.urunc.v2") {
+				t.Errorf("the refusal does not name the Linux run path: %v", err)
+			}
+		})
+	}
+}
+
+// A route rides the gateway as the rules do, and urunc joins only hvi to one.
+// On another monitor brig.internal and a route's divert are refused as
+// unenforced, exit 7, by the run and by brig policy check alike; offline and
+// on hvi nothing changes.
+func TestLinuxHullServesARouteOnlyOnHvi(t *testing.T) {
+	d := Divert{BrigInternal: true, Socket: "/tmp/divert.sock",
+		Routes: []DivertRoute{{Host: "169.254.170.2", Port: 80}}}
+	for _, hv := range []string{"", "hvi"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv, Egress: Egress{Divert: d}}
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("hypervisor %q: a route was refused on hull on Linux: %v", hv, err)
+		}
+	}
+	for _, hv := range []string{"qemu", "cloud-hypervisor"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated", Hypervisor: hv, Egress: Egress{Divert: d}}
+		var ce *CapabilityError
+		if err := linuxHull().CanRun(spec); !errors.As(err, &ce) || ce.Path != linuxHullPath || ce.State != CannotEnforce {
+			t.Errorf("hypervisor %q: a route was not refused as unenforced on %s: %v", hv, linuxHullPath, err)
+		}
+		p := RouteModeProperty(v1alpha1.ModeEndpoint)
+		if err := RequireGatewayMonitor(p, linuxHull(), hv, "isolated"); !errors.As(err, &ce) || ce.Path != linuxHullPath {
+			t.Errorf("hypervisor %q: brig policy check does not refuse the route: %v", hv, err)
+		}
+		if err := RequireGatewayMonitor(p, linuxHull(), hv, "none"); err != nil {
+			t.Errorf("hypervisor %q: an offline run was refused for its monitor: %v", hv, err)
+		}
+		if err := RequireGatewayMonitor(p, &hull{bin: "hull"}, hv, "isolated"); err != nil {
+			t.Errorf("hypervisor %q: the macOS hull was asked about urunc's monitors: %v", hv, err)
+		}
 	}
 }

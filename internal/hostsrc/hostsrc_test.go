@@ -153,3 +153,45 @@ func TestEmptyKeychainValueIsAbsent(t *testing.T) {
 		t.Error("an empty item reported a value")
 	}
 }
+
+// A Claude Code credentials document carries expiresAt once for the login and
+// once more for every MCP server that signed in with OAuth. The expiry an
+// import records must be the login's: a run warns from it, and an MCP token
+// that lapsed an hour ago told every run that a valid login had expired. The
+// search used to stop at whichever expiresAt map order reached first, so the
+// loop is what keeps a lucky order from passing this.
+func TestExtractRecordsTheLoginExpiryOfEveryClaudeProfile(t *testing.T) {
+	const login, mcp = 1900000000000, 1800000000000
+	blob := []byte(fmt.Sprintf(`{
+		"claudeAiOauth": {"accessToken": "a", "expiresAt": %d},
+		"mcpOAuth": {
+			"server-one|0001": {"accessToken": "b", "expiresAt": %d},
+			"server-two|0002": {"accessToken": "c", "expiresAt": %d},
+			"server-three|0003": {"accessToken": "d", "expiresAt": %d}
+		}
+	}`, login, mcp, mcp+1, mcp+2))
+	for _, name := range []string{"claude-code", "claude-desktop", "herdr"} {
+		p, _, ok := profile.BuiltIn(name)
+		if !ok {
+			t.Fatalf("no built-in profile %q", name)
+		}
+		var decl profile.SecretDecl
+		for _, d := range p.Secrets {
+			if d.Name == "claude-credentials" {
+				decl = d
+			}
+		}
+		if decl.ExpiryField == "" {
+			t.Fatalf("%s: claude-credentials declares no expiryField", name)
+		}
+		for i := 0; i < 500; i++ {
+			_, expiry, err := Extract(Value{Bytes: blob}, decl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if expiry != login {
+				t.Fatalf("%s: import %d recorded expiry %d; want the login's %d", name, i, expiry, login)
+			}
+		}
+	}
+}

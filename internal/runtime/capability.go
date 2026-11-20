@@ -76,12 +76,16 @@ var records = []Record{
 		"qemu takes its network from vmnet, which brig does not filter. brig enforces a policy " +
 			"at the user-mode network gateway that only the hvi backend uses",
 		"Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy"},
-	// hull on Linux boots its guest through urunc too, but gives it no
-	// network of its own yet, and the nerdctl rules need one. Named by the
-	// shim rather than the monitor, so BRIG_HYPERVISOR=hvi on Linux never
-	// reads the hvi row above, which is the macOS gateway's.
-	{EgressPolicy, linuxHullPath, CannotEnforce, linuxHullNoNetworkWhy + ", where brig puts a policy's rules",
-		linuxHullRemedy},
+	// hull on Linux boots its guest through urunc on a network gateway of
+	// its own, the same binary as the macOS gateway, on hvi only: on another
+	// monitor linuxHullEgress refuses the policy. A run on 2026-11-18
+	// (hull 4bf76a6, urunc 5c6bc70, hvi 0.1.0-rc.3) refused github.com and
+	// one.one.one.one and served example.com. Named by the shim rather than
+	// the monitor, so BRIG_HYPERVISOR=hvi on Linux never reads the hvi row
+	// above. gatewayEnforces confirms the gateway at boot.
+	{EgressPolicy, linuxHullPath, Enforced,
+		"brig puts the rules on the hull network gateway that is this sandbox's only way out",
+		""},
 	{EgressPolicy, RunPath{"nerdctl", anyBackend}, Enforced,
 		"brig puts the rules in nftables on the bridge of the sandbox's own network, and answers its DNS",
 		""},
@@ -160,6 +164,61 @@ func (e *CapabilityError) Error() string {
 }
 
 func (e *CapabilityError) Unwrap() error { return e.Err }
+
+// EgressServed returns why a run of spec on rt, on the hypervisor named, would
+// be refused for its egress rules, or nil. The path is the one the run takes,
+// and the answer is the one its CanRun reads, so brig policy check refuses
+// what the run refuses. The boot's probes are not run: a path the table holds
+// as enforced can still fail at boot on a host whose gateway or nft cannot.
+func EgressServed(rt Runtime, hypervisor string, spec RunSpec) error {
+	path := RoutePath(rt, hypervisor)
+	if path == linuxHullPath {
+		return linuxHullEgress(spec, hypervisor)
+	}
+	return requireEgress(spec, path)
+}
+
+// linuxHullEgress is requireEgress for hull on Linux, where the row holds only
+// on hvi: urunc joins no other monitor to a gateway, and the run refuses a
+// networked sandbox on one. A policy there is refused as unenforced, exit 7,
+// by brig policy check and brig run alike.
+func linuxHullEgress(spec RunSpec, hypervisor string) error {
+	if err := requireEgress(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if !spec.Egress.Filtered() || spec.Net == "none" {
+		return nil
+	}
+	return linuxHullOnHvi(EgressPolicy, hypervisor)
+}
+
+// linuxHullOnHvi refuses property p for a networked run of hull on Linux on a
+// monitor other than hvi: urunc joins no other monitor to a gateway, so
+// nothing there would apply the rules or route brig.internal. The refusal is
+// a CapabilityError, exit 7, as for any path that cannot enforce a policy.
+func linuxHullOnHvi(p Property, hypervisor string) error {
+	monitor, err := linuxMonitor(hypervisor)
+	if err != nil {
+		return err
+	}
+	if monitor == monitorHvi {
+		return nil
+	}
+	return &CapabilityError{Property: p, Path: linuxHullPath, State: CannotEnforce,
+		Why: fmt.Sprintf("hull on Linux joins a sandbox to its network gateway only on hvi, "+
+			"and this run asks for %s", monitor),
+		Remedy: "Unset BRIG_HYPERVISOR to boot on hvi, or detach the policy"}
+}
+
+// RequireGatewayMonitor is linuxHullOnHvi for a run on rt: nil unless rt is
+// hull on Linux, the run has a network, and hypervisor names a monitor other
+// than hvi. brig policy check asks it for a route mode, as the run does.
+func RequireGatewayMonitor(p Property, rt Runtime, hypervisor, net string) error {
+	if h, ok := rt.(*hull); !ok || !h.linux || net == "none" {
+		return nil
+	}
+	return linuxHullOnHvi(p, hypervisor)
+}
 
 // requireEgress refuses a run whose path does not enforce the policy it
 // carries. A run with no policy asks nothing. An offline run asks nothing

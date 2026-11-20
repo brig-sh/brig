@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -132,7 +134,26 @@ func builtFor(version string) string {
 func (h *hull) BootsLinuxBundle() bool { return h.linux }
 
 func (h *hull) Kind() string { return "hull" }
-func (h *hull) Bin() string  { return h.bin }
+
+// Fallback says that BRIG_CONTAINERD_RUNTIME is set and hull does not read
+// it. The variable picks nerdctl's containerd shim. hull on Linux boots every
+// sandbox through urunc whatever it names, and hull on macOS has no shim, so
+// the value was ignored without a word, runc included. That is not a weaker
+// boundary, since the guest keeps a kernel of its own, but it is not the run
+// the reader set up.
+func (h *hull) Fallback() string {
+	v := os.Getenv("BRIG_CONTAINERD_RUNTIME")
+	if v == "" {
+		return ""
+	}
+	if h.linux {
+		return fmt.Sprintf("BRIG_CONTAINERD_RUNTIME=%s is not read by hull, which boots every sandbox "+
+			"through %s. It applies to the nerdctl runtime", v, uruncShim)
+	}
+	return fmt.Sprintf("BRIG_CONTAINERD_RUNTIME=%s is not read by hull. It applies to the nerdctl "+
+		"runtime on Linux", v)
+}
+func (h *hull) Bin() string { return h.bin }
 
 // Isolation is a microVM on every hull backend: vz, hvi and qemu are all
 // hypervisors, so the guest has a kernel of its own whichever one boots it.
@@ -172,7 +193,7 @@ func (h *hull) Isolation(spec RunSpec) Isolation {
 	if mode != "" {
 		rootfs = mode
 	}
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
+	return Isolation{Boundary: BoundaryVM, Detail: fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
 }
 
 // linuxHullIsolation is the ISOLATION row of hull on Linux. See Isolation.
@@ -270,13 +291,24 @@ func hullVersionPinsDigest(out string) bool {
 	return hullVersionAtLeast(out, 23, true)
 }
 
+// untaggedPseudoVersion is the pseudo-version Go gives a commit with no tag
+// behind it, without its leading v: 0.0.0, the commit time as fourteen digits
+// and twelve hex digits of the commit, then hull's +dirty when the tree was.
+var untaggedPseudoVersion = regexp.MustCompile(`^0\.0\.0-[0-9]{14}-[0-9a-f]{12}(\+\S*)?$`)
+
 // hullVersionAtLeast reads `hull --version` and reports whether that hull is
 // 0.1.0-rc<rc> or later. Anything that does not read as a version is a build
 // from source, and gets unknown: each caller knows which wrong guess costs
 // less.
+//
+// So does Go's pseudo-version for a commit with no tag behind it,
+// 0.0.0-<date>-<commit>. It is what a checkout without hull's tags builds as,
+// a one-commit-deep fetch among them, and it says nothing about which release
+// the commit follows. Read as 0.0.0 it put a current hull below rc23, and brig
+// stopped pinning boot images by digest under it.
 func hullVersionAtLeast(out string, rc int, unknown bool) bool {
 	word := VersionToken(out)
-	if word == "" {
+	if word == "" || untaggedPseudoVersion.MatchString(word) {
 		return unknown
 	}
 	base, pre, _ := strings.Cut(word, "-")
@@ -561,6 +593,12 @@ func (h *hull) List() ([]Instance, error) {
 	}
 	var list []Instance
 	for i, line := range strings.Split(out.String(), "\n") {
+		// What hull prints for an empty store, in place of the table. Read
+		// as a row it was an instance named "No", which hull could not
+		// inspect, and that doubt kept the shared gateway up for good.
+		if strings.TrimSpace(line) == "No instances found" {
+			continue
+		}
 		f := strings.Fields(line)
 		if len(f) < 2 {
 			continue
@@ -589,37 +627,13 @@ func (h *hull) Run(spec RunSpec) error {
 	gatewaySock, gatewayCidr := "", ""
 	usedIsolated := false
 	if hv == "hvi" && net != "none" {
-		// hull takes the socket and the address together and configures the
-		// guest statically, so both are ours to assign.
-		if isolatedNet(net, spec.Egress) {
-			// A network of this sandbox's own, which is also the only place a
-			// policy can be enforced: the rules go on this gateway, and no
-			// other sandbox is behind it. See gateway.go and sandboxnet.go.
-			index, err := sandboxNet(spec.Name)
-			if err != nil {
-				return err
-			}
-			sock, err := ensureIsolatedGateway(h.bin, spec.Name, index, spec.Egress)
-			if err != nil {
-				return err
-			}
-			gatewaySock, gatewayCidr, usedIsolated = sock, sandboxCIDR(index), true
-		} else {
-			sock, release, err := ensureGateway(h.bin)
-			if err != nil {
-				return err
-			}
-			// Held until `hull run` returns, by which time the VMM names the
-			// socket in the process table. See leaseSharedGateway.
-			defer release()
-			// One address on the network every shared sandbox is on. See
-			// gatewayip.go.
-			cidr, err := gatewayCIDR(spec.Name)
-			if err != nil {
-				return err
-			}
-			gatewaySock, gatewayCidr = sock, cidr
+		var release func()
+		var err error
+		gatewaySock, gatewayCidr, usedIsolated, release, err = h.joinGateway(spec.Name, net, spec.Egress)
+		if err != nil {
+			return err
 		}
+		defer release()
 		// Before the boot, so a port that cannot be published stops the run
 		// rather than leaving a sandbox up with an envelope naming a hole
 		// nothing is listening on. The gateway forwards to an address, and the
@@ -657,6 +671,46 @@ func (h *hull) Run(spec RunSpec) error {
 	return nil
 }
 
+// joinGateway picks the gateway a networked sandbox joins on net, starting it
+// if nothing serves it yet, and returns its control socket and the address the
+// guest takes on it. isolated says the gateway is this sandbox's own. release
+// is run once `hull run` has returned.
+//
+// hull takes the socket and the address together and configures the guest
+// statically, so both are ours to assign. Both hulls join a gateway the same
+// way, so both ask this.
+func (h *hull) joinGateway(name, net string, policy Egress) (sock, cidr string, isolated bool, release func(), err error) {
+	if isolatedNet(net, policy) {
+		// A network of this sandbox's own, which is also the only place a
+		// policy can be enforced: the rules go on this gateway, and no
+		// other sandbox is behind it. See gateway.go and sandboxnet.go.
+		index, err := sandboxNet(name)
+		if err != nil {
+			return "", "", false, nil, err
+		}
+		sock, err := ensureIsolatedGateway(h.bin, h.gatewayPath(), name, index, policy)
+		if err != nil {
+			return "", "", false, nil, err
+		}
+		return sock, sandboxCIDR(index), true, func() {}, nil
+	}
+	sock, release, err = ensureSharedGateway(h.bin, !h.linux)
+	if err != nil {
+		return "", "", false, nil, err
+	}
+	// One address on the network every shared sandbox is on. See
+	// gatewayip.go.
+	cidr, err = gatewayCIDR(name)
+	if err != nil {
+		release()
+		return "", "", false, nil, err
+	}
+	// The release is held until `hull run` returns, by which time the VMM
+	// names the socket in the process table on macOS, and hull on Linux lists
+	// the instance. See leaseSharedGateway and PruneSharedNetwork.
+	return sock, cidr, false, release, nil
+}
+
 // boot runs `hull run` with args, the command line of either hull, and envVals
 // in its environment. Both hulls boot through here, so they report a boot the
 // same way.
@@ -683,24 +737,80 @@ func (h *hull) boot(spec RunSpec, args, envVals []string) error {
 	if err != nil {
 		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
 	}
+	// A warning is the one thing on a boot that worked worth reading. hull on
+	// Linux warns, and exits 0, when the image's user may not write to the
+	// gateway socket hvi joins as that user: the guest is up with no network,
+	// and with the warning held as the rest is, nothing said why.
+	if spec.Progress == nil {
+		for _, w := range said.warnings() {
+			noticef(spec.Notice, "%s: %s", filepath.Base(h.bin), w)
+		}
+	}
 	return nil
 }
 
-// runLinux boots a sandbox on hull on Linux. There is no gateway to start
-// and no publication to install: linuxSupports refuses every run that would
-// need one, so what is left is the command line.
+// runLinux boots a sandbox on hull on Linux. A networked one joins a hull
+// network gateway, as an hvi sandbox does on macOS: the shared one, or one of
+// its own when it is isolated. urunc has hvi join it through the socket, and
+// the guest has no other network. hull's CNI bridge is never used: every
+// sandbox on it shares one L2 segment, so one guest could reach, or answer
+// ARP for, any other, whatever posture either asked for.
+//
+// The published ports, the diverts and brig.internal ride the gateway as on
+// hvi: the diverts and the brig.internal record are on the command line brig
+// starts the gateway with, and the ports are installed on it before the boot.
 func (h *hull) runLinux(spec RunSpec) error {
 	if err := linuxSupports(spec); err != nil {
 		return err
 	}
+	net := orDefault(spec.Net, "shared")
+	gatewaySock, gatewayCidr := "", ""
+	usedIsolated := false
+	if net != "none" {
+		var release func()
+		var err error
+		gatewaySock, gatewayCidr, usedIsolated, release, err = h.joinGateway(spec.Name, net, spec.Egress)
+		if err != nil {
+			return err
+		}
+		defer release()
+		// Before the boot, so a port that cannot be published stops the run
+		// rather than leaving a sandbox up with an envelope naming a hole
+		// nothing is listening on. The gateway forwards to an address, and the
+		// guest need not be up yet for the listener to exist. See
+		// gatewayapi.go. A gateway that cannot publish is refused with the
+		// remedy of hull on Linux; see linuxUnpublishable.
+		refuse := func(err error) error { return linuxUnpublishable(err, gatewaySock) }
+		if err := reconcilePublicationsWith(gatewaySock, addrOf(gatewayCidr), spec.Publish, refuse); err != nil {
+			withdrawPublications(spec.Name)
+			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
+		}
+	}
+	// hull checks the kernel against the record beside it before it boots.
+	fillBootRecord(spec)
 	// oras rather than `hull assets pull`, as on nerdctl and in
 	// ResolveBootAssets. A run wrap drives arrives with BootAssets resolved,
 	// so this fetches only for a caller that resolved none.
-	args, envVals, err := linuxRunArgs(spec, orasFetcher(spec))
+	args, envVals, err := linuxRunArgs(spec, gatewaySock, gatewayCidr, orasFetcher(spec))
 	if err != nil {
+		// No guest will boot behind the forwards installed above, and a
+		// sandbox that was never created gives stop and rm nothing to act on.
+		withdrawPublications(spec.Name)
 		return err
 	}
-	return h.boot(spec, args, envVals)
+	if err := h.boot(spec, args, envVals); err != nil {
+		// The forwards were installed for a guest that did not boot. On the
+		// shared gateway they would hold the host ports until it restarts.
+		withdrawPublications(spec.Name)
+		return err
+	}
+	// As on macOS: an isolated gateway still up under a sandbox that is not
+	// behind it outlived an earlier instance, and NetworkStale would read it
+	// as this one's posture. See Run.
+	if !usedIsolated {
+		shutDownGateway(spec.Name)
+	}
+	return nil
 }
 
 // brigInternalProbes holds the answer of ProbeBrigInternal per hull binary.
@@ -710,20 +820,21 @@ var brigInternalProbes sync.Map
 // ProbeBrigInternal reports whether this hull's network gateway takes
 // --divert, which brig.internal needs beside the --host record every hull
 // takes. A hull without it refuses the flag only when the sandbox's gateway
-// starts.
+// starts. A refusal names the run path of the hull asked.
 func (h *hull) ProbeBrigInternal() error {
 	if err, ok := brigInternalProbes.Load(h.bin); ok {
 		err, _ := err.(error)
 		return err
 	}
-	err := gatewayDiverts(h.bin)
+	err := gatewayDivertsOn(h.bin, h.gatewayPath())
 	brigInternalProbes.Store(h.bin, err)
 	return err
 }
 
 // ProbeLinkLocal reports whether this hull's network gateway takes a
-// --divert of LinkLocalDivert. See gatewayDivertsLinkLocal.
-func (h *hull) ProbeLinkLocal() error { return probeLinkLocal(h.bin) }
+// --divert of LinkLocalDivert. See gatewayDivertsLinkLocalOn. A refusal names
+// the run path of the hull asked.
+func (h *hull) ProbeLinkLocal() error { return probeLinkLocalOn(h.bin, h.gatewayPath()) }
 
 // BrigInternalAddr is the address of the sandbox's own gateway, which hull
 // answers brig.internal with. A sandbox that reaches brig.internal has a
@@ -751,61 +862,94 @@ func (h *hull) CanRun(spec RunSpec) error {
 // does, and never reads a row of hull's macOS backends.
 var linuxHullPath = RunPath{"hull", uruncShim}
 
-// IsLinuxHull reports whether rt is hull on Linux. Every sandbox it boots is
-// on one shared network, so wrap defaults an unset posture to shared there,
-// as it does for the macOS hull's vz and qemu, and names nerdctl as the way
-// to an isolated one.
+// macGatewayPath is the run path of the macOS hull's gateway. hvi is the only
+// macOS backend that boots on a gateway brig owns.
+var macGatewayPath = RunPath{"hull", "hvi"}
+
+// gatewayPath returns the run path the gateway probes name in a refusal: the
+// probe for the rules, the one for the diverts and the link-local one. A hull
+// on Linux with a gateway too old for any of them is told its own path, hull
+// on io.containerd.urunc.v2, with the probe's own remedy: upgrade the runtime,
+// or detach the policy. BRIG_HYPERVISOR=hvi means nothing there.
+func (h *hull) gatewayPath() RunPath {
+	if h.linux {
+		return linuxHullPath
+	}
+	return macGatewayPath
+}
+
+// IsLinuxHull reports whether rt is hull on Linux. wrap asks so that a hull
+// on Linux never takes the macOS hull's vz fallback to shared: BRIG_HYPERVISOR
+// names a macOS backend there, and the sandbox boots on hvi and its gateway
+// whatever it says.
 func IsLinuxHull(rt Runtime) bool {
 	h, ok := rt.(*hull)
 	return ok && h.linux
 }
 
-// The reason and the remedy of the rows of linuxHullPath in the capability
-// and route mode tables.
-const (
-	linuxHullNoNetworkWhy = "hull on Linux gives a sandbox no network of its own yet"
-	linuxHullRemedy       = "Use nerdctl (BRIG_RUNTIME=nerdctl), or detach the policy"
-)
+// endpointLinuxHullWhy is why hull on Linux serves a route in mode endpoint.
+// The sandbox is on a gateway of its own there, as on hvi, and brig starts it
+// with the same diverts and the same brig.internal record. A run on
+// 2026-11-18 showed it for a urunc guest: getent hosts brig.internal answered
+// the gateway's address, curl of brig.internal:443 and of 169.254.170.2 was
+// answered by the socket each was diverted to, and a gateway port with no
+// divert was refused. See docs/manual-tests/hull-linux-gateway-2026-11-18.md.
+const endpointLinuxHullWhy = "hull's gateway answers brig.internal with its own address and diverts port 443 " +
+	"of it to the broker, which serves it with TLS under the brig CA; the guest boots on urunc and reaches " +
+	"that gateway through hvi"
 
 // linuxSupports is supports for hull on Linux. hull there is a containerd
-// client: urunc boots the guest, the monitor is urunc's, and the network is
-// a CNI bridge shared by every sandbox. It has no gateway, so it refuses
-// everything brig hangs on one on macOS. It cannot read macOS's hvi rows: a
-// policy on hull with BRIG_HYPERVISOR=hvi would otherwise read as enforced
-// on a host where nothing enforces it.
+// client: urunc boots the guest and the monitor is urunc's. A networked
+// sandbox joins a hull network gateway, as on hvi, and brig hands it the
+// policy's egress rules, the diverts, the brig.internal record and the
+// published ports. The path never reads macOS's hvi rows: a policy on hull
+// with BRIG_HYPERVISOR=hvi would otherwise read as enforced on a host where
+// nothing enforces it.
 func linuxSupports(spec RunSpec) error {
 	if spec.GUI {
 		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
 			"run it on macOS, where hull's vz backend can show it")
 	}
-	if err := requireEgress(spec, linuxHullPath); err != nil {
+	// The policy first, from the same answer brig policy check reads, so the
+	// two refuse alike: exit 7, on a monitor other than hvi too.
+	if err := linuxHullEgress(spec, spec.Hypervisor); err != nil {
 		return err
 	}
 	if err := requireDiverts(spec, linuxHullPath); err != nil {
 		return err
 	}
+	// brig.internal is a record and a divert on the gateway too. wrap
+	// refuses the run first, with the route mode table; this is the same
+	// answer for a caller that did not ask it.
 	if spec.Egress.Divert.BrigInternal {
 		if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); err != nil {
 			return err
+		}
+		if spec.Net == "none" {
+			return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: linuxHullPath,
+				State: CannotEnforce, Why: endpointOfflineWhy, Remedy: "Run it with a network, or detach the policy"}
+		}
+	}
+	// A divert rides the gateway, which urunc joins only on hvi. Refused as
+	// brig policy check refuses the route mode it serves, exit 7.
+	if spec.Net != "none" {
+		for _, r := range spec.Egress.Divert.Routes {
+			if err := linuxHullOnHvi(RouteModeProperty(orMode(r.Mode)), spec.Hypervisor); err != nil {
+				return err
+			}
+		}
+		if spec.Egress.Divert.BrigInternal {
+			if err := linuxHullOnHvi(RouteModeProperty(v1alpha1.ModeEndpoint), spec.Hypervisor); err != nil {
+				return err
+			}
 		}
 	}
 	if err := checkSetup(spec, linuxHullPath); err != nil {
 		return err
 	}
-	if len(spec.Publish) > 0 {
-		if spec.Net == "none" {
-			return offlinePublishError(spec.Publish)
-		}
-		return fmt.Errorf("this sandbox publishes %s, and hull on Linux cannot publish a port yet; "+
-			"withdraw it with `brig network unpublish`, or use nerdctl (BRIG_RUNTIME=nerdctl). "+
-			"A publication outlives the run that made it, so this applies whether or not "+
-			"--publish is on this line", spec.Publish[0])
-	}
-	// The posture is a promise too: the bridge hull attaches a sandbox to is
-	// shared, and two sandboxes on it reach each other.
-	if spec.Net == "isolated" {
-		return errors.New("--network isolated gives the sandbox a network of its own, which hull on Linux " +
-			"cannot do yet; use nerdctl (BRIG_RUNTIME=nerdctl), or run with --network shared")
+	// Published on the gateway, as on hvi. An offline sandbox has none.
+	if len(spec.Publish) > 0 && spec.Net == "none" {
+		return offlinePublishError(spec.Publish)
 	}
 	if spec.GenericBoot {
 		monitor, err := linuxMonitor(spec.Hypervisor)
@@ -820,6 +964,17 @@ func linuxSupports(spec RunSpec) error {
 			return fmt.Errorf("hull on Linux shares a host directory with the guest only on hvi, cloud-hypervisor "+
 				"or qemu, and this run shares %s on %s; unset BRIG_HYPERVISOR to boot on hvi, or name one of those",
 				shared, monitor)
+		}
+		// After the share, which names what firecracker lacks first. urunc
+		// joins only hvi to a gateway, and hull refuses a gateway run
+		// on any other monitor. brig never falls back to hull's CNI bridge
+		// for one, which every sandbox shares whatever its posture: so a
+		// networked run on another monitor is refused here, before the pull.
+		// An image with its own kernel names no monitor of brig's, and hull
+		// boots it on hvi or refuses it.
+		if spec.Net != "none" && monitor != "hvi" {
+			return fmt.Errorf("hull on Linux gives a sandbox a network only on hvi, and this run "+
+				"asks for %s; unset BRIG_HYPERVISOR to boot on hvi, or run it offline (--network offline)", monitor)
 		}
 	}
 	if _, err := linuxHullRootfsMode(spec); err != nil {
@@ -1052,30 +1207,30 @@ func runArgsFor(rootfsMode func(RunSpec, string) (string, error), spec RunSpec, 
 }
 
 // linuxRunArgs is runArgs for hull on Linux, which takes a different command
-// line: urunc boots the guest there, from a containerd snapshot, on a CNI
-// bridge. Pure, as runArgs is, so a test reads exactly what boots. It returns
-// the argv and the environment carrying the guest variables, which splitEnv
-// divides as on macOS.
+// line: urunc boots the guest there, from a containerd snapshot. Pure, as
+// runArgs is, so a test reads exactly what boots. It returns the argv and the
+// environment carrying the guest variables, which splitEnv divides as on
+// macOS.
 //
-// What it leaves out is as deliberate as what it adds. There is no gateway,
-// so no --gateway-sock or --gateway-cidr; no --rootfs-type, which hull on
-// Linux has no flag for, since urunc decides how the root reaches the VM; no
-// --gui, which linuxSupports refuses; and no HULL_ROOTFS_MODE, which the
-// Linux hull does not read.
-func linuxRunArgs(spec RunSpec, fetch assetFetcher) (args, env []string, err error) {
-	// Said explicitly, rather than through hullNet, which reads every posture
-	// but none as shared: on Linux the bridge is shared by every sandbox, so
-	// an isolated run must never reach this line as a shared one.
-	// linuxSupports refuses it first; this refuses it again for a caller
-	// that did not ask.
-	var net string
-	switch spec.Net {
-	case "none":
-		net = "none"
-	case "", "shared":
-		net = "shared"
-	default:
-		return nil, nil, fmt.Errorf("hull on Linux has no %s network", spec.Net)
+// A networked sandbox joins the gateway on gatewaySock with the address
+// gatewayCidr, which runLinux picked, as on hvi. hull takes that as --net
+// shared with the two --gateway flags; isolation is which gateway the socket
+// names. See hullNet.
+//
+// What it leaves out is as deliberate as what it adds: no --rootfs-type,
+// which hull on Linux has no flag for, since urunc decides how the root
+// reaches the VM; no --gui, which linuxSupports refuses; and no
+// HULL_ROOTFS_MODE, which the Linux hull does not read.
+func linuxRunArgs(spec RunSpec, gatewaySock, gatewayCidr string, fetch assetFetcher) (args, env []string, err error) {
+	// hull's --net shared without a gateway is its CNI bridge, which every
+	// sandbox shares, so a networked run with no gateway is refused rather
+	// than put there: an isolated run would reach it as a shared one.
+	// runLinux always picks one; this refuses again for a caller that did
+	// not.
+	net := hullNet(spec.Net)
+	if net != "none" && (gatewaySock == "" || gatewayCidr == "") {
+		return nil, nil, fmt.Errorf("hull on Linux joins a %s sandbox to a network gateway, and none was given",
+			orDefault(spec.Net, "shared"))
 	}
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--net", net,
@@ -1112,6 +1267,11 @@ func linuxRunArgs(spec RunSpec, fetch assetFetcher) (args, env []string, err err
 		// none, a kernel brig neither chose nor verified for this run: brig
 		// checks the boot assets of a generic boot alone.
 		args = append(args, "--no-boot-assets")
+	}
+	// hull refuses one without the other: the socket says which network to
+	// join, the CIDR says which address to take on it.
+	if net != "none" {
+		args = append(args, "--gateway-sock", gatewaySock, "--gateway-cidr", gatewayCidr)
 	}
 	// The snapshotter brig decided the rootfs mode by, so the snapshot urunc
 	// builds the overlay from is the one brig checked. hull on Linux would
@@ -1181,9 +1341,15 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string, err error) {
 // Generous on purpose. This is not how long the guest may take to come up --
 // that is ReadyTimeout, across many probes -- only how long one probe waits
 // before deciding this attempt landed too early and another one is due.
-//
-// A var for tests.
 var agentCallTimeout = 5 * time.Second
+
+// agentCallDeadline gives one agent call its deadline. It is a var so a test
+// can make the deadline fall when its stand-in for hull is ready for it, and
+// not after a time that a loaded machine may not have given the stand-in to
+// start in.
+var agentCallDeadline = func(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, agentCallTimeout)
+}
 
 // agentCallWaitDelay is how long Run may keep waiting once the deadline has
 // already killed the command.
@@ -1229,7 +1395,7 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, agentCallTimeout)
+	ctx, cancel := agentCallDeadline(parent)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.WaitDelay = agentCallWaitDelay
 	if h.linux {
@@ -1416,7 +1582,7 @@ func (h *hull) Publish(name string, p Publication) error {
 	// another sandbox's port off the shared gateway.
 	live, err := publishedOn(sock, guestIP)
 	if err != nil {
-		return unpublishable(err)
+		return h.unpublishableOn(err, sock)
 	}
 	// An identical forward is already serving this publication. The gateway
 	// keys one by protocol and local address, so asking for it again comes
@@ -1484,7 +1650,7 @@ func (h *hull) Unpublish(name string, p Publication) error {
 				"brig cannot rule out that it holds the forward. A forward it holds "+
 				"stays until that gateway stops", p, name, err)
 		}
-		return unpublishable(err)
+		return h.unpublishableOn(err, sock)
 	}
 	for _, q := range live {
 		if q.Same(p) {
@@ -1538,9 +1704,11 @@ func publishError(err error, p Publication) error {
 // unfiltered while it denies traffic, and a report nobody can trust in one
 // direction is not trusted in the other either.
 func (h *hull) NetworkStale(name, hypervisor, net string, e Egress) bool {
-	if hypervisorOrDefault(hypervisor) != "hvi" || net == "none" {
+	if net == "none" || (!h.linux && hypervisorOrDefault(hypervisor) != "hvi") {
 		// No gateway either way, so nothing here can differ. vz takes its
-		// network from vmnet, which brig neither chose nor can inspect.
+		// network from vmnet, which brig neither chose nor can inspect. hull
+		// on Linux puts every networked sandbox on a gateway, whatever
+		// BRIG_HYPERVISOR names.
 		return false
 	}
 	want := ""
@@ -1626,6 +1794,27 @@ func (h *hull) PruneNetworks(inUse []string) int {
 // listeningGateway. A sandbox that is stopped keeps its publications
 // recorded, and its next boot starts a gateway and reconciles them. The log
 // stays, as the shared log always has.
+//
+// hull on Linux asks two more things, because the process table cannot show
+// the guests there: urunc binds the socket into hvi's root, so hvi's argv
+// names a path inside it that every gateway guest shares, never the socket on
+// the host. The gateway's GET /members must list no guest. And no instance
+// hull lists may be on the gateway; see onSharedGateway. A guest is listed by
+// the gateway only once its VMM has connected, which can be after `hull run`
+// returns and the boot's lease is gone, while hull lists the instance from
+// then on. Stopping a gateway nobody appears to use would take the network of
+// every shared sandbox still running. Kept, it costs one idle process.
+//
+// A gateway that will never answer GET /members, because its API socket is
+// gone or it is from a hull older than /members, is decided by hull's
+// instances alone. Kept, it was there for good: a boot on hull on Linux
+// reuses whatever gateway answers (see ensureSharedGateway), so a gateway
+// that cannot publish a port was the one every later boot found, and no
+// command stopped it. `brig rm --all` is the remedy linuxUnpublishable names
+// for it. What that gives up is a guest hull does not list, such as one
+// booted from another hull store, which only GET /members would show. A
+// gateway whose answer fails in any other way is still kept: that failure
+// says nothing about whether it was ever able to answer.
 func (h *hull) PruneSharedNetwork() bool {
 	sock, err := gatewaySocket()
 	if err != nil {
@@ -1640,6 +1829,15 @@ func (h *hull) PruneSharedNetwork() bool {
 	defer unlock()
 	if bootsInFlight(sock, "") {
 		return false
+	}
+	if h.linux {
+		guests, err := gatewayMemberCount(sock)
+		if err == nil && guests > 0 || err != nil && !noForwardAPI(err) {
+			return false
+		}
+		if h.onSharedGateway(sock) {
+			return false
+		}
 	}
 	procs, err := listProcesses()
 	if err != nil {
@@ -1657,6 +1855,56 @@ func (h *hull) PruneSharedNetwork() bool {
 		argv, ok := procArgv(g.pid)
 		return ok && servesSocket(argv, sock) || listensOn(g.pid, sock)
 	})
+}
+
+// onSharedGateway reports whether an instance hull on Linux lists may be on
+// the shared gateway on sock: one that is not stopped and that `hull inspect`
+// records on that gateway. An instance hull cannot list or inspect, or whose
+// network it does not name, counts as on it, so a doubt keeps the gateway.
+//
+// Any instance hull lists, not only brig's: a gateway stopped under another
+// client's sandbox cuts its network just the same.
+//
+// The paths are compared absolute. hull records the socket it was given made
+// absolute, and BRIG_GATEWAY_SOCK may name a relative one, which would match
+// no instance and let the gateway go under a guest still booting.
+func (h *hull) onSharedGateway(sock string) bool {
+	abs, err := filepath.Abs(sock)
+	if err != nil {
+		return true
+	}
+	list, err := h.List()
+	if err != nil {
+		return true
+	}
+	for _, in := range list {
+		if in.State == "stopped" {
+			continue
+		}
+		out, _, err := inspectNetwork(h.bin, "inspect", in.Name)
+		if err != nil {
+			return true
+		}
+		var state struct {
+			ID            string `json:"id"`
+			Network       string `json:"network"`
+			GatewaySocket string `json:"gatewaySocket"`
+		}
+		if json.Unmarshal(out, &state) != nil || state.ID != in.Name {
+			return true
+		}
+		switch state.Network {
+		case "none", "shared":
+			// Offline, or on hull's CNI bridge: on no gateway.
+		case "gateway":
+			if state.GatewaySocket == "" || filepath.Clean(state.GatewaySocket) == abs {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // releaseGateway shuts an isolated gateway down once the sandbox behind it is
@@ -1784,4 +2032,12 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// orMode is m, or endpoint for a divert that names no mode.
+func orMode(m v1alpha1.RouteMode) v1alpha1.RouteMode {
+	if m == "" {
+		return v1alpha1.ModeEndpoint
+	}
+	return m
 }

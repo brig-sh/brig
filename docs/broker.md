@@ -8,7 +8,7 @@ the credential. A route on the `aws` preset is the exception: it answers the
 guest with temporary AWS keys. See [Routes that vend](#routes-that-vend).
 
 `internal/broker` is the request handler, and `brig-broker` the process
-that hosts it. hull on `hvi` and nerdctl with
+that hosts it. hull on `hvi`, hull on Linux and nerdctl with
 urunc reach a route at `brig.internal`, and a route that vends at
 `169.254.170.2`. A run bound to a policy with routes on any other runtime is
 refused before boot. See [Transports](#transports).
@@ -69,7 +69,7 @@ brig run claude-code ~/code/demo
 `brig info claude-code` names the broker in its `BROKER` row:
 
 ```
-BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint
+BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint, host
 ```
 
 If the secret store does not hold `claude-credentials`, or does not open,
@@ -340,7 +340,8 @@ body](#holding-the-body) has the limits on what all requests hold at once.
 
 The session token is the guest's handle on its route. The tool in the guest
 sends it in one place, the carrier: `Authorization: Bearer`, the basic-auth
-password on a `basicAuth` route, a header the route sets with `{value}`,
+password on a `basicAuth` route, `Authorization: token` on the
+[`github-api` route](#the-github-api-preset), a header the route sets with `{value}`,
 such as `x-api-key`, or the whole `Authorization` value on a route that
 vends. Anywhere else, the agent is leaking its handle: in a prompt that
 echoes the environment, a path, a query, a header of its own. So after the
@@ -478,7 +479,9 @@ changes:
 | 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open. On a `gcp` route, the token could not be minted. See [Minted tokens](#minted-tokens) | `credential` |
 | 502 | The secret is a gcloud pointer, on a route without `services`. Nothing is sent upstream | `credential.gcponly` |
+| 502 | The secret is an aws pointer, on a route that does not vend. Nothing is sent upstream | `credential.vendonly` |
 | 502 | The secret starts a JSON object and does not decode, such as a pointer cut short before its kind field. Nothing is sent upstream | `credential.malformed` |
+| 502 | The secret is a whole JSON object, on a route without `credential.field`. Nothing is sent upstream | `credential.document` |
 | 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
 | 502 | The upstream's certificate does not verify on a route with `inject.tls`, or the TLS handshake with it fails. The upstream refused the client certificate, over HTTP/1.1 or HTTP/2, on a route that presents one | `tls.handshake` |
@@ -499,7 +502,7 @@ A 502 body does not carry the error of the secret backend.
 
 ## `request.allow`
 
-The broker enforces the three lists of `request.allow`. Every list that is
+The broker enforces the four lists of `request.allow`. Every list that is
 set must match.
 
 | List | Matched against |
@@ -507,10 +510,11 @@ set must match.
 | `methods` | The request method |
 | `paths` | `<rest>`, without the query. `*` does not match a `/` |
 | `repos` | The `owner/name` that the first two segments of `<rest>` name, with a `.git` suffix removed. A path with fewer than two segments is refused |
+| `graphql` | The GraphQL operation in the body of a request to `/api/graphql`, on the `github-api` preset alone. See [GraphQL requests](#graphql-requests) |
 
 On a route with `services` each service has its own lists, and the route has
-none. The broker does not read request bodies for this, so a method override
-in a form-encoded body is not refused.
+none. Apart from `graphql`, the broker does not read request bodies for
+this, so a method override in a form-encoded body is not refused.
 
 The `models` and `tools` lists that the Anthropic presets will take read the
 request body. The policy type does not carry them yet, so the broker does not
@@ -907,20 +911,32 @@ An `endpoint` route can never:
 - leave the tool as it is. The tool is pointed at the route URL, and on
   hull and nerdctl it trusts the brig CA for `brig.internal`.
 - serve a tool that pins the upstream's certificate, or that has no setting
-  for its endpoint, such as `gh` for github.com.
+  for its endpoint. A `host` route serves a tool of this kind that takes a
+  host name, such as `gh`: see [The github-api preset](#the-github-api-preset).
 - keep one session from the tool to the upstream. There are two: the
   tool's to the broker, and the broker's to the upstream.
 - leave a request untouched. The broker reads and forwards every request.
 
-This build of Brig serves the `endpoint` mode alone. A policy that names
-another mode still parses. `brig policy check` refuses the route, and a run
+`host` is an `endpoint` route that the guest reaches at its own name,
+`https://<route>.brig.internal`, for a tool that takes a host name and no
+path. The name of a `host` route is a DNS label: at most 63
+characters, and it does not end with a dash. The broker takes the route from
+the host label and the sandbox from the divert socket, and forwards the whole
+request path. A `host` route is reached at its name only: the path form
+`https://brig.internal/<sandbox-id>/r/<route>` is a `404` with
+`check=route.mode`, and so is a host name that names an `endpoint` route. The
+runtime answers the name with the `brig.internal` address, and the upstream
+of a `host` route is not diverted. `host` runs where `endpoint` runs.
+
+This build of Brig serves the `endpoint` and `host` modes alone. A policy
+that names another mode still parses. `brig policy check` refuses the route, and a run
 refuses it before boot with exit `7`:
 
 ```
 brig: policy claude-relay (route anthropic) declares a route in mode relay: a policy applies to this sandbox, and hull on hvi cannot enforce the route mode relay: route mode relay is not part of this build of brig. Use mode: endpoint, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
 
-A route in mode `endpoint` is refused where its run path cannot reach the
+A route in mode `endpoint` or `host` is refused where its run path cannot reach the
 broker:
 
 | Where | What is refused |
@@ -936,22 +952,22 @@ broker:
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
-| `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>` |
-| link-local | hull on `hvi`, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
+| `brig.internal` | hull on `hvi`, hull on Linux, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>`, or `https://<route>.brig.internal` for a `host` route |
+| link-local | hull on `hvi`, hull on Linux, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
 `ca.key`. Its name constraints permit `brig.internal` and exclude every IP
 address, so a guest that trusts it trusts no other site. The broker signs a
-certificate for `brig.internal` at every start, and that key stays in
-memory. A broker that runs for 23 days signs a new one.
+certificate for `brig.internal` and `*.brig.internal` at every start, and
+that key stays in memory. A broker that runs for 23 days signs a new one.
 
 The name resolves to the sandbox's own gateway, and its port 443 reaches the
 broker through the sandbox's divert socket:
 
 | Runtime | Name | Port 443 | Other ports of the address |
 | --- | --- | --- | --- |
-| hull on `hvi` | a `--host` record of the gateway's address on `hull network-gateway` | a `--divert` of the address to the divert socket | reset. The gateway never dials its own address |
+| hull on `hvi` and hull on Linux | a `--host` record of the gateway's address on `hull network-gateway` | a `--divert` of the address to the divert socket | reset. The gateway never dials its own address |
 | nerdctl | a record the egress resolver answers with the bridge's address, whatever the policy | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table |
 
 The broker learns the address when Brig registers the sandbox. A diverted
@@ -1014,7 +1030,7 @@ states the bounds of the token that does cross.
 
 | Runtime | Port 80 | Other ports, and the rest of `169.254.0.0/16` |
 | --- | --- | --- |
-| hull on `hvi` | a `--divert` of the address to the divert socket | reset by the gateway |
+| hull on `hvi` and hull on Linux | a `--divert` of the address to the divert socket | reset by the gateway |
 | nerdctl | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table under a policy with a default |
 
 No `allow` rule is needed for the address, and Brig adds none under
@@ -1023,7 +1039,7 @@ address, which needs hull
 [v0.1.0](https://github.com/brig-sh/hull/releases/tag/v0.1.0) or later.
 `install.sh` installs the newest hull release unless `HULL_VERSION` pins
 another. An older gateway refuses the divert only when it starts, so Brig
-asks the gateway whether it takes the divert before it boots a run with a
+asks hull whether its gateway takes the divert before it boots a run with a
 route that vends. It refuses an older hull with exit `7` and the remedy
 "Upgrade hull, or detach the policy", and a probe with any other answer as
 `unknown`. See [Every command Brig
@@ -1051,8 +1067,8 @@ once, and 512 of every sandbox together. A connection over either is closed.
 ## What the guest gets
 
 Brig mints a token per route on every exec and hands the guest the route's
-`guest.env`, with `{route.url}`, `{session.token}` and `{route.region}`
-filled in. A token is never on a command line. A guest that reaches
+`guest.env`, with `{route.url}`, `{session.token}`, `{route.region}` and
+`{route.host}` filled in. A token is never on a command line. A guest that reaches
 `brig.internal` also gets the CA variables of [Transports](#transports). Per
 preset:
 
@@ -1061,8 +1077,191 @@ preset:
 | `claude-code` | `ANTHROPIC_BASE_URL=<route URL>`, `CLAUDE_CODE_OAUTH_TOKEN=<token>` |
 | `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
 | `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
+| `github-api` | `GH_HOST=github-api.brig.internal`, `GH_ENTERPRISE_TOKEN=<token>` |
 | `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION` and `AWS_DEFAULT_REGION=<the region of the AWS profile>`. The route URL is `http://169.254.170.2/<sandbox>/r/<route>` |
 | `gcp` | `BRIG_GCP_URL=<route URL>`, `BRIG_GCP_TOKEN=<token>`, `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>=<route URL>/<service>/<path>` for each service, and, on the `brig.internal` transport, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` |
+
+### The github-api preset
+
+`github-api` is a `host` route for `gh`. `gh` takes no API URL for
+github.com, so `GH_HOST` names the route and `gh` treats it as a GitHub
+Enterprise host, with the token in `GH_ENTERPRISE_TOKEN`. The broker sends
+the request to `https://api.github.com` with `Authorization: Bearer` and the
+credential. `gh` sends its token as `Authorization: token <token>`. On this
+preset only, the broker reads that scheme, case-insensitively, as the session
+token. On any other route the scheme is not read and the request is a `401`.
+The preset is for `api.github.com`: its path mapping assumes that host, so an
+`upstream` that points at a GitHub Enterprise server does not work through it.
+
+The broker forwards only the paths `gh` sends to an Enterprise host:
+
+| `gh` sends | Forwarded as |
+| --- | --- |
+| `/api/v3` | `/` |
+| `/api/v3/<path>` | `/<path>` |
+| `/api/graphql` | `/graphql` |
+
+Any other path is a `404` with `check=github-api.path`, before the broker reads
+the credential. `request.allow.paths` matches the path `gh` sent, such as
+`/api/v3/repos/*` or `/api/graphql`. `request.allow.repos` is refused on this
+preset. A path rule cannot tell one GraphQL request from another; to limit
+them, use `request.allow.graphql` (see [GraphQL requests](#graphql-requests)).
+
+Select a repository with `gh ... -R <route>.brig.internal/<owner>/<repo>`, such
+as `github-api.brig.internal/<owner>/<repo>` for a route named `github-api`,
+because the host `gh` knows is the name of the route. git clone and push keep
+using the `github-token` route. `gh repo clone` and `gh pr checkout` are not
+served by `github-api`, and neither is `uploads.github.com`.
+
+#### GraphQL requests
+
+Most `gh pr` and `gh issue` commands send GraphQL: one `POST /api/graphql`
+that can read or change anything the token reaches. `request.allow.graphql`
+limits the operation that request carries:
+
+```yaml
+request:
+  allow:
+    graphql:
+      queries: [repository]
+      mutations: [addComment]
+      repos: [brig-sh/brig]
+```
+
+| List | Matched against |
+| --- | --- |
+| `queries` | Each top-level field of a query, through fragments, by field name and not alias. `*` allows any |
+| `mutations` | Each mutation of a mutation, the same way. `*` allows any |
+| `repos` | The `owner` and `name` of each `repository` field at the root of a query, without ASCII case, and the repository of each node ID a mutation names |
+
+A list that is left out allows nothing, so a route without `mutations` is
+read-only. `__typename` is always allowed, and so are `__type` and
+`__schema` in a query: they read the schema, not a repository. The broker
+refuses subscriptions. With `repos`, `queries` may list only `repository`
+and `rateLimit`, because every other root field reaches repositories by a
+node ID, a search, a URL or an owner, which `repos` cannot check.
+
+**On a route with `request.allow.graphql`:**
+
+- Only `graphql` governs `/api/graphql`. `methods` and `paths` do not apply
+  to it.
+- Every other path is the REST API. The broker allows only `GET` and `HEAD`
+  there, narrowed by `methods` and `paths`. This stops `gh api -X PUT
+  .../merge` from merging a pull request that GraphQL refuses to merge.
+- The broker refuses a path that differs from `/api/graphql` only in case, a
+  slash, or a segment after it, such as `/api/v3/GraphQL`.
+
+**What the broker reads.** The broker checks the request before it reads
+the credential, and refuses a request that it cannot read whole:
+
+- a `POST` of `application/json`, not compressed, with no query string, and
+  at most 8 MiB
+- one JSON object with only `query`, `operationName` and `variables`, no key
+  twice at any depth, nested at most 64 deep, in UTF-8
+- a query in the GraphQL specification of October 2021, at most 64 deep and
+  50,000 tokens, with no name of an operation, fragment, variable, argument
+  or input field twice, no undefined fragment, and no fragment cycle
+
+The broker picks the operation as GitHub does: the one `operationName`
+names, or the only one. A repository name must be ASCII, from a string or a
+variable, and not a block string.
+
+**Renamed and moved repositories.** GitHub resolves the old name of a
+renamed or transferred repository to its new one, so a name that matches
+`repos` can reach a repository it never listed. With `repos`, the broker
+asks GitHub, with the route's credential, whether each repository exists
+under exactly that name (`followRenames: false`) before it forwards the
+request. It keeps each confirmation for five minutes for each route.
+
+**Mutations.** A mutation names its target by node ID, such as
+`subjectId: "PR_kw..."`, and not by repository. With `repos`, the broker
+reads every node ID in each mutation's arguments: each argument or input
+field named `id`, `ids`, `inReplyTo`, `allowedActors` or `reviewers`, or
+ending in `Id` or `Ids`, except `clientMutationId`, through input objects,
+lists, variables and their defaults. It asks GitHub for the repository of each ID with one
+`nodes(ids:)` query, with the route's credential, and forwards the mutation
+only when every ID belongs to a listed repository. An exact `owner/name`
+matches by repository ID, so a renamed repository matches only its current
+name. A glob matches the current `owner/name`.
+
+A pull request has two repositories: the base, and the head that
+`updatePullRequestBranch` writes to. Both must be listed, so a mutation on
+a pull request from a fork is refused unless `repos` also lists the fork.
+
+The broker refuses:
+
+- an ID that does not resolve, or that belongs to no repository, such as a
+  user
+- an ID field whose value is not a string or a list of strings
+- a field that names its target by name or by URL, such as
+  `repositoryNameWithOwner` or `subIssueUrl`, since only an ID can be looked
+  up. This includes fields such as `homepageUrl` that name no target
+- a `headRefName` written as `owner:branch`, which names a branch in a fork;
+  use `headRepositoryId`
+- a mutation that names no node ID, because nothing ties it to a repository
+- more than 100 node IDs in one request
+
+The broker keeps the repository of each ID for five minutes for each route,
+so an issue transferred to another repository is seen within that time. The
+audit line records each ID and its repository as
+`resolved="I_kw...=owner/name"`, and the head of a pull request from another
+repository as `PR_kw....head=owner/name`. The refusal sent to the guest does
+not name the repository, so a guest cannot use it to learn where a node ID
+is.
+
+A lookup that fails, because GitHub cannot be reached or answers with an
+error, is a `502` with `check=upstream`, as for a request that cannot reach
+its upstream. The cause is on the audit line, not in the response.
+
+A refusal is a `403` that names the rule:
+
+```
+brig broker refused this request
+policy:  gh-pr-comment
+route:   github-api
+rule:    spec.routes[github-api].request.allow.graphql
+reason:  mutation field "mergePullRequest" is not in the allow list [addComment]
+sandbox: brig-7f3a
+```
+
+**Which `gh` commands work.** With the example policy and `gh` 2.103:
+
+| Command | Result |
+| --- | --- |
+| `gh pr list`, `gh pr view`, `gh issue list`, `gh issue view` | Allowed |
+| `gh pr comment`, `gh issue comment` | Allowed: `addComment` |
+| `gh pr checks` | Refused: its query for the checks selects `node` |
+| `gh pr status` | Refused: it asks for the current user with `viewer`, then selects `search` |
+| `gh pr merge`, `gh pr create`, `gh issue close` and other changes | Refused, until their mutations are listed |
+| `gh api` on a REST path | `GET` alone |
+
+`gh pr checks` works without `repos`, with `node` in `queries`, and `gh pr
+status` with `viewer` and `search`.
+
+Because `GH_HOST` names the route, `gh` treats it as a GitHub Enterprise
+host. It reads `GET /api/v3/meta`, and before `gh pr checks`, `gh pr
+status`, `gh pr merge` and `gh issue view` it asks the schema which fields a
+type has, with `__type`. The broker allows both, so the rule that refuses a
+command is the one for the fields or mutation the command needs.
+
+To find the fields and mutations a command needs, run it in the sandbox
+with `GH_DEBUG=api`, which prints each query. On the host, `gh` talks to
+github.com and skips the schema queries.
+
+**What `graphql` does not limit.**
+
+- `repos` limits where a query starts and what a mutation changes, not
+  what either reads. A query that starts at a listed repository can follow
+  an edge, such as an issue's `parent`, a pull request's `headRepository`,
+  or a cross-reference, into another repository. `gh pr view` and `gh issue
+  view` select such edges. A mutation's response can select the same edges.
+- A closing keyword in a pull request or commit, such as `Fixes
+  other/repo#5`, closes an issue in another repository when the pull
+  request merges. The broker sees only the text.
+- The REST API stays readable on every path that `paths` allows.
+
+For each of these, the token's scope is the only limit. Use a fine-grained
+token that covers only the repositories and permissions the agent needs.
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:
@@ -1085,6 +1284,27 @@ The secret a route injects stays on the host, whatever the profile binds:
 - an `env:` binding whose chain names it is dropped whole, so an ambient
   value cannot stand in for it
 - Brig does not read it. The broker does
+
+A run with a `github-token` or `github-api` route also withholds `GH_TOKEN`
+and `GITHUB_TOKEN`, whatever secret or variable the profile reads them from.
+The route keeps the token on the host, and forwarding it as well would put
+the real token in the guest beside the route's session token:
+
+```
+brig: not forwarding GH_TOKEN: this sandbox reaches GitHub through route github, which keeps the token on the host
+```
+
+The guest's git credential helper reads `GH_TOKEN`. With a `github-api`
+route and no `github-token` route, git over HTTPS to github.com gets no
+token, and the notice says that git needs a `github-token` route. A preset
+route whose `upstream` is not the preset's own does not reach GitHub and
+does not count.
+
+A policy bound to one session with `brig policy attach -n` counts. To forward
+the token anyway, set `BRIG_FORWARD_GITHUB_TOKEN=1`; Brig then says that the real
+token is in the guest beside the route. Without a GitHub route, the shipped
+profiles forward `GH_TOKEN` as before, and `brig info` says that a route
+would keep it on the host.
 
 A run with a route runs isolated. A run with a route and the `offline`
 posture is refused.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/routemode"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -72,12 +73,12 @@ func registeredModes() []v1alpha1.RouteMode {
 	return out
 }
 
-// otherModes returns the modes besides endpoint that this run's routes name,
+// otherModes returns the modes besides endpoint and host that this run's routes name,
 // in name order, whether this build serves them or not.
 func (c *Config) otherModes() []v1alpha1.RouteMode {
 	var out []v1alpha1.RouteMode
 	for _, r := range c.routes {
-		if r.Mode != "" && r.Mode != v1alpha1.ModeEndpoint && !slices.Contains(out, r.Mode) {
+		if !r.Mode.AtBrigInternal() && !slices.Contains(out, r.Mode) {
 			out = append(out, r.Mode)
 		}
 	}
@@ -145,13 +146,33 @@ func RouteModeServed(p profile.Profile, rt runtime.Runtime, m v1alpha1.RouteMode
 	if env.String("NETWORK", p.Network) == string(NetOffline) {
 		net = NetOffline.RuntimeNet()
 	}
-	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
+	hypervisor := env.String("HYPERVISOR", p.Hypervisor)
+	path := runtime.RoutePath(rt, hypervisor)
+	if err := runtime.RequireGatewayMonitor(runtime.RouteModeProperty(m), rt, hypervisor, net); err != nil {
+		return err
+	}
 	switch {
-	case m == "" || m == v1alpha1.ModeEndpoint:
+	case m.AtBrigInternal():
 		return runtime.CheckBrigInternal(rt, path, net)
 	default:
 		return checkMode(m, env, rt, path, net)
 	}
+}
+
+// EgressServed returns why a run of p on rt would be refused for the egress
+// rules of the policies bound, or nil when they carry none or the run's path
+// enforces them. It is the check a boot makes, for brig policy check, which
+// otherwise printed its general note and exited 0 for a policy the run then
+// refused with exit 7. A policy takes the isolated posture, unless the run is
+// offline, which reaches no network and so satisfies any rules.
+func EgressServed(p profile.Profile, rt runtime.Runtime, bound []policy.Policy) error {
+	env := NewEnv(p.Name, nil)
+	net := NetIsolated.RuntimeNet()
+	if env.String("NETWORK", p.Network) == string(NetOffline) {
+		net = NetOffline.RuntimeNet()
+	}
+	spec := runtime.RunSpec{Net: net, Egress: runtimeEgress(policy.Merge(bound))}
+	return runtime.EgressServed(rt, env.String("HYPERVISOR", p.Hypervisor), spec)
 }
 
 // modeServed returns whether this run's path serves mode m besides endpoint.

@@ -1129,6 +1129,17 @@ func TestRemovePolicyFailsClosedOnAMalformedAttachmentsFile(t *testing.T) {
 	}
 }
 
+// egressEnforced pins brig policy check to a run path that enforces egress
+// rules, hull on hvi, for a test about something else. check asks the host's
+// runtime otherwise, and refuses the rules on one that cannot enforce them.
+func egressEnforced(t *testing.T) {
+	t.Helper()
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return doctorRuntime{bin: "hull"}, nil
+	})
+}
+
 // loadTestProfiles points the profile registry at a fresh, empty directory
 // and loads it, so a test sees only the built-ins (claude-code, ubuntu, ...)
 // with nothing left over from another test.
@@ -1748,6 +1759,7 @@ func TestAttachSaysWhereThePolicyIsEnforced(t *testing.T) {
 // the names and exits zero -- the one answer most likely to be read as a
 // verdict everywhere, so it carries the same note about where it holds.
 func TestCheckSaysWhereThePolicyIsEnforced(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1796,6 +1808,7 @@ func TestCheckOmitsTheNoteWhenThereIsNothingToMisread(t *testing.T) {
 }
 
 func TestCheckListsTheEffectivePolicies(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1817,6 +1830,7 @@ func TestCheckListsTheEffectivePolicies(t *testing.T) {
 // above must not leak into a check for a profile that never got it, and a
 // session-only attach must show up only with -n.
 func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1847,6 +1861,7 @@ func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
 // spelling of --name that starts session foo gets foo's answer here -- what
 // this command reports and what a boot applies are one thing.
 func TestCheckFollowsTheSlugTheRunUses(t *testing.T) {
+	egressEnforced(t)
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -2063,6 +2078,7 @@ const noNetEnvelope = "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  
 // reported as retired. The notice goes to stderr, and stdout stays one name
 // per line.
 func TestCheckReportsTheFlatFormAsRetired(t *testing.T) {
+	egressEnforced(t)
 	for _, c := range []struct {
 		name, body string
 		retired    bool
@@ -2241,7 +2257,8 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 		rows += "    " + rec.Path.String() + "  " + rec.Line() + "\n"
 	}
 	want := "  route anthropic  preset claude-code  mode endpoint\n" + rows +
-		"  route github  preset github-token  mode endpoint\n" + rows +
+		"  route github  preset github-token  mode endpoint\n" +
+		"    allow  repos brig-sh/*\n" + rows +
 		"posture: isolated\n"
 	if !strings.HasPrefix(stderr, want) {
 		t.Errorf("stderr printed:\n%s\nwant it to start with:\n%s", stderr, want)
@@ -2489,5 +2506,129 @@ func TestShowPolicyCommentsTheRouteNotLookalikeMetadata(t *testing.T) {
 	}
 	if got := reparsed.Metadata.Annotations["note"]; got != note {
 		t.Errorf("annotation round trip = %q, want %q", got, note)
+	}
+}
+
+// githubAPIPolicy writes the github-api route as a policy does: a preset and
+// no mode, which the preset file supplies.
+func githubAPIPolicy() policy.Policy {
+	var p policy.Policy
+	p.Metadata.Name = "gh"
+	p.Spec.Routes = []v1alpha1.Route{{Name: "github-api", Preset: "github-api"}}
+	return p
+}
+
+// A route that names a preset and no mode prints the preset's mode, not the
+// endpoint default, so check agrees with show and the run.
+func TestPolicyCheckPrintsThePresetsMode(t *testing.T) {
+	stderr := captureStderr(t, func() { printRoutes(githubAPIPolicy()) })
+	want := "  route github-api  preset github-api  mode host\n"
+	for _, rec := range runtime.ModeRecords(v1alpha1.ModeHost) {
+		want += "    " + rec.Path.String() + "  " + rec.Line() + "\n"
+	}
+	if stderr != want {
+		t.Errorf("stderr printed:\n%s\nwant:\n%s", stderr, want)
+	}
+}
+
+func TestRouteModesGroupsAPresetRouteByItsMode(t *testing.T) {
+	_, byMode := routeModes([]policy.Policy{githubAPIPolicy()})
+	if got := byMode[v1alpha1.ModeHost]; len(got) != 1 || got[0] != "gh (route github-api)" {
+		t.Errorf("host routes = %v, want [gh (route github-api)]", got)
+	}
+	if got := byMode[v1alpha1.ModeEndpoint]; len(got) != 0 {
+		t.Errorf("endpoint routes = %v, want none", got)
+	}
+}
+
+// check prints a route's request.allow, so the rules a run enforces show
+// without brig policy show. A GraphQL list that is left out allows nothing,
+// and the row says so rather than leave it out.
+func TestPolicyCheckPrintsRequestAllow(t *testing.T) {
+	var p policy.Policy
+	p.Metadata.Name = "gh"
+	p.Spec.Routes = []v1alpha1.Route{
+		{Name: "github-api", Preset: "github-api", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{
+			Paths:   []string{"/api/v3/repos/brig-sh/*", "/api/graphql"},
+			GraphQL: &v1alpha1.GraphQLAllow{Queries: []string{"repository"}, Repos: []string{"brig-sh/brig"}},
+		}}},
+		{Name: "github", Preset: "github-token", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{
+			Methods: []string{"GET", "POST"}, Repos: []string{"brig-sh/*"},
+		}}},
+		{Name: "gcp", Preset: "gcp", Services: []v1alpha1.Service{
+			{Name: "storage", Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{Methods: []string{"GET"}}}},
+			{Name: "bigquery"},
+		}},
+	}
+	stderr := captureStderr(t, func() { printRoutes(p) })
+	if strings.Contains(stderr, "bigquery") {
+		t.Errorf("a service without rules got a row:\n%s", stderr)
+	}
+	for _, want := range []string{
+		"  route github-api  preset github-api  mode host\n" +
+			"    allow  paths /api/v3/repos/brig-sh/*,/api/graphql\n" +
+			"    allow graphql  queries repository  mutations (none)  repos brig-sh/brig\n",
+		"  route github  preset github-token  mode endpoint\n" +
+			"    allow  methods GET,POST  repos brig-sh/*\n",
+		"  route gcp  preset gcp  mode endpoint\n" +
+			"    service storage  allow  methods GET\n",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks\n%s\nin:\n%s", want, stderr)
+		}
+	}
+}
+
+// kindRuntime is a runtime of any kind, for a run path check reads by kind.
+type kindRuntime struct {
+	doctorRuntime
+	kind string
+}
+
+func (r kindRuntime) Kind() string { return r.kind }
+
+// Negative: check refuses an egress-only policy on a run path that cannot
+// enforce it, with the exit status the run refuses it with. It printed its
+// general note and exited 0, and brig run then exited 7. A path that enforces
+// the rules passes, and so does an offline run, which reaches no network.
+func TestCheckRefusesEgressTheRunCannotEnforce(t *testing.T) {
+	for _, c := range []struct {
+		name, kind, hv, network, want string
+	}{
+		{"hull on vz", "hull", "vz", "", "vz takes its network from vmnet"},
+		{"hull on qemu", "hull", "qemu", "", "qemu takes its network from vmnet"},
+		{"docker", "docker", "", "", "does not filter docker's"},
+		{"nerdctl", "nerdctl", "", "", ""},
+		{"hull on hvi", "hull", "hvi", "", ""},
+		{"offline on vz", "hull", "vz", "offline", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_NETWORK", c.network)
+			stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+				return kindRuntime{doctorRuntime{bin: c.kind}, c.kind}, nil
+			})
+			writePolicyFile(t, dir, "no-net", noNetBody)
+			loadTestProfiles(t)
+			if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			captureStderr(t, func() {
+				_, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+			})
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("check refused a path that enforces the rules: %v", err)
+				}
+				return
+			}
+			if exitCode(err) != exitCapability || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("check = %v (exit %d), want exit %d saying %q",
+					err, exitCode(err), exitCapability, c.want)
+			}
+		})
 	}
 }

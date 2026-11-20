@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Origin is where a profile came from, which is the question someone debugging
@@ -412,6 +413,32 @@ func BuiltInDeny(name string) []string {
 	}
 	return p.Deny
 }
+
+// Billing reports whether a profile brig ships denies name. Those profiles
+// deny the API keys that outrank a subscription token, so their deny lists
+// are the billing guard. A profile file may deny other variables for other
+// reasons, such as GH_TOKEN when gh goes through a route, and a report must
+// not give those the billing reason.
+func Billing(name string) bool {
+	billingOnce.Do(func() {
+		billingNames = map[string]bool{}
+		entries, err := fs.ReadDir(builtinFS, "specs")
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			for _, n := range BuiltInDeny(strings.TrimSuffix(e.Name(), ".yaml")) {
+				billingNames[n] = true
+			}
+		}
+	})
+	return billingNames[name]
+}
+
+var (
+	billingOnce  sync.Once
+	billingNames map[string]bool
+)
 
 func lastDash(s string) int {
 	for i := len(s) - 1; i >= 0; i-- {

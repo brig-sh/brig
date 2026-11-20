@@ -150,3 +150,36 @@ func TestStatusSaysNothingAboutABuiltInProfile(t *testing.T) {
 		t.Errorf("a built-in profile was reported as an override:\n%s", got)
 	}
 }
+
+// A profile may deny a variable for a reason other than billing, such as
+// GH_TOKEN when gh goes through a route. The report gives the billing reason
+// only for the variables a profile brig ships denies for it.
+func TestStatusGivesTheBillingReasonOnlyForBillingVariables(t *testing.T) {
+	c := bindingConfig(t, "deny: [ANTHROPIC_API_KEY, GH_TOKEN, GITHUB_TOKEN]\n")
+	c.Runtime = fakeRuntime{}
+	out := &bytes.Buffer{}
+	c.Out = out
+	c.Status(creds.Set{})
+	got := out.String()
+	for _, want := range []string{
+		"never forwarded for x: ANTHROPIC_API_KEY (they would move this sandbox onto metered billing)",
+		"never forwarded for x: GH_TOKEN GITHUB_TOKEN (on its deny list)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the report lacks %q:\n%s", want, got)
+		}
+	}
+
+	c = bindingConfig(t, "deny: [GH_TOKEN]\n")
+	c.AllowDenied = true
+	c.Runtime = fakeRuntime{}
+	out = &bytes.Buffer{}
+	c.Out = out
+	var set creds.Set
+	set.Add("GH_TOKEN", "ghp-x", "GH_TOKEN")
+	c.Status(set)
+	got = out.String()
+	if !strings.Contains(got, "forwarding: GH_TOKEN") || strings.Contains(got, "metered billing") {
+		t.Errorf("the override gives the billing reason for GH_TOKEN:\n%s", got)
+	}
+}
