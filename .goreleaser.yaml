@@ -253,8 +253,9 @@ homebrew_casks:
     # follows.
     skip_upload: auto
     caveats: |
-      On Linux, brig drives nerdctl and needs nothing else. On macOS it drives
-      hull, which brew installed alongside this cask.
+      On macOS, brig drives hull, which brew installed alongside this cask. On
+      Linux, it drives hull when a hull is on PATH, and nerdctl otherwise. The
+      runtime bundle that install.sh installs carries both.
 
       Guest images are verified with cosign before boot. An image brig-sh did
       not publish is reported and booted anyway -- bring-your-own images are a
