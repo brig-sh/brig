@@ -243,6 +243,10 @@ func TestCompletePositions(t *testing.T) {
 		words:     []string{"policy", "render-cilium", "--dns-search", "corp.example", ""},
 		directive: dirFiles,
 	}, {
+		name:      "and --cluster-cidr",
+		words:     []string{"policy", "render-cilium", "--cluster-cidr", "10.2.0.0/16", ""},
+		directive: dirFiles,
+	}, {
 		name:      "policies are completed where a policy goes",
 		words:     []string{"policy", "attach", ""},
 		directive: dirNames,

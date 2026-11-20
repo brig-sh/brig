@@ -2777,7 +2777,7 @@ func TestRenderCiliumHonorsTheDNSAndBrokerFlags(t *testing.T) {
 // brig policy --help names every render-cilium flag.
 func TestPolicyHelpNamesEveryRenderCiliumFlag(t *testing.T) {
 	for _, flag := range []string{"--name", "--namespace", "--selector", "--pod-identity",
-		"--cluster", "--broker-address", "--dns-search"} {
+		"--cluster", "--broker-address", "--dns-search", "--cluster-cidr"} {
 		if !strings.Contains(policyUsage, flag) {
 			t.Errorf("brig policy --help does not name %s", flag)
 		}
@@ -2812,5 +2812,69 @@ spec:
 	}
 	if strings.Contains(out, "evil.example.com") || !strings.HasPrefix(out, "apiVersion:") {
 		t.Errorf("stdout is not the object alone:\n%s", out)
+	}
+}
+
+// --cluster-cidr reaches the renderer: a deny of the cluster's range renders
+// the cluster deny, and without the flag the same policy is refused with a
+// pointer to it.
+func TestRenderCiliumHonorsClusterCIDR(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: lan
+spec:
+  egress:
+    default: allow
+    deny:
+      - cidr: 10.0.0.0/8
+`)
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0/16"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"remote-node", "kube-apiserver", "operator: NotIn", "endPort: 65535"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	_, err = captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) })
+	if err == nil || !strings.Contains(err.Error(), "--cluster-cidr") {
+		t.Errorf("err = %v, want a refusal naming --cluster-cidr", err)
+	}
+	_, err = captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0"})
+	})
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("a bad --cluster-cidr: err = %v, want a usage error", err)
+	}
+}
+
+// An allow of part of the cluster stays closed, and stderr says so.
+func TestRenderCiliumWarnsOfAClosedClusterAllow(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: one-pod
+spec:
+  egress:
+    default: deny
+    allow:
+      - cidr: 10.2.145.91/32
+`)
+	var err error
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error {
+			return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0/16"})
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, `allow[0] cidr "10.2.145.91/32" covers part of the cluster`) {
+		t.Errorf("stderr = %q", stderr)
 	}
 }

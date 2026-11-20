@@ -29,6 +29,9 @@ type NetworkPolicy struct {
 	// droppedDenyHosts lists the deny hosts Render left out. It is not
 	// marshalled.
 	droppedDenyHosts []string
+	// warnings lists what Render could not render as the policy says and
+	// left closed. It is not marshalled.
+	warnings []string
 }
 
 // ObjectMeta is the Kubernetes object metadata Render writes.
@@ -59,6 +62,18 @@ type EndpointSelector struct {
 	// MatchLabels is left out when empty, so an empty selector marshals as
 	// {}.
 	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+	// MatchExpressions adds requirements that all must hold.
+	MatchExpressions []LabelSelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// LabelSelectorRequirement is one requirement on a label, as in Kubernetes.
+type LabelSelectorRequirement struct {
+	// Key is the label.
+	Key string `json:"key"`
+	// Operator is In, NotIn, Exists or DoesNotExist.
+	Operator string `json:"operator"`
+	// Values lists the values for In and NotIn.
+	Values []string `json:"values,omitempty"`
 }
 
 // DefaultDeny holds the default verdict for egress.
@@ -86,10 +101,17 @@ type EgressRule struct {
 }
 
 // EgressDenyRule is one refused set of destinations. Cilium has no toFQDNs
-// for egressDeny, so a deny rule names network ranges only.
+// for egressDeny.
 type EgressDenyRule struct {
+	// ToEndpoints selects pods in the cluster.
+	ToEndpoints []EndpointSelector `json:"toEndpoints,omitempty"`
+	// ToEntities names Cilium entities such as "host".
+	ToEntities []string `json:"toEntities,omitempty"`
 	// ToCIDR lists network ranges.
 	ToCIDR []string `json:"toCIDR,omitempty"`
+	// ToPorts limits the rule to some ports. Left out, the rule covers
+	// every port.
+	ToPorts []PortRule `json:"toPorts,omitempty"`
 }
 
 // FQDNSelector names a DNS name. Exactly one field is set.
@@ -112,6 +134,8 @@ type PortRule struct {
 type PortProtocol struct {
 	// Port is a decimal port number, as a string.
 	Port string `json:"port"`
+	// EndPort, when set, makes the rule cover Port to EndPort.
+	EndPort int `json:"endPort,omitempty"`
 	// Protocol is TCP, UDP or ANY.
 	Protocol string `json:"protocol"`
 }
@@ -136,4 +160,10 @@ type DNSRule struct {
 // it, which holds while no other policy that selects the same pods allows it.
 func (np *NetworkPolicy) DroppedDenyHosts() []string {
 	return np.droppedDenyHosts
+}
+
+// Warnings returns what Render could not render as the policy says and left
+// closed, such as an allow CIDR whose pods and nodes stay unreachable.
+func (np *NetworkPolicy) Warnings() []string {
+	return np.warnings
 }

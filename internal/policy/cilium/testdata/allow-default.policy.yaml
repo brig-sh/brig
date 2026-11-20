@@ -10,4 +10,4 @@ spec:
     allow:
       - host: ignored.example.com
     deny:
-      - cidr: 192.168.0.0/16
+      - cidr: 203.0.113.0/24

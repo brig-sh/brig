@@ -1027,7 +1027,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
-| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address ADDR] [--dns-search DOMAIN]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address ADDR] [--dns-search DOMAIN] [--cluster-cidr CIDR]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
 Complete command lines for all nine:
 
@@ -1228,8 +1228,10 @@ the policy does not name. Without the flag a deny default cuts those off.
 `--broker-address` takes the node broker's address, when it is not
 `169.254.171.1`. A range is refused, because the rule would open port 443 to
 all of it. `--dns-search` is repeatable and adds a search domain of
-the pod's resolver, as described below. A flag value Kubernetes or Cilium
-would not take is refused as a usage error.
+the pod's resolver, as described below. `--cluster-cidr` is repeatable and
+names a range the cluster's pods and nodes take their addresses from, as
+described below. A flag value Kubernetes or Cilium would not take is refused
+as a usage error.
 
 The mapping:
 
@@ -1238,17 +1240,38 @@ The mapping:
 | `default: deny` | `enableDefaultDeny: {egress: true}` and the allow rules |
 | `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
 | allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. Cilium's `*` does not cross a dot, so a leading `*.` becomes `**.` and then `*.`, `*.*.` and so on, up to five labels. See below |
-| allow `cidr` | `toCIDR`, masked. An IPv4-mapped CIDR such as `::ffff:10.0.0.0/104` is written as the IPv4 CIDR it names, `10.0.0.0/8`, as brig's enforcer reads it |
-| deny `cidr` | `egressDeny` with `toCIDR`, written the same way. Refused under `--cluster`, because no CIDR rule takes back what the cluster rule lets through. See below |
+| allow `cidr` | `toCIDR`, masked. An IPv4-mapped CIDR such as `::ffff:10.0.0.0/104` is written as the IPv4 CIDR it names, `10.0.0.0/8`, as brig's enforcer reads it. One that covers every `--cluster-cidr` range also opens the cluster entity. See below |
+| deny `cidr` | `egressDeny` with `toCIDR`, written the same way. One that covers every `--cluster-cidr` range also denies every pod and node. See below |
 | deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied, and stderr names it. See below. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host. It is refused under `--cluster`, because the cluster rule lets through any pod or node the host may name, such as one under `*.svc.cluster.local` |
 | `spec.routes` | a rule to the broker's address (`169.254.171.1/32`, or `--broker-address`) on port 443, where the node broker serves `brig.internal`. A CIDR rule, not the `host` entity: the address has link scope on the node and Cilium does not count it as the host |
 
-Cilium does not apply a CIDR rule to the address of a pod or a node of the
-cluster. A deny `cidr` that covers them does not block them, as brig's
-enforcer would. Under an allow default or `--cluster` the pod still reaches
-them. An allow `cidr` does not open them either; `--cluster` does. A
-cluster whose Cilium sets `policy-cidr-match-mode: nodes` applies CIDR rules
-to node addresses, and still not to pods.
+Cilium matches a pod or a node of the cluster by its identity, and applies
+no CIDR rule to its address. A `toCIDR` rule alone neither denies nor opens
+them, where brig's enforcer would. So the renderer needs the cluster's own
+ranges, given with `--cluster-cidr`: on EKS with ENI addressing, the VPC's
+CIDR; elsewhere, the pod and node CIDRs. Name the ranges of pods and nodes,
+not the service range. Cilium sends a service address to a pod before the
+policy applies.
+
+| `cidr` and the cluster's ranges | deny | allow, under a deny default |
+| --- | --- | --- |
+| outside them | `toCIDR` | `toCIDR` |
+| covers all of them | `toCIDR`, and a deny of every pod in every namespace, of kube-dns on every port but 53, and of the `host`, `remote-node`, `kube-apiserver`, `health`, `init`, `ingress` and `unmanaged` entities | `toCIDR`, and a rule to the `cluster` entity |
+| covers part of them | refused: Cilium cannot tell those pods and nodes from the others by address | `toCIDR`. The pods and nodes in it stay closed, and stderr says so |
+| private, with no `--cluster-cidr` | refused under an allow default or `--cluster`, where the pod reaches the cluster. Rendered as `toCIDR` under a deny default without `--cluster` | `toCIDR`, with a warning on stderr |
+
+kube-dns stays reachable on port 53 under a deny of the cluster, because the
+DNS rule sends every lookup there. The private ranges are `10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` and `fc00::/7`. For
+example, on a cluster in the VPC `10.2.0.0/16`:
+
+```bash
+brig policy render-cilium lan.yaml --cluster-cidr 10.2.0.0/16
+```
+
+A policy with `default: allow` and a deny of `10.0.0.0/8` then blocks every
+pod, node and the API server, as brig does, and still reaches the world.
+Without the flag it is refused.
 
 A dropped deny host stays denied only while no other CiliumNetworkPolicy
 that selects the same pods allows it. Cilium joins the allow rules of every

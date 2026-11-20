@@ -30,6 +30,10 @@ func renderCiliumPolicy(args []string) error {
 		o.DNSSearch = append(o.DNSSearch, v)
 		return nil
 	})
+	fs.Func("cluster-cidr", "", func(v string) error {
+		o.ClusterCIDRs = append(o.ClusterCIDRs, v)
+		return nil
+	})
 	sel := map[string]string{}
 	var selErr error
 	fs.Func("selector", "", func(v string) error {
@@ -41,7 +45,7 @@ func renderCiliumPolicy(args []string) error {
 		sel[k] = val
 		return nil
 	})
-	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity, --cluster, --broker-address and --dns-search", fs, args)
+	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity, --cluster, --broker-address, --dns-search and --cluster-cidr", fs, args)
 	if err != nil {
 		if selErr != nil {
 			return selErr
@@ -77,6 +81,9 @@ func renderCiliumPolicy(args []string) error {
 	}
 	// Cilium joins the allow rules of every policy that selects a pod, so
 	// another policy that allows the host lets it through.
+	for _, w := range np.Warnings() {
+		wrap.Stderr.Say(w)
+	}
 	for _, h := range np.DroppedDenyHosts() {
 		wrap.Stderr.Say(fmt.Sprintf("deny host %q is left out: the object denies it only by not allowing it, so it stays denied only while no other CiliumNetworkPolicy for these pods allows it", h))
 	}

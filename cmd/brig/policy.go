@@ -59,6 +59,10 @@ flags:
                 with render-cilium: the node broker's address
                 (default: 169.254.171.1), and a search domain of the pod's
                 resolver beyond cluster.local (repeatable)
+      --cluster-cidr CIDR
+                with render-cilium: a range the cluster's pods and nodes take
+                their addresses from (repeatable), so a cidr rule that covers
+                them reaches them too
   -n, --name    with attach/detach/check: one session by name, not every run
 
 A policy is a named document declaring what an agent may reach outbound,
