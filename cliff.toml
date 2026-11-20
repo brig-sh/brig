@@ -79,8 +79,13 @@ body = """
 {% endif -%}
 """
 
+# A bare #123 links an issue of this repository. A reference to another
+# repository, such as brig-sh/hull#105 in a Refs footer, links to that
+# repository. The first rule skips a # that follows a repository name, so
+# the second one gets it.
 postprocessors = [
-  { pattern = '#([0-9]+)', replace = "[#${1}](https://github.com/brig-sh/brig/issues/${1})" },
+  { pattern = '(^|[^/\w])#([0-9]+)', replace = "${1}[#${2}](https://github.com/brig-sh/brig/issues/${2})" },
+  { pattern = '([\w.-]+/[\w.-]+)#([0-9]+)', replace = "[${1}#${2}](https://github.com/${1}/issues/${2})" },
 ]
 
 # GitHub author lookup for the contributor lists. Uses GITHUB_TOKEN when
