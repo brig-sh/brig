@@ -3,10 +3,13 @@ package cilium
 import (
 	"bytes"
 	"flag"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -122,7 +125,7 @@ func TestRenderRefusesHostDenyUnderAllowDefault(t *testing.T) {
 		Metadata: v1alpha1.ObjectMeta{Name: "allow-host-deny"},
 		Spec: v1alpha1.PolicySpec{Egress: &v1alpha1.Egress{
 			Default: v1alpha1.EgressAllow,
-			Deny:    []v1alpha1.Rule{{CIDR: "10.0.0.0/8"}, {Host: "evil.example.com"}},
+			Deny:    []v1alpha1.Rule{{CIDR: "203.0.113.0/24"}, {Host: "evil.example.com"}},
 		}},
 	}
 	_, err := Render(p, Options{})
@@ -553,5 +556,200 @@ func TestRenderReportsADroppedDenyHost(t *testing.T) {
 	}
 	if bytes.Contains(out, []byte("evil.example.com")) {
 		t.Errorf("the dropped host reached the object:\n%s", out)
+	}
+}
+
+// clusterRanges is the address range of the pods and nodes of the test
+// cluster: the VPC of an EKS cluster with ENI addressing.
+var clusterRanges = []string{"10.2.0.0/16"}
+
+// cidrPolicy returns a policy with the given default and CIDR rules.
+func cidrPolicy(def v1alpha1.EgressDefault, allow, deny []string) *v1alpha1.Policy {
+	eg := &v1alpha1.Egress{Default: def}
+	for _, c := range allow {
+		eg.Allow = append(eg.Allow, v1alpha1.Rule{CIDR: c})
+	}
+	for _, c := range deny {
+		eg.Deny = append(eg.Deny, v1alpha1.Rule{CIDR: c})
+	}
+	return &v1alpha1.Policy{Metadata: v1alpha1.ObjectMeta{Name: "cidrs"}, Spec: v1alpha1.PolicySpec{Egress: eg}}
+}
+
+func TestClusterReach(t *testing.T) {
+	given := resolved{cluster: []netip.Prefix{netip.MustParsePrefix("10.2.0.0/16"), netip.MustParsePrefix("100.64.0.0/16")}}
+	for c, want := range map[string]reach{
+		"0.0.0.0/0":      reachAll,
+		"10.2.0.0/16":    reachPart,
+		"10.0.0.0/8":     reachPart,
+		"100.64.0.0/10":  reachPart,
+		"10.2.145.91/32": reachPart,
+		"1.1.1.1/32":     reachNone,
+		"10.3.0.0/16":    reachNone,
+	} {
+		if got := given.clusterReach(c); got != want {
+			t.Errorf("%s with two ranges: reach %d, want %d", c, got, want)
+		}
+	}
+	one := resolved{cluster: []netip.Prefix{netip.MustParsePrefix("10.2.0.0/16")}}
+	for c, want := range map[string]reach{
+		"10.0.0.0/8":     reachAll,
+		"10.2.0.0/16":    reachAll,
+		"10.2.128.0/17":  reachPart,
+		"192.168.0.0/16": reachNone,
+	} {
+		if got := one.clusterReach(c); got != want {
+			t.Errorf("%s with one range: reach %d, want %d", c, got, want)
+		}
+	}
+	var none resolved
+	for c, want := range map[string]reach{
+		"10.2.145.91/32": reachMaybe,
+		"172.20.0.0/16":  reachMaybe,
+		"fd00::/8":       reachMaybe,
+		"1.1.1.1/32":     reachNone,
+		"2606:4700::/32": reachNone,
+	} {
+		if got := none.clusterReach(c); got != want {
+			t.Errorf("%s with no ranges: reach %d, want %d", c, got, want)
+		}
+	}
+}
+
+// Negative: a deny that covers the cluster's ranges also denies every pod and
+// node. Cilium applies no CIDR rule to them, so the toCIDR rule alone let the
+// pod reach them, while brig's enforcer refuses them.
+func TestRenderDenyOfTheClusterDeniesPodsAndNodes(t *testing.T) {
+	np, err := Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{"10.0.0.0/8"}), Options{ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(np.Spec.EgressDeny[0].ToCIDR, []string{"10.0.0.0/8"}) {
+		t.Errorf("the deny CIDR is not rendered first: %+v", np.Spec.EgressDeny)
+	}
+	want := clusterDeny()
+	if got := np.Spec.EgressDeny[1:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("cluster deny = %+v, want %+v", got, want)
+	}
+	// The pod selectors require the namespace label. Without it NotIn would
+	// also match the world identity and deny every address outside.
+	for _, sel := range want[0].ToEndpoints {
+		if !slices.ContainsFunc(sel.MatchExpressions, func(r LabelSelectorRequirement) bool {
+			return r.Key == "k8s:io.kubernetes.pod.namespace" && (r.Operator == "Exists" || r.Operator == "In")
+		}) {
+			t.Errorf("selector %+v does not require the namespace label", sel)
+		}
+	}
+	// kube-dns stays reachable on 53 alone, for the DNS rule.
+	var ports []PortProtocol
+	for _, pr := range want[2].ToPorts {
+		ports = append(ports, pr.Ports...)
+	}
+	for _, p := range ports {
+		lo, _ := strconv.Atoi(p.Port)
+		if lo <= 53 && 53 <= max(lo, p.EndPort) {
+			t.Errorf("kube-dns port 53 is denied by %+v", p)
+		}
+	}
+	if len(ports) != 2 || ports[0].Port != "1" || ports[1].EndPort != 65535 {
+		t.Errorf("kube-dns is not denied on every other port: %+v", ports)
+	}
+}
+
+// Negative: a deny of part of the cluster's ranges is refused. Cilium cannot
+// tell those pods and nodes from the others by address.
+func TestRenderRefusesADenyOfPartOfTheCluster(t *testing.T) {
+	for _, c := range []string{"10.2.145.91/32", "10.2.128.0/17"} {
+		_, err := Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{c}), Options{ClusterCIDRs: clusterRanges})
+		if err == nil || !strings.HasPrefix(err.Error(), "deny[0] cidr") || !strings.Contains(err.Error(), "part of the cluster") {
+			t.Errorf("%s: err = %v, want a refusal of deny[0]", c, err)
+		}
+	}
+}
+
+// Negative: without the cluster's ranges, a deny of a private range is refused
+// under an allow default and under --cluster, where the pod reaches the
+// cluster. A public range still renders, and so does a private one under a
+// deny default without --cluster, where no rule opens the cluster.
+func TestRenderAPrivateDenyNeedsTheClusterRanges(t *testing.T) {
+	cases := []struct {
+		def     v1alpha1.EgressDefault
+		cluster bool
+		cidr    string
+		refused bool
+	}{
+		{v1alpha1.EgressAllow, false, "10.0.0.0/8", true},
+		{v1alpha1.EgressAllow, false, "172.16.0.0/12", true},
+		{v1alpha1.EgressAllow, false, "fd00::/8", true},
+		{v1alpha1.EgressDeny, true, "192.168.0.0/16", true},
+		{v1alpha1.EgressAllow, false, "1.1.1.1/32", false},
+		{v1alpha1.EgressDeny, true, "1.1.1.1/32", false},
+		{v1alpha1.EgressDeny, false, "10.0.0.0/8", false},
+	}
+	for _, c := range cases {
+		p := cidrPolicy(c.def, []string{"203.0.113.0/24"}, []string{c.cidr})
+		_, err := Render(p, Options{Cluster: c.cluster})
+		if c.refused && (err == nil || !strings.Contains(err.Error(), "--cluster-cidr")) {
+			t.Errorf("%s %s cluster=%v: err = %v, want a refusal naming --cluster-cidr", c.def, c.cidr, c.cluster, err)
+		}
+		if !c.refused && err != nil {
+			t.Errorf("%s %s cluster=%v: refused: %v", c.def, c.cidr, c.cluster, err)
+		}
+	}
+}
+
+// Under --cluster with the cluster's ranges, a deny outside them renders as
+// a CIDR rule, and a deny of all of them takes the cluster back.
+func TestRenderDenyUnderClusterWithTheRanges(t *testing.T) {
+	np, err := Render(cidrPolicy(v1alpha1.EgressDeny, nil, []string{"1.1.1.1/32", "10.0.0.0/8"}), Options{Cluster: true, ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(np.Spec.EgressDeny); got != 2+len(clusterDeny()) {
+		t.Errorf("%d deny rules, want the two CIDRs and the cluster deny: %+v", got, np.Spec.EgressDeny)
+	}
+}
+
+// An allow that covers the cluster's ranges also opens every pod and node,
+// once. An allow of part of them leaves that part closed and says so.
+func TestRenderAllowOfTheClusterOpensPodsAndNodes(t *testing.T) {
+	np, err := Render(cidrPolicy(v1alpha1.EgressDeny, []string{"10.0.0.0/8", "0.0.0.0/0"}, nil), Options{ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range np.Spec.Egress {
+		if slices.Equal(r.ToEntities, []string{"cluster"}) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d cluster rules, want 1: %+v", n, np.Spec.Egress)
+	}
+	if len(np.Warnings()) != 0 {
+		t.Errorf("warnings for an allow of the whole cluster: %q", np.Warnings())
+	}
+	np, err = Render(cidrPolicy(v1alpha1.EgressDeny, []string{"10.2.145.91/32"}, nil), Options{ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(np.Spec.Egress, func(r EgressRule) bool { return len(r.ToEntities) > 0 }) {
+		t.Errorf("an allow of one pod opened the cluster: %+v", np.Spec.Egress)
+	}
+	if w := np.Warnings(); len(w) != 1 || !strings.Contains(w[0], "allow[0]") {
+		t.Errorf("warnings = %q, want one for allow[0]", w)
+	}
+	np, err = Render(cidrPolicy(v1alpha1.EgressDeny, []string{"10.0.0.0/8"}, nil), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := np.Warnings(); len(w) != 1 || !strings.Contains(w[0], "--cluster-cidr") {
+		t.Errorf("warnings = %q, want one naming --cluster-cidr", w)
+	}
+}
+
+// A cluster range that is not a CIDR is refused.
+func TestRenderRefusesABadClusterRange(t *testing.T) {
+	if err := (Options{ClusterCIDRs: []string{"10.2.0.0"}}).Check(); err == nil {
+		t.Error("a cluster range without a length passed")
 	}
 }

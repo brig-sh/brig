@@ -17,7 +17,7 @@ spec:
         - matchPattern: '*'
   egressDeny:
   - toCIDR:
-    - 192.168.0.0/16
+    - 203.0.113.0/24
   enableDefaultDeny:
     egress: false
   endpointSelector: {}

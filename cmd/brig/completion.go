@@ -595,7 +595,7 @@ var groups = map[string][]sub{
 		{
 			name:     "render-cilium",
 			flags:    []string{"--pod-identity", "--cluster"},
-			values:   map[string]operand{"--name": opNothing, "--namespace": opNothing, "--selector": opNothing, "--broker-address": opNothing, "--dns-search": opNothing},
+			values:   map[string]operand{"--name": opNothing, "--namespace": opNothing, "--selector": opNothing, "--broker-address": opNothing, "--dns-search": opNothing, "--cluster-cidr": opNothing},
 			operands: []operand{opFile},
 		},
 		{

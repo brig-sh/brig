@@ -55,6 +55,11 @@ type Options struct {
 	// ClusterDomain, such as the node's own. Under a deny default the DNS
 	// rule answers the lookups the resolver makes under each one.
 	DNSSearch []string
+	// ClusterCIDRs lists the address ranges of the cluster's pods and
+	// nodes. Cilium matches a pod or a node by its identity and applies no
+	// CIDR rule to it, so Render needs these ranges to render a CIDR rule
+	// that covers them.
+	ClusterCIDRs []string
 	// Cluster adds a rule to the cluster entity: every pod and node of the
 	// cluster, on every port. A brig policy's egress names the hosts a
 	// sandbox reaches outside; a pod also talks to the services beside it,
@@ -104,8 +109,16 @@ type Options struct {
 // also an error when the policy has any allow CIDR, which may contain the
 // host's addresses, and when o.Cluster is set, since the cluster rule lets
 // through any pod or node the host may name. Any other deny host is an
-// error. A dropped deny host is listed by DroppedDenyHosts. A deny CIDR is
-// an error when o.Cluster is set.
+// error. A dropped deny host is listed by DroppedDenyHosts.
+//
+// Cilium applies no CIDR rule to a pod or a node, so a CIDR is also read
+// against o.ClusterCIDRs. A deny CIDR that covers all of them also denies
+// every pod and node (see clusterDeny), and an allow CIDR that covers all of
+// them also opens the cluster entity. A deny of part of them is an error.
+// Without o.ClusterCIDRs, a deny of a private range is an error under an
+// allow default or o.Cluster. An allow of part of the cluster, or of a
+// private range, leaves those pods and nodes closed and is listed by
+// Warnings.
 //
 // A host is lowercased and loses one trailing dot. It must then be one or
 // more labels joined by '.', each a non-empty run of [a-z0-9-*]; a bare "*"
@@ -142,10 +155,11 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	if err := checkObjectName(name); err != nil {
 		return nil, err
 	}
-	broker, search, err := o.resolve()
+	res, err := o.resolve()
 	if err != nil {
 		return nil, err
 	}
+	broker, search := res.broker, res.search
 
 	np := &NetworkPolicy{
 		APIVersion: APIVersion,
@@ -202,6 +216,9 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 	}
 	// allowCIDR is the index of the first allow CIDR, or -1.
 	allowCIDR := -1
+	// allowCluster and denyCluster are set by an allow or a deny CIDR that
+	// covers every range in o.ClusterCIDRs.
+	var allowCluster, denyCluster bool
 	// Under an allow default Cilium already lets the traffic of every allow
 	// rule through, so the rules would add nothing.
 	if deny {
@@ -233,6 +250,14 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 					return nil, fmt.Errorf("allow[%d] cidr: %w", i, err)
 				}
 				np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToCIDR: []string{c}})
+				switch reach := res.clusterReach(c); {
+				case reach == reachAll:
+					allowCluster = true
+				case reach == reachPart:
+					np.warnings = append(np.warnings, fmt.Sprintf("allow[%d] cidr %q covers part of the cluster's ranges. Cilium opens a pod or a node by its identity, not by its address, so that part stays closed", i, r.CIDR))
+				case reach == reachMaybe:
+					np.warnings = append(np.warnings, fmt.Sprintf("allow[%d] cidr %q is a private range. Cilium does not open a pod or a node of the cluster by its address, so any of them in this range stay closed; pass the cluster's ranges with --cluster-cidr to open them", i, r.CIDR))
+				}
 			default:
 				return nil, fmt.Errorf("allow[%d] has neither host nor cidr", i)
 			}
@@ -246,11 +271,17 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			if err != nil {
 				return nil, fmt.Errorf("deny[%d] cidr: %w", i, err)
 			}
-			// Cilium matches a pod or a node by its identity, not by a CIDR
-			// rule, so a deny CIDR cannot take back what the cluster rule
-			// lets through.
-			if o.Cluster {
-				return nil, fmt.Errorf("deny[%d] cidr %q: --cluster lets through every pod and node of the cluster, and Cilium applies no CIDR rule to them, so the deny cannot be rendered", i, r.CIDR)
+			// Cilium matches a pod or a node by its identity and applies no
+			// CIDR rule to it. A deny that covers all of the cluster's
+			// ranges is rendered as a deny of every pod and node as well.
+			// A deny of only part of them cannot be rendered.
+			switch reach := res.clusterReach(c); {
+			case reach == reachAll:
+				denyCluster = true
+			case reach == reachPart:
+				return nil, fmt.Errorf("deny[%d] cidr %q covers part of the cluster's ranges, and Cilium matches a pod or a node by its identity, not by its address, so only a deny of all of them can be rendered", i, r.CIDR)
+			case reach == reachMaybe && (!deny || o.Cluster):
+				return nil, fmt.Errorf("deny[%d] cidr %q is a private range and may cover pods or nodes of the cluster, which Cilium does not match by address; pass the cluster's ranges with --cluster-cidr", i, r.CIDR)
 			}
 			np.Spec.EgressDeny = append(np.Spec.EgressDeny, EgressDenyRule{ToCIDR: []string{c}})
 		case r.Host != "":
@@ -292,6 +323,13 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 		default:
 			return nil, fmt.Errorf("deny[%d] has neither host nor cidr", i)
 		}
+	}
+
+	if allowCluster && !o.Cluster {
+		np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToEntities: []string{"cluster"}})
+	}
+	if denyCluster {
+		np.Spec.EgressDeny = append(np.Spec.EgressDeny, clusterDeny()...)
 	}
 
 	dns := []DNSRule{{MatchPattern: "*"}}
@@ -339,40 +377,151 @@ type allowHost struct {
 }
 
 // Check returns an error for an option Kubernetes or Cilium would not take:
-// a namespace that is not a DNS-1123 label, a broker address that is neither
-// an address nor a CIDR, or a search domain that is not a name. Render makes
-// the same checks.
+// a namespace that is not a DNS-1123 label, a broker address that is not one
+// address, a search domain that is not a name, or a cluster range that is not
+// a CIDR. Render makes the same checks.
 func (o Options) Check() error {
-	_, _, err := o.resolve()
+	_, err := o.resolve()
 	return err
 }
 
-// resolve checks o and returns the broker's CIDR rule and the search domains
-// the DNS rule answers under, ClusterDomain first.
-func (o Options) resolve() (broker string, search []string, err error) {
+// resolved holds the options Render reads after Options.resolve checked them.
+type resolved struct {
+	// broker is the CIDR rule of the node broker.
+	broker string
+	// search lists the search domains the DNS rule answers under,
+	// ClusterDomain first.
+	search []string
+	// cluster lists the cluster's ranges, masked. It is empty when
+	// o.ClusterCIDRs is.
+	cluster []netip.Prefix
+}
+
+// resolve checks o and returns what Render reads from it.
+func (o Options) resolve() (resolved, error) {
+	var res resolved
 	if o.Namespace != "" {
 		if err := checkNamespace(o.Namespace); err != nil {
-			return "", nil, err
+			return res, err
 		}
 	}
-	broker = BrokerCIDR
+	res.broker = BrokerCIDR
 	if o.BrokerCIDR != "" {
-		if broker, err = brokerPrefix(o.BrokerCIDR); err != nil {
-			return "", nil, err
+		b, err := brokerPrefix(o.BrokerCIDR)
+		if err != nil {
+			return res, err
 		}
+		res.broker = b
 	}
-	search = []string{ClusterDomain}
+	res.search = []string{ClusterDomain}
 	for _, d := range o.DNSSearch {
 		h := normalizeHost(d)
 		if err := checkHost(h); err != nil {
-			return "", nil, fmt.Errorf("search domain %q: %w", d, err)
+			return res, fmt.Errorf("search domain %q: %w", d, err)
 		}
 		if strings.Contains(h, "*") {
-			return "", nil, fmt.Errorf("search domain %q: a search domain is a name, not a glob", d)
+			return res, fmt.Errorf("search domain %q: a search domain is a name, not a glob", d)
 		}
-		search = append(search, h)
+		res.search = append(res.search, h)
 	}
-	return broker, search, nil
+	for _, s := range o.ClusterCIDRs {
+		c, err := canonicalCIDR(s)
+		if err != nil {
+			return res, fmt.Errorf("cluster cidr: %w", err)
+		}
+		res.cluster = append(res.cluster, netip.MustParsePrefix(c))
+	}
+	return res, nil
+}
+
+// reach says how much of the cluster's ranges a CIDR covers.
+type reach int
+
+const (
+	// reachNone is a CIDR outside every range of the cluster.
+	reachNone reach = iota
+	// reachAll is a CIDR that contains every range of the cluster.
+	reachAll
+	// reachPart is a CIDR that overlaps a range of the cluster and does not
+	// contain them all.
+	reachPart
+	// reachMaybe is a private CIDR when the cluster's ranges are not
+	// given, so it may hold pods or nodes.
+	reachMaybe
+)
+
+// privateRanges are the ranges a cluster's pods and nodes usually take
+// their addresses from, for a CIDR when the cluster's ranges are not given.
+var privateRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("fc00::/7"),
+}
+
+// clusterReach returns how much of the cluster's ranges the canonical CIDR
+// c covers.
+func (res resolved) clusterReach(c string) reach {
+	p := netip.MustParsePrefix(c)
+	if len(res.cluster) == 0 {
+		for _, r := range privateRanges {
+			if p.Overlaps(r) {
+				return reachMaybe
+			}
+		}
+		return reachNone
+	}
+	all, any := true, false
+	for _, r := range res.cluster {
+		if !p.Overlaps(r) {
+			all = false
+			continue
+		}
+		any = true
+		if p.Bits() > r.Bits() {
+			all = false
+		}
+	}
+	switch {
+	case all:
+		return reachAll
+	case any:
+		return reachPart
+	}
+	return reachNone
+}
+
+// clusterDeny returns the deny rules for every pod and node of the cluster,
+// which Cilium matches by identity and not by a CIDR rule. kube-dns stays
+// reachable on port 53, where the DNS rule sends the lookups through the
+// proxy. The selectors that pick pods require the namespace label, so they
+// never match an address outside the cluster.
+func clusterDeny() []EgressDenyRule {
+	const nsKey = "k8s:io.kubernetes.pod.namespace"
+	return []EgressDenyRule{
+		{ToEndpoints: []EndpointSelector{
+			{MatchExpressions: []LabelSelectorRequirement{
+				{Key: nsKey, Operator: "Exists"},
+				{Key: nsKey, Operator: "NotIn", Values: []string{"kube-system"}},
+			}},
+			{MatchExpressions: []LabelSelectorRequirement{
+				{Key: nsKey, Operator: "In", Values: []string{"kube-system"}},
+				{Key: "k8s:k8s-app", Operator: "NotIn", Values: []string{"kube-dns"}},
+			}},
+		}},
+		{ToEntities: []string{"host", "remote-node", "kube-apiserver", "health", "init", "ingress", "unmanaged"}},
+		{
+			ToEndpoints: []EndpointSelector{{MatchLabels: map[string]string{
+				nsKey:         "kube-system",
+				"k8s:k8s-app": "kube-dns",
+			}}},
+			ToPorts: []PortRule{{Ports: []PortProtocol{
+				{Port: "1", EndPort: 52, Protocol: "ANY"},
+				{Port: "54", EndPort: 65535, Protocol: "ANY"},
+			}}},
+		},
+	}
 }
 
 // globDepth is the most labels that the "*." patterns of a leading glob
