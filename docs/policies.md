@@ -1246,7 +1246,9 @@ The mapping:
 Cilium does not apply a CIDR rule to the address of a pod or a node of the
 cluster. A deny `cidr` that covers them does not block them, as brig's
 enforcer would. Under an allow default or `--cluster` the pod still reaches
-them. An allow `cidr` does not open them either; `--cluster` does.
+them. An allow `cidr` does not open them either; `--cluster` does. A
+cluster whose Cilium sets `policy-cidr-match-mode: nodes` applies CIDR rules
+to node addresses, and still not to pods.
 
 A dropped deny host stays denied only while no other CiliumNetworkPolicy
 that selects the same pods allows it. Cilium joins the allow rules of every
