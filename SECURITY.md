@@ -36,8 +36,9 @@ Include what a fix needs:
 
 - the version from `brig version`
 - the operating system
-- the runtime: hull on macOS, or nerdctl with the urunc shim on Linux. If
-  `BRIG_CONTAINERD_RUNTIME` names another shim, say which.
+- the runtime: hull on macOS, hull on Linux (the runtime bundle), or
+  nerdctl with the urunc shim on Linux. If `BRIG_CONTAINERD_RUNTIME` names
+  another shim, say which.
 - what you did, what happened, and what you expected instead
 - a proof of concept, if you have one. A rough one helps.
 
