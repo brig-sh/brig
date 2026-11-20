@@ -137,6 +137,7 @@ var verbs = []string{
 	"info",
 	"init",
 	"ls",
+	"memory",
 	"network",
 	"plan",
 	"policy",
@@ -634,6 +635,14 @@ var groups = map[string][]sub{
 				"--policy-arns": opNothing,
 			},
 			operands: []operand{opAgent},
+		},
+	},
+	"memory": {
+		{name: "ls", flags: []string{"--json"}},
+		{
+			name:     "rm",
+			values:   map[string]operand{"--project": opDir},
+			operands: []operand{opNothing},
 		},
 	},
 	"telemetry": {
