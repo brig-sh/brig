@@ -2,12 +2,22 @@ package broker
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
+
+// testSign is the signature of blob under key, computed apart from the code
+// under test.
+func testSign(key, blob []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write(blob)
+	return m.Sum(nil)
+}
 
 var testNonce = bytes.Repeat([]byte{1}, nonceSize)
 
@@ -46,7 +56,7 @@ func TestTokenIsClaimsDotHMAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(sig, sign(key, blob)) {
+	if !bytes.Equal(sig, testSign(key, blob)) {
 		t.Error("the signature is not HMAC-SHA256 of the claims with the sandbox key")
 	}
 	c, err := verify(key, tok, "brig-a", "anthropic", now)
@@ -126,7 +136,7 @@ func TestTokenHasOneSpelling(t *testing.T) {
 	// Signed claims with data after the JSON object.
 	blob, _ := json.Marshal(good)
 	blob = append(blob, []byte(` {"route":"github"}`)...)
-	trailing := base64.RawURLEncoding.EncodeToString(blob) + "." + base64.RawURLEncoding.EncodeToString(sign(key, blob))
+	trailing := base64.RawURLEncoding.EncodeToString(blob) + "." + base64.RawURLEncoding.EncodeToString(testSign(key, blob))
 	if _, err := verify(key, trailing, "brig-a", "anthropic", now); err != errTokenSignature {
 		t.Fatalf("a token with data after its claims: %v", err)
 	}
