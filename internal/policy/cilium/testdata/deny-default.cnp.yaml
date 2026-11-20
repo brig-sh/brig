@@ -1,0 +1,60 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-default
+  namespace: agents
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: ANY
+      rules:
+        dns:
+        - matchName: api.anthropic.com
+        - matchPattern: '**.githubusercontent.com'
+        - matchPattern: '*.githubusercontent.com'
+        - matchPattern: '*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.*.githubusercontent.com'
+        - matchName: brig.internal
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.*.cluster.local'
+  - toCIDR:
+    - 169.254.171.1/32
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+  - toFQDNs:
+    - matchName: api.anthropic.com
+  - toFQDNs:
+    - matchPattern: '**.githubusercontent.com'
+    - matchPattern: '*.githubusercontent.com'
+    - matchPattern: '*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.*.githubusercontent.com'
+  - toCIDR:
+    - 10.0.0.0/8
+  egressDeny:
+  - toCIDR:
+    - 10.1.0.0/16
+  enableDefaultDeny:
+    egress: true
+  endpointSelector:
+    matchLabels:
+      app: claude

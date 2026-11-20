@@ -1,0 +1,11 @@
+# '?' is a wildcard in some glob dialects and a literal nowhere in DNS.
+# Cilium has only '*', so the renderer refuses the host.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: refused-glob
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api-?.example.com

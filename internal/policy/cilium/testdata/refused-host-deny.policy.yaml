@@ -1,0 +1,14 @@
+# The allow glob covers the deny host. Cilium egressDeny has no toFQDNs, so
+# the deny cannot be rendered and the renderer refuses the policy rather
+# than let api.example.com through.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: refused-host-deny
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: "*.example.com"
+    deny:
+      - host: api.example.com

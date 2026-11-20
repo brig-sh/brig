@@ -878,7 +878,11 @@ brig policy rm <name> [--force]
 brig policy attach <policy> <agent> [-n <label>]
 brig policy detach <policy> <agent> [-n <label>]
 brig policy check <agent> [-n <label>]
+brig policy render-cilium <file> [--name <name>] [--namespace <ns>] [--selector <k=v>] [--pod-identity] [--cluster] [--broker-address <addr>] [--dns-search <domain>] [--cluster-cidr <cidr>]
 ```
+
+`brig policy render-cilium` prints the `spec.egress` section of a policy file as a
+CiliumNetworkPolicy. See [render-cilium](policies.md#render-cilium).
 
 Write a starter policy and open it in your editor:
 

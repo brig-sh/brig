@@ -1027,8 +1027,9 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address ADDR] [--dns-search DOMAIN] [--cluster-cidr CIDR]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
-Complete command lines for all eight:
+Complete command lines for all nine:
 
 ```bash
 brig policy ls
@@ -1040,6 +1041,7 @@ brig policy attach locked-down claude-code
 brig policy detach locked-down claude-code
 brig policy check claude-code
 brig policy rm locked-down --force
+brig policy render-cilium locked-down.yaml --name locked-down
 ```
 
 A policy is bound in one of three ways: an inline entry in the `policy:`
@@ -1200,6 +1202,181 @@ nothing declares:
 $ brig policy edit locked-down
 brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: renaming locked-down to totally-new would leave claude-code pointing at a name nothing declares. Detach it first, or pass --force to rename it anyway
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
+```
+
+### render-cilium
+
+A cluster that runs Brig's broker enforces egress at the CNI, not in Brig.
+`brig policy render-cilium` turns the `spec.egress` section of a policy file
+into a CiliumNetworkPolicy and prints it on stdout. It reads the path you
+give it, so the policy does not have to be installed.
+
+```bash
+brig policy render-cilium deny-default.yaml --namespace agents --selector app=claude
+```
+
+The object name defaults to `metadata.name`, and it must be a valid
+Kubernetes name. `--name` replaces it. `--namespace` must be a valid
+namespace name. `--selector` is repeatable and sets the pod labels the policy
+applies to. With none, it applies to every pod in the namespace.
+`--pod-identity` adds a rule to the EKS Pod Identity agent at
+`169.254.170.23/32` and `fd00:ec2::23/128` on port 80. `--cluster` adds a
+rule to the cluster entity, every pod and node of the cluster on every port.
+A brig policy's egress names the hosts a sandbox reaches outside. A pod on a
+cluster also talks to the services beside it, a database or a queue, which
+the policy does not name. Without the flag a deny default cuts those off.
+`--broker-address` takes the node broker's address, when it is not
+`169.254.171.1`. A range is refused, because the rule would open port 443 to
+all of it. `--dns-search` is repeatable and adds a search domain of
+the pod's resolver, as described below. `--cluster-cidr` is repeatable and
+names a range the cluster's pods and nodes take their addresses from, as
+described below. A flag value Kubernetes or Cilium would not take is refused
+as a usage error.
+
+The mapping:
+
+| policy | CiliumNetworkPolicy |
+| --- | --- |
+| `default: deny` | `enableDefaultDeny: {egress: true}` and the allow rules |
+| `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
+| allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. Cilium's `*` does not cross a dot, so a leading `*.` becomes `**.` and then `*.`, `*.*.` and so on, up to five labels. See below |
+| allow `cidr` | `toCIDR`, masked. An IPv4-mapped CIDR such as `::ffff:10.0.0.0/104` is written as the IPv4 CIDR it names, `10.0.0.0/8`, as brig's enforcer reads it. One that covers every `--cluster-cidr` range also opens the cluster entity. See below |
+| deny `cidr` | `egressDeny` with `toCIDR`, written the same way. One that covers every `--cluster-cidr` range also denies every pod and node. See below |
+| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied, and stderr names it. See below. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host. It is refused under `--cluster`, because the cluster rule lets through any pod or node the host may name, such as one under `*.svc.cluster.local` |
+| `spec.routes` | a rule to the broker's address (`169.254.171.1/32`, or `--broker-address`) on port 443, where the node broker serves `brig.internal`. A CIDR rule, not the `host` entity: the address has link scope on the node and Cilium does not count it as the host |
+
+Cilium matches a pod or a node of the cluster by its identity, and applies
+no CIDR rule to its address. A `toCIDR` rule alone neither denies nor opens
+them, where brig's enforcer would. So the renderer needs the cluster's own
+ranges, given with `--cluster-cidr`: on EKS with ENI addressing, the VPC's
+CIDR; elsewhere, the pod and node CIDRs. Name the ranges of pods and nodes,
+not the service range. Cilium sends a service address to a pod before the
+policy applies.
+
+| `cidr` and the cluster's ranges | deny | allow, under a deny default |
+| --- | --- | --- |
+| outside them | `toCIDR` | `toCIDR` |
+| covers all of them | `toCIDR`, and a deny of every pod in every namespace, of kube-dns on every port but 53, and of the `host`, `remote-node`, `kube-apiserver`, `health`, `init`, `ingress` and `unmanaged` entities | `toCIDR`, and a rule to the `cluster` entity |
+| covers part of them | refused: Cilium cannot tell those pods and nodes from the others by address | `toCIDR`. The pods and nodes in it stay closed, and stderr says so |
+| private, with no `--cluster-cidr` | refused under an allow default or `--cluster`, where the pod reaches the cluster. Rendered as `toCIDR` under a deny default without `--cluster` | `toCIDR`, with a warning on stderr |
+
+kube-dns stays reachable on port 53 under a deny of the cluster, because the
+DNS rule sends every lookup there. The private ranges are `10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` and `fc00::/7`. For
+example, on a cluster in the VPC `10.2.0.0/16`:
+
+```bash
+brig policy render-cilium lan.yaml --cluster-cidr 10.2.0.0/16
+```
+
+A policy with `default: allow` and a deny of `10.0.0.0/8` then blocks every
+pod, node and the API server, as brig does, and still reaches the world.
+Without the flag it is refused.
+
+A dropped deny host stays denied only while no other CiliumNetworkPolicy
+that selects the same pods allows it. Cilium joins the allow rules of every
+policy that selects a pod, and a denial here is only the absence of an allow
+rule. brig applies `deny` over `allow` across every bound policy, and it
+refuses every name on an address it denies for one name. Neither holds once
+the objects are applied side by side. Render one object for the policies
+bound to a set of pods, or keep the deny host out of the others' allows.
+
+The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
+makes `toFQDNs` work. Under an allow default the rule answers every lookup.
+Under a deny default it answers only the allow hosts, `brig.internal` when
+the policy has routes, and the names under the resolver's search domains.
+The proxy refuses any other lookup, so a sandbox cannot carry data out in
+the names it looks up, as in `<data>.attacker.example`. Brig's own resolver
+refuses those names too.
+
+A pod's resolver, with the usual `ndots:5`, looks a name up under each search
+domain before it looks it up as written. glibc moves on to the next name when
+the proxy refuses one. musl does not: it waits for another answer until it
+times out, and the lookup fails. So the DNS rule answers every name under
+`cluster.local`, which kube-dns serves itself. Pass any other search domain
+in the pod's `/etc/resolv.conf` with `--dns-search`. On EKS that is the
+node's domain, such as `us-east-2.compute.internal`. Without it, a name the
+policy allows does not resolve in an image built on musl, such as Alpine.
+
+The rule to the `cluster` entity under `--cluster` also reaches kube-dns, on
+every port. On Cilium 1.17.3 the DNS rule still applies to that traffic: a
+lookup of a name the policy does not allow is refused, through the kube-dns
+service or straight to a kube-dns pod, over UDP and TCP.
+
+The DNS rule reaches kube-dns, the pods labeled `k8s-app: kube-dns` in
+`kube-system`. A cluster that runs NodeLocal DNSCache sends lookups to the
+cache on the node instead, and the rule does not reach it, so no allow host
+resolves. Add a rule for the cache to the rendered object on such a cluster.
+
+Only `*` is accepted as a wildcard in a host glob.
+`?`, `[` and `\` are refused, and the error names the rule. A `*` inside a label, as in `a*.example.com`, matches within one label in Cilium, which is narrower than brig.
+
+A leading `*.` matches names of any depth in brig. Cilium 1.17 reads `**.` as one label: under `**.amazonaws.com` alone, it lets `sts.amazonaws.com` through and drops `sts.us-east-2.amazonaws.com`. So the renderer writes `**.` for a release that spans labels with it, and one pattern for each depth from one to five labels for one that does not. A name more than five labels deep under the glob is dropped on such a release. None of the patterns matches the apex, as `*.` does not in brig.
+
+This is the output for a deny default with a host, a glob, a CIDR and a
+route:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-default
+  namespace: agents
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: ANY
+      rules:
+        dns:
+        - matchName: api.anthropic.com
+        - matchPattern: '**.githubusercontent.com'
+        - matchPattern: '*.githubusercontent.com'
+        - matchPattern: '*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.githubusercontent.com'
+        - matchPattern: '*.*.*.*.*.githubusercontent.com'
+        - matchName: brig.internal
+        - matchPattern: '**.cluster.local'
+        - matchPattern: '*.cluster.local'
+        - matchPattern: '*.*.cluster.local'
+        - matchPattern: '*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.cluster.local'
+        - matchPattern: '*.*.*.*.*.*.*.*.*.cluster.local'
+  - toCIDR:
+    - 169.254.171.1/32
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+  - toFQDNs:
+    - matchName: api.anthropic.com
+  - toFQDNs:
+    - matchPattern: '**.githubusercontent.com'
+    - matchPattern: '*.githubusercontent.com'
+    - matchPattern: '*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.githubusercontent.com'
+    - matchPattern: '*.*.*.*.*.githubusercontent.com'
+  - toCIDR:
+    - 10.0.0.0/8
+  egressDeny:
+  - toCIDR:
+    - 10.1.0.0/16
+  enableDefaultDeny:
+    egress: true
+  endpointSelector:
+    matchLabels:
+      app: claude
 ```
 
 ## Bind one session
