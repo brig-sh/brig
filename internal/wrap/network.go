@@ -448,6 +448,9 @@ func (c *Config) networkLine() string {
 	if msg := c.profileIsolationOnFallback(hv); msg != "" {
 		line += "; " + msg
 	}
+	if c.memoryNarrowed != "" {
+		line += fmt.Sprintf("; agent memory narrows %s to isolated", c.memoryNarrowed)
+	}
 	now := c.runningNet()
 	if now == "" || now == c.Network {
 		return line

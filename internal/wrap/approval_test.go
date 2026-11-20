@@ -113,3 +113,31 @@ func TestTheApprovalSubjectHoldsNoValue(t *testing.T) {
 		t.Errorf("the subject does not name the forwarded variable: %v", s.Forwarded)
 	}
 }
+
+// --agent-memory on the line of a target attaches a host store that no
+// setting or profile names. On an isolated target it changes neither the
+// network nor a mount, so the store itself has to be in the subject.
+func TestTheApprovalSubjectNamesAMemoryStore(t *testing.T) {
+	digestHost(t)
+	id := ProjectIdentity("/src/a", "dev", "", "")
+	tg := repoTarget()
+	tg.Root, tg.Brigfile = "/src/a", "/src/a/Brigfile"
+	// Memory is for the claude-code brig ships; a repository profile is
+	// refused it.
+	tg.ProfileSource, tg.BuiltIn = "builtin:claude-code", true
+	load := func(memory string) ApprovalSubject {
+		c, err := Load(repoClaude(t), Options{Identity: &id, Target: tg, Policies: &PolicySet{},
+			Network: "isolated", Memory: memory}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return subjectOf(t, c)
+	}
+	was, now := load(""), load("shared")
+	if ApprovalDigest(was) == ApprovalDigest(now) {
+		t.Fatal("asking for a memory store did not change the digest")
+	}
+	if got := strings.Join(ApprovalChanges(was, now), "\n"); !strings.Contains(got, "agent memory store shared, and was none") {
+		t.Errorf("the changes do not name the store:\n%s", got)
+	}
+}

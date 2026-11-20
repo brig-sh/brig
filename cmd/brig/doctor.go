@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -309,7 +310,13 @@ var modeChecks []func(agent *profile.Profile, rt runtime.Runtime) check
 // brokerStatusCheck is the broker row of a broker that answered its control
 // socket.
 func brokerStatusCheck(st injector.Status) check {
-	finding := fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d, serving %d sandboxes", st.PID, st.Port, len(st.Sandboxes))
+	// A sandbox is served for its routes, its memory or both, and counted
+	// once: a broker serving memory alone is not serving nothing.
+	served := map[string]bool{}
+	for _, id := range append(slices.Clone(st.Sandboxes), st.Memory...) {
+		served[id] = true
+	}
+	finding := fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d, serving %d sandboxes", st.PID, st.Port, len(served))
 	if len(st.Pending) > 0 {
 		finding += "; write-back pending: " + strings.Join(st.Pending, ", ")
 	}

@@ -132,6 +132,9 @@ func (c *Config) sessionRefusal() error {
 	if c.projectRefused != nil {
 		return c.projectRefused
 	}
+	if err := c.memoryRefusal(); err != nil {
+		return err
+	}
 	// Load also serves info, stop and rm. An unavailable inspector must not
 	// prevent those commands from reporting or removing a legacy sandbox.
 	if c.netRecovery == networkUnknown && !c.netExplicit {
@@ -248,6 +251,16 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			return fmt.Errorf("sandbox %s appeared after its network was inspected; run the command again "+
 				"to recover its posture before reusing it", c.VMName)
 		}
+		// Before anything below can restart the sandbox or register it with
+		// the broker: a sandbox keeps its store for life, so a change is
+		// refused (memoryChange). A lost record is refused first, because it
+		// would read as memory off (unrecordedMemory).
+		if err := c.unrecordedMemory(); err != nil {
+			return err
+		}
+		if err := c.memoryChange(); err != nil {
+			return err
+		}
 		// Two things can be wrong with the mounts of a sandbox that is up, and
 		// both are answered the same way, so they share the one recreate below
 		// rather than growing a second path: a share is bound at boot and
@@ -287,11 +300,19 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// request, and the tokens of this exec are minted here. With no
 			// route left, a policy was detached from the running sandbox,
 			// and its registration goes, so the tokens its agent holds are
-			// refused.
+			// refused. Its memory stays registered: removing it would
+			// refuse the memory token of an agent another exec started.
 			if len(c.routes) == 0 {
-				c.forgetRoutes()
+				if c.memoryKey == "" {
+					c.forgetRoutes()
+				} else {
+					c.forgetRoutesOnly()
+				}
 			}
 			if err := c.serveRoutes(set); err != nil {
+				return err
+			}
+			if err := c.serveMemory(); err != nil {
 				return err
 			}
 			// The guest has confirmed this workspace, so record it. Nothing has
@@ -342,7 +363,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// when it serves no other, rather than leave it registered for nothing.
 	booted := false
 	defer func() {
-		if err != nil && !booted && len(c.routes) > 0 {
+		if err != nil && !booted && (len(c.routes) > 0 || c.memoryKey != "") {
 			c.forgetRoutes()
 		}
 	}()
@@ -383,6 +404,15 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// and the tokens of this exec are minted here.
 	if err := c.serveRoutes(set); err != nil {
 		return err
+	}
+	if err := c.serveMemory(); err != nil {
+		return err
+	}
+	// Said once, at boot, as the image verification is: an exec has the store
+	// the sandbox booted with, and under brigd a line on every ensure would
+	// warn on every answer.
+	if c.memoryKey != "" {
+		c.warnf("memory: %s", c.memoryLabel)
 	}
 
 	// The share below is a path, and the runtime resolves it again on its own
@@ -515,6 +545,8 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// which the runtime has been told a network, so it is the one point at
 	// which the record can say which one the sandbox has.
 	c.recordPosture()
+	// The store, for the same reason: this boot is the sandbox it belongs to.
+	c.recordMemory()
 	// The share is bound now and cannot be changed on a live sandbox, so this
 	// is the moment the path becomes a fact about the instance. Recorded before
 	// the readiness wait for that reason: a sandbox that boots and never answers
@@ -1032,7 +1064,8 @@ const projectVar = "BRIG_PROJECT"
 // through urunc leaves it unset. A HOME the set already carries is kept.
 //
 // The route variables come last, so a route value replaces a profile value of
-// the same name, as the spec of guest.env says.
+// the same name, as the spec of guest.env says. The memory variables follow
+// them, so the memory token is the one brig minted whatever else names it.
 //
 // BRIG_PROJECT is where the project is mounted, set only when one is. A
 // process the sandbox did not start through brig -- an SSH session, whose
@@ -1043,7 +1076,7 @@ const projectVar = "BRIG_PROJECT"
 // (withoutProjectVar); the filter here is what holds the promise for a set
 // built any other way.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
-	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+1)
+	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+len(c.memoryVars)+1)
 	for _, v := range set.Vars {
 		if v.Name != projectVar {
 			vars = append(vars, v)
@@ -1054,6 +1087,7 @@ func (c *Config) guestEnv(set creds.Set) []runtime.Var {
 			vars = append(vars, v)
 		}
 	}
+	vars = append(vars, c.memoryVars...)
 	if c.GuestProject != "" {
 		vars = append(vars, runtime.Var{Name: projectVar, Value: c.GuestProject})
 	}

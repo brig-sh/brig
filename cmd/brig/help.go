@@ -43,6 +43,9 @@ flags:
       --cpus N        guest vCPUs
   -d, --detach        start the sandbox and exit, without attaching
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --agent-memory  keep the agent's memory in the project's store on the
+                      host; --agent-memory=NAME names a store that sandboxes
+                      share, --no-agent-memory turns it off (or BRIG_MEMORY)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE
@@ -83,6 +86,9 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --agent-memory  keep the agent's memory in the project's store on the
+                      host; --agent-memory=NAME names a store that sandboxes
+                      share, --no-agent-memory turns it off (or BRIG_MEMORY)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE
@@ -212,6 +218,9 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --agent-memory  keep the agent's memory in the project's store on the
+                      host; --agent-memory=NAME names a store that sandboxes
+                      share, --no-agent-memory turns it off (or BRIG_MEMORY)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE

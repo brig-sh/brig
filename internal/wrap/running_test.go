@@ -30,6 +30,11 @@ type livenessRuntime struct {
 	boots   int
 	stops   int
 	removes int
+	// guestFiles are the files written into the guest as root, by path, and
+	// guestRuns every command run there, for a runtime that records them
+	// (memoryRuntime).
+	guestFiles map[string]string
+	guestRuns  []runtime.ExecSpec
 }
 
 func (r *livenessRuntime) Kind() string                 { return "hull" }

@@ -400,6 +400,7 @@ func RefOfSandbox(vmName string) string {
 // that rm does.
 func ForgetSandbox(vmName string) (bool, error) {
 	forgetGitWatch(func(name string) bool { return name != vmName })
+	forgetMemory(vmName)
 	return dropSessionEntries(vmName)
 }
 
@@ -636,9 +637,11 @@ func PruneSessions(live []string) {
 		return
 	}
 	dropped := false
+	var gone []string
 	for key, entry := range index {
 		if !have[entry.Sandbox] {
 			delete(index, key)
+			gone = append(gone, entry.Sandbox)
 			dropped = true
 		}
 	}
@@ -646,6 +649,11 @@ func PruneSessions(live []string) {
 		return
 	}
 	_ = writeSessionIndex(index)
+	// The memory record of a pruned sandbox goes with its session, so
+	// memory.json does not keep names that no sandbox has.
+	for _, vm := range gone {
+		forgetMemory(vm)
+	}
 }
 
 // rememberSession records what this run has just started: the ref it is filed
