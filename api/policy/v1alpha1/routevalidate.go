@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -166,6 +167,11 @@ func (r *Route) validate(expanded bool) error {
 
 	if r.Request != nil && r.Request.Allow != nil {
 		if err := r.Request.Allow.validate(r.Preset); err != nil {
+			return err
+		}
+	}
+	if r.Request != nil && r.Request.Body != nil {
+		if err := r.Request.Body.validate(r.Preset); err != nil {
 			return err
 		}
 	}
@@ -582,6 +588,94 @@ func isGraphQLName(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// validate checks the body rules of a route. They read the Anthropic
+// Messages API, so only the two presets that speak it take them.
+func (b *RequestBody) validate(preset Preset) error {
+	if preset != PresetClaudeCode && preset != PresetAnthropicAPIKey {
+		return fmt.Errorf("request.body needs preset: %s or %s", PresetClaudeCode, PresetAnthropicAPIKey)
+	}
+	// As under request.allow, an empty list would count as unset and let
+	// everything through, while a reader takes it to let nothing through.
+	type list struct {
+		field string
+		list  []string
+	}
+	lists := []list{{"models", b.Models}, {"toolResultDeny", b.ToolResultDeny}}
+	if b.Tools != nil {
+		lists = append(lists, list{"tools.allow", b.Tools.Allow}, list{"tools.deny", b.Tools.Deny})
+	}
+	if b.ToolUse != nil {
+		lists = append(lists, list{"toolUse.deny", b.ToolUse.Deny})
+	}
+	for _, l := range lists {
+		if l.list != nil && len(l.list) == 0 {
+			return fmt.Errorf("request.body.%s is empty; list at least one, or leave the key out", l.field)
+		}
+	}
+	if b.Models == nil && b.Tools == nil && b.MaxTokens == 0 && b.ToolResultDeny == nil && b.ToolUse == nil {
+		return fmt.Errorf("request.body sets nothing; leave it out to forward every body")
+	}
+	for _, m := range b.Models {
+		if m == "" || strings.IndexFunc(m, unicode.IsSpace) >= 0 {
+			return fmt.Errorf("request.body.models %q is not a model name", m)
+		}
+		// * is the one wildcard, so a model name never needs escaping and
+		// a pattern means the same to the broker and to a reader.
+		if strings.ContainsAny(m, "?[]\\") {
+			return fmt.Errorf("request.body.models %q holds a glob character other than *", m)
+		}
+	}
+	if b.Tools != nil {
+		if b.Tools.Allow == nil && b.Tools.Deny == nil {
+			return fmt.Errorf("request.body.tools sets neither allow nor deny")
+		}
+		if err := checkToolNames("tools.allow", b.Tools.Allow); err != nil {
+			return err
+		}
+		if err := checkToolNames("tools.deny", b.Tools.Deny); err != nil {
+			return err
+		}
+	}
+	if b.ToolUse != nil {
+		if err := checkToolNames("toolUse.deny", b.ToolUse.Deny); err != nil {
+			return err
+		}
+	}
+	if b.MaxTokens < 0 {
+		return fmt.Errorf("request.body.maxTokens %d is negative", b.MaxTokens)
+	}
+	// The broker compiles each pattern for every request it checks, so a
+	// pattern that does not compile is refused here, before boot.
+	for _, p := range b.ToolResultDeny {
+		if _, err := regexp.Compile(p); err != nil {
+			return fmt.Errorf("request.body.toolResultDeny %q is not an RE2 pattern: %w", p, err)
+		}
+	}
+	if b.ToolUse != nil {
+		if b.ToolUse.Deny == nil {
+			return fmt.Errorf("request.body.toolUse.deny is required when request.body.toolUse is set")
+		}
+		switch b.ToolUse.Action {
+		case "", ToolUseRefuse, ToolUseDrop:
+		default:
+			return fmt.Errorf("request.body.toolUse.action %q is not %s or %s", b.ToolUse.Action, ToolUseRefuse, ToolUseDrop)
+		}
+	}
+	return nil
+}
+
+// checkToolNames refuses a tool name that is empty or holds a space. A tool
+// name is matched exactly, so a space there is most often a typo that would
+// never match.
+func checkToolNames(field string, names []string) error {
+	for _, n := range names {
+		if n == "" || strings.IndexFunc(n, unicode.IsSpace) >= 0 {
+			return fmt.Errorf("request.body.%s %q is not a tool name", field, n)
+		}
+	}
+	return nil
 }
 
 // checkHeaderName refuses a name that is not an HTTP header name, and a header

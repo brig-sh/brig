@@ -357,6 +357,16 @@ response reads by following edges into other repositories, or an issue that
 a closing keyword such as `Fixes other/repo#5` closes on merge. The token's
 scope is the limit there. See [GraphQL requests](broker.md#graphql-requests).
 
+On an Anthropic route, `request.body` checks `POST /v1/messages` for the
+model, the tool names, `max_tokens` and every string in the body. The string
+check skips only a model or a tool name that an allow list of the rule
+names. The broker rewrites a denied `tool_use` block in the answer to that
+call. The route refuses every other call except `GET /v1/models` and
+`GET /v1/models/{id}`. A pattern finds text as it is written, so it does not
+stop an agent that encodes the text first. The rewrite guards against the
+model asking for a tool. It does not stop a process in the guest from
+running that tool itself.
+
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
 A `claude` started without it, under `sudo -i`, `su -` or `env -i` for

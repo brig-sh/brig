@@ -295,6 +295,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// request.body reads a POST /v1/messages after request.allow and before
+	// the credential is resolved, so a refused body never reads it. Every
+	// other call but a listed read is refused, so no path on the route takes
+	// a prompt or tools past the rules.
+	if body := bodyRules(&rt.spec); body != nil {
+		switch callOf(r.Method, p.rest) {
+		case refuseCall:
+			a.check = "body"
+			a.policy, a.rule, a.reason = rt.policy, "spec.routes["+p.route+"].request.body", "path"
+			writeAnthropicError(rec, http.StatusForbidden, "permission_error", refusedCall(r.Method, p.rest))
+			return
+		case checkCall:
+			// The held buffer is the body as sent: findPlaceholder inflates a
+			// copy for its scan alone. The rules would read compressed bytes,
+			// and the upstream the JSON inside them, so a compressed body is
+			// refused.
+			if encodedRequest(r.Header) {
+				a.check = "content-encoding"
+				http.Error(rec, "brig broker: a request to /v1/messages on a route with request.body rules is plain JSON, not compressed",
+					http.StatusUnsupportedMediaType)
+				return
+			}
+			if ref := checkBody(body, held); ref != nil {
+				a.check = "body"
+				a.policy, a.rule, a.reason = rt.policy, ref.rule(p.route), ref.reason
+				writeAnthropicError(rec, ref.status(), ref.errorType(), ref.message)
+				return
+			}
+		}
+	}
 
 	// A route that presents a client certificate and sets no header has no
 	// credential: the certificate is its identity, and it is read when the
@@ -493,6 +523,9 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 	in := rt.spec.Inject
 	trip := &upstreamTrip{h: h, route: rt, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
+	if body := bodyRules(&rt.spec); body != nil && body.ToolUse != nil && callOf(r.Method, p.rest) == checkCall {
+		trip.toolUse = body.ToolUse
+	}
 	// After the response has been copied: a transport that a rotation retired
 	// while this request was on it closes its connections now.
 	defer trip.done()
@@ -511,6 +544,14 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 			// not see them.
 			pr.Out.Trailer = nil
 			a.dropped = dropGuestHeaders(in, pr.Out.Header, token)
+			if body := bodyRules(&rt.spec); body != nil && body.Tools != nil {
+				if n := dropToolBetas(pr.Out.Header); n > 0 {
+					if a.dropped == nil {
+						a.dropped = map[string]int{}
+					}
+					a.dropped["Anthropic-Beta"] += n
+				}
+			}
 			// The transport asks for gzip, and undoes it, only when the
 			// request has no Range and is not a HEAD. Otherwise the
 			// upstream is asked for the body as it is.
@@ -520,7 +561,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 			injectCredential(in, pr.Out.Header, value)
 		},
 		Transport:      trip,
-		ModifyResponse: trip.redactResponse,
+		ModifyResponse: trip.modifyResponse,
 		// An event stream reaches the guest event by event.
 		FlushInterval: -1,
 		ErrorLog:      log.New(io.Discard, "", 0),
@@ -529,6 +570,12 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 				a.check = "response.encoding"
 				http.Error(w, "brig broker: the upstream of route "+p.route+" sent a body in an encoding the broker cannot read",
 					http.StatusBadGateway)
+				return
+			}
+			if errors.Is(err, errAnswerTooLarge) {
+				a.check = "response.size"
+				http.Error(w, "brig broker: the answer of route "+p.route+" is over 8 MiB, the most the broker reads "+
+					"to check its tool calls", http.StatusBadGateway)
 				return
 			}
 			// The sandbox went between the lookup of the route and the dial.
@@ -599,6 +646,21 @@ type upstreamTrip struct {
 	// same one, and the audit line names the certificate of this transport:
 	// the one the connection carried.
 	tt *tlsTransport
+	// toolUse is request.body.toolUse of a POST /v1/messages, whose answer
+	// has its denied tool calls rewritten, or nil for a response passed on
+	// as the upstream sent it.
+	toolUse *v1alpha1.ToolUseRules
+}
+
+// modifyResponse redacts the response, then rewrites its denied tool calls.
+// The rewrite reads the redacted body, the one the guest would get, so the
+// text it keeps and the refusal it writes never carry the credential, and a
+// tool call the redactor touched is still found by its name.
+func (u *upstreamTrip) modifyResponse(resp *http.Response) error {
+	if err := u.redactResponse(resp); err != nil {
+		return err
+	}
+	return u.rewriteToolUse(resp)
 }
 
 // done ends the request's use of its transport. A transport that a rotation
@@ -993,8 +1055,8 @@ type auditLine struct {
 	arrived string
 	// check names the check that refused the request.
 	check string
-	// policy, rule and reason repeat the refusal body of a request.allow
-	// miss.
+	// policy, rule and reason repeat the refusal of a request.allow or a
+	// request.body miss. A request.body reason holds no body text.
 	policy, rule, reason string
 	// dropped counts the values inject.headers.allow dropped, per header.
 	dropped map[string]int
@@ -1033,6 +1095,23 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// auditToolUse writes the line of one tool call the broker refused in an
+// answer. The request's own line is one per request and is written once the
+// response has been copied, so it cannot count the blocks an answer held:
+// each refused block gets a line of its own, before the request's line. It
+// names the tool, never the input the model gave it.
+func (h *Handler) auditToolUse(ctx context.Context, a *auditLine, tool string) {
+	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker",
+		slog.String("workload", a.workload),
+		slog.String("sandbox", a.sandbox),
+		slog.String("route", a.route),
+		slog.String("method", clip(a.method, maxAuditMethod)),
+		slog.String("path", clip(a.path, maxAuditPath)),
+		slog.String("check", "tool_use"),
+		slog.String("reason", "tool="+clip(tool, clipName)),
+	)
 }
 
 func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur time.Duration) {

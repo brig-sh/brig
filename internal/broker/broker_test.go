@@ -311,13 +311,23 @@ func (c *fakeClock) Advance(d time.Duration) {
 func presetRoute(t *testing.T, preset v1alpha1.Preset, name, secretName, upstream string,
 	allow *v1alpha1.RequestAllow) Route {
 	t.Helper()
+	var req *v1alpha1.RequestPolicy
+	if allow != nil {
+		req = &v1alpha1.RequestPolicy{Allow: allow}
+	}
+	return presetRouteWith(t, preset, name, secretName, upstream, req)
+}
+
+// presetRouteWith is presetRoute for a route with any request policy, such as
+// one with request.body rules.
+func presetRouteWith(t *testing.T, preset v1alpha1.Preset, name, secretName, upstream string,
+	req *v1alpha1.RequestPolicy) Route {
+	t.Helper()
 	in := v1alpha1.Route{
 		Name:       name,
 		Preset:     preset,
 		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: secretName}},
-	}
-	if allow != nil {
-		in.Request = &v1alpha1.RequestPolicy{Allow: allow}
+		Request:    req,
 	}
 	r, err := policy.ExpandRoute(in)
 	if err != nil {
