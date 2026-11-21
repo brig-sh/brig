@@ -174,7 +174,7 @@ func TestBrigFlagsDeclareAPosition(t *testing.T) {
 //     which can lag or lead the binary, and the agent is not on this machine to
 //     check against.
 //
-// All lists were captured 2026-09-05.
+// Unless noted otherwise, lists were captured 2026-09-05.
 func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 	// The brig spelling -> why it still collides, per profile.
 	profiles := []struct {
@@ -268,6 +268,43 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 			},
 			knownOverlaps: map[string]string{
 				"-d": "gemini -d/--debug; brig's --detach keeps -d, so this one stays",
+			},
+		},
+		{
+			// OMP 19.0.1: local --help capture for the launch flags and
+			// ps, gc, plugin, usage, stats, worktree and grievances.
+			name: "omp",
+			agentFlags: []string{
+				"--add-dir", "--advisor", "--agent-dir", "--alias", "--all", "--allow-home",
+				"--api-key", "--append-system-prompt", "--apply", "--approval-mode",
+				"--archive", "--auto-approve", "--blobs", "--branch",
+				"--cold-archive-after-days", "--compress", "--compress-after-days",
+				"--config", "--continue", "--cwd", "--days", "--detach", "--dir", "--disable",
+				"--dry-run", "--enable", "--export", "--extension", "--external-thinking",
+				"--fix", "--follow", "--force", "--force-branch", "--from-claude",
+				"--from-codex", "--goal", "--grep", "--head", "--hide-thinking", "--history",
+				"--hook", "--host", "--id", "--json", "--limit", "--lines", "--local",
+				"--max-cost", "--max-fps", "--max-time", "--mode", "--model", "--models",
+				"--motion", "--no-context-files", "--no-extensions", "--no-judge", "--no-lsp",
+				"--no-prewalk", "--no-pty", "--no-rules", "--no-session", "--no-skills",
+				"--no-spotlight", "--no-title", "--no-tools", "--no-ui", "--offline",
+				"--plain", "--plan", "--plan-yolo", "--plan-yolo-into", "--plugin-dir",
+				"--port", "--prewalk", "--prewalk-into", "--print", "--print-thoughts",
+				"--profile", "--provider", "--quiet", "--redact", "--restore", "--resume",
+				"--retain-newest-global", "--retain-newest-per-cwd", "--scope",
+				"--service-tier", "--session-dir", "--set", "--signal", "--skills", "--slow",
+				"--smol", "--spinner-interval", "--stale", "--stale-retain-days",
+				"--stale-retain-newest", "--strip", "--strip-after-days", "--summary",
+				"--system-prompt", "--system-prompt-template", "--thinking", "--timeout",
+				"--tool", "--tools", "--wait-async", "--wal", "--warn-cost", "-B", "-C", "-a",
+				"-b", "-c", "-d", "-e", "-f", "-j", "-l", "-n", "-p", "-q", "-r", "-s", "-t",
+			},
+			knownOverlaps: map[string]string{
+				"--detach":  "omp worktree add detaches HEAD; brig detaches the sandbox",
+				"--json":    "omp subcommands emit JSON; brig keeps its run result in JSON",
+				"--offline": "omp limits auxiliary providers; brig keeps its network shorthand",
+				"--skills":  "omp filters skills; brig keeps its host configuration opt-in",
+				"-d":        "omp usage sets a days window and worktree add detaches HEAD; brig keeps -d for sandbox detach",
 			},
 		},
 		{
