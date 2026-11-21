@@ -42,7 +42,7 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
   -d, --detach        start the sandbox and exit, without attaching
-      --skills        copy your ~/.claude skills and plugins into the guest home
+      --skills        copy the profile's selected host config paths into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE
@@ -82,7 +82,7 @@ flags:
       --home PATH     host directory to mount as the guest home
       --mem MB        guest memory
       --cpus N        guest vCPUs
-      --skills        copy your ~/.claude skills and plugins into the guest home
+      --skills        copy the profile's selected host config paths into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE
@@ -211,7 +211,7 @@ flags:
       --no-project    plan with no project, even one the session ran with last
       --mem MB        guest memory
       --cpus N        guest vCPUs
-      --skills        copy your ~/.claude skills and plugins into the guest home
+      --skills        copy the profile's selected host config paths into the guest home
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --isolation MODE
