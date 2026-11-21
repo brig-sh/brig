@@ -49,8 +49,8 @@ profile of your own.
 
 ## Where profiles live
 
-`brig run claude` needs no profile setup, because the ten profiles that Brig
-ships are embedded in the binary.
+`brig run claude` needs no profile setup because Brig embeds its built-in
+profiles in the binary.
 
 Your own profiles live as one file per profile, with no subdirectories:
 
@@ -98,7 +98,7 @@ names the file that won, which depends on how the file names sort.
 
 </details>
 
-## The ten built-in profiles
+## Built-in profiles
 
 | profile | alias | kind | image |
 | --- | --- | --- | --- |
@@ -137,7 +137,7 @@ Each profile sets the network default for a new sandbox. See
 
 | case | network |
 | --- | --- |
-| The eight shipped `hvi` profiles | `network: isolated` |
+| Built-in `hvi` profiles | `network: isolated` |
 | `claude-desktop` | `network: shared`, because its GUI requires `vz` |
 | `cursor` | Unset. Linux and `hvi` isolate. `vz` and `qemu` fall back to `shared` |
 | An existing session | Keeps its posture |
@@ -331,11 +331,11 @@ one, import a profile of the same name.
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
 | `network` | no | The network posture of the sandbox: `shared` (one network for sandboxes using it), `isolated` (a network for this sandbox alone) or `offline` (no route out at all). A new sandbox defaults to `isolated`. When no posture is named, the `vz` and `qemu` backends fall back to `shared` and report it. Brig refuses an explicit `isolated` on `vz` and `qemu`. An existing sandbox keeps its posture. `BRIG_NETWORK`, `--network` and `--offline` win over both |
-| `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. Eight of the ten shipped profiles say `hvi`. `BRIG_HYPERVISOR` wins over it. On Linux, for a `genericBoot` profile, an absent field or `vz` means `hvi`, and the runtime bundle does not ship `qemu`. See [`BRIG_HYPERVISOR`](cli.md#environment-variables) |
+| `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. See [Run paths compared](runtimes.md#run-paths-compared) for the built-in defaults. `BRIG_HYPERVISOR` wins over it. On Linux, for a `genericBoot` profile, an absent field or `vz` means `hvi`, and the runtime bundle does not ship `qemu`. See [`BRIG_HYPERVISOR`](cli.md#environment-variables) |
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. It describes your machine, so it is of no use to a person you share the profile with. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Set `block` when the sandbox installs packages and needs a writable disk. Left unset or set to `virtiofs`, a `genericBoot` profile boots an overlay root where the host can build one. `BRIG_ROOTFS_MODE=virtiofs` turns the overlay off. See [the guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot) |
 | `genericBoot` | no | The image is a plain OCI image with no kernel and no urunc metadata. Brig supplies the kernel and boots the image unmodified, on macOS and Linux alike. See [`genericBoot`](#genericboot) |
-| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code`, `herdr` and `omp` declare them, so `--skills` does nothing on the other seven |
+| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code`, `herdr` and `omp` declare them |
 | `onboarding` | no | A first-run state file to seed. See [`onboarding`](#onboarding) |
 | `reserved` | no | Marks a profile that owns the guest home a session name can otherwise slug onto. See [`reserved`](#reserved) |
 | `unpublished` | no | Brig ships the profile but no image for it. `brig run` says so and stops before the pull. Pass `--image` with one you built. `cursor` is the one that carries it |

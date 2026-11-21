@@ -163,9 +163,8 @@ A profile with `genericBoot: true` says that its image has no kernel and no
 urunc metadata. An image that carries both leaves `genericBoot` off and
 needs none of this section.
 
-Eight of the ten shipped profiles set it. `ubuntu` is one of them, and it
-boots `docker.io/library/ubuntu:latest` unmodified. `claude-desktop` and
-`cursor` leave it off.
+`ubuntu` sets it and boots `docker.io/library/ubuntu:latest` unmodified.
+`claude-desktop` and `cursor` leave it off.
 
 Brig supplies the kernel and the initrd from host files, never from the
 image. See [`genericBoot`](profiles.md#genericboot) for where they live and

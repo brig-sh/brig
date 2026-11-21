@@ -75,7 +75,7 @@ The sandbox is a microVM on macOS and on Linux.
 
 | Host | How the microVM boots |
 | --- | --- |
-| macOS | [hull](https://github.com/brig-sh/hull) boots it. Its `hvi` backend uses Hypervisor.framework, and eight of the ten shipped profiles ask for `hvi`. Its `vz` backend uses Virtualization.framework, and `claude-desktop` and `cursor` run on `vz`. `BRIG_HYPERVISOR` overrides the profile. See [Run paths compared](runtimes.md#run-paths-compared). `brew install --cask brig` installs hull |
+| macOS | [hull](https://github.com/brig-sh/hull) boots it. Its `hvi` backend uses Hypervisor.framework. Its `vz` backend uses Virtualization.framework, and `claude-desktop` and `cursor` run on `vz`. `BRIG_HYPERVISOR` overrides the profile. See [Run paths compared](runtimes.md#run-paths-compared). `brew install --cask brig` installs hull |
 | Linux | Brig drives `hull` when a `hull` is on `PATH`, and `nerdctl` otherwise. `BRIG_RUNTIME` names either one. Both hand the container to the urunc shim (`io.containerd.urunc.v2`), which on nerdctl is the default. The guest gets its own kernel |
 
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
@@ -1176,7 +1176,7 @@ Two things are narrower on macOS than on Linux:
 
 ### The kernel, not only the image
 
-Eight of the ten shipped profiles boot a kernel and an initrd that Brig
+These built-in profiles boot a kernel and an initrd that Brig
 downloads: `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `omp`, `opencode` and
 `ubuntu`. Brig checks that bundle too, under the same
 [`BRIG_VERIFY` mode](#verification-modes), as a second check with its own
