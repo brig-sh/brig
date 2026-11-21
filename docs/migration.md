@@ -325,7 +325,7 @@ The shipped profiles name these postures:
 
 | Profile | Posture |
 | --- | --- |
-| the seven `hvi` profiles | `isolated`, named explicitly |
+| the eight `hvi` profiles | `isolated`, named explicitly |
 | the graphical `claude-desktop` profile | `shared`, for `vz` |
 | the unpublished `cursor` profile | unset. It isolates on Linux and `hvi`, and takes the shared fallback on `vz` or `qemu` |
 | any profile without a network choice | falls back to `shared` on `vz` or `qemu`, and `brig info` reports why |

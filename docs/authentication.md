@@ -15,7 +15,7 @@ needs:
 | --- | --- | --- |
 | A first run with no setup | [1. Log in inside the guest](#1-log-in-inside-the-guest) | all |
 | Start logged in with the login you already have on this host | [2. Carry your host login in, once](#2-carry-your-host-login-in-once) | `claude-code`, `claude-desktop`, `herdr` |
-| Use an API key from your shell, a CI job or a secret manager | [3. Live environment bindings](#3-live-environment-bindings) | `cursor`, `gemini`, `grok`, `opencode` |
+| Use an API key from your shell, a CI job or a secret manager | [3. Live environment bindings](#3-live-environment-bindings) | `cursor`, `gemini`, `grok`, `omp`, `opencode` |
 | Keep the login on the host, out of the guest | [4. Keep the login on the host](#4-keep-the-login-on-the-host) | `claude-code`, or any profile with a route |
 
 `brig info <ref>` shows which credentials a run gets, by name, and boots
@@ -39,7 +39,7 @@ The profile decides where the login is stored:
 | Profiles | Where the login is stored | After `brig stop` |
 | --- | --- | --- |
 | `claude-code`, `herdr` | a memory-backed mount | lost. The next `brig run` asks again |
-| `claude-desktop`, `codex`, `cursor`, `gemini`, `grok`, `opencode` | the guest home, on host disk | kept, until `brig rm` deletes a guest home Brig created |
+| `claude-desktop`, `codex`, `cursor`, `gemini`, `grok`, `omp`, `opencode` | the guest home, on host disk | kept, until `brig rm` deletes a guest home Brig created |
 
 For `claude-code`, the login never reaches host disk.
 
@@ -112,7 +112,12 @@ Brig reads the key from your environment on every run and stores no copy.
 | `cursor` | `CURSOR_API_KEY` |
 | `gemini` | `GEMINI_API_KEY` |
 | `grok` | `XAI_API_KEY` |
-| `opencode` | `OPENROUTER_API_KEY` |
+| `omp`, `opencode` | `OPENROUTER_API_KEY` |
+
+For OMP, export `OPENROUTER_API_KEY`, then run `brig run omp <project>`.
+The sandbox boots without a key, but OMP still needs a configured model to
+answer prompts. A login made inside the guest is stored in its persistent
+home; `--skills` does not import the host OMP login.
 
 Some profiles refuse to forward a provider key, because the key would move
 the agent from your subscription to metered API billing:
@@ -155,7 +160,7 @@ The profile decides where `GH_TOKEN` comes from:
 | Profiles | Source of `GH_TOKEN` |
 | --- | --- |
 | `claude-code`, `claude-desktop`, `herdr` | your exported `GH_TOKEN` if you set one, then a stored `gh-token` secret |
-| the other six | your exported `GH_TOKEN` only |
+| `codex`, `cursor`, `gemini`, `grok`, `omp`, `opencode`, `ubuntu` | your exported `GH_TOKEN` only |
 
 To store the token once:
 

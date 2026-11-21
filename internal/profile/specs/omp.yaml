@@ -1,0 +1,20 @@
+name: omp
+desc: Oh My Pi (OSS, provider-agnostic) -- example profile
+binary: omp
+image: ghcr.io/brig-sh/omp-stock:root
+hypervisor: hvi
+network: isolated
+genericBoot: true
+# The stock root image maps uid 0 to the invoking user on rootless Linux.
+guestHome: /root
+# --skills copies these directories, not the host's agent.db or settings.
+hostConfigDir: ~/.omp
+projectPaths: [agent/skills, agent/extensions]
+env:
+  - name: OPENROUTER_API_KEY
+    ref: env.OPENROUTER_API_KEY
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
+headless: true
+mem: 4096
+cpus: 4
