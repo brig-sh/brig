@@ -1181,7 +1181,7 @@ On a run line with no ref, `--target`, `--session`, `-f`, `--approve` and
 | `--cpus N` | number | the agent's own (`4` for most shipped agents) | guest vCPUs |
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
 | `-d`, `--detach` | (none) | off | start the sandbox, print its name and exit, without attaching. Only `run` acts on it. `sh`, `stop`, `rm`, `info` and `plan` accept it and ignore it |
-| `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
+| `--skills` | (none) | off | copy the host configuration paths named by the profile's `hostConfigDir` and `projectPaths` into the guest home. Without both fields, nothing is copied. The host copy is never written. Same as `BRIG_SKILLS=1` |
 | `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A verb without the flag does not change the posture of a sandbox. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
 | `--isolation MODE` | `microvm` | off | require a microVM. The run is refused with exit `7` unless the `ISOLATION` row says `microVM`, so a `container`, an `unknown` boundary and docker are all refused, and the refusal names the setting to change. It has no variable and no profile field, so nothing a run inherits can weaken it. It is refused, not forwarded, when it stands in the agent's arguments, where Brig would not read it; after `--` and in a `brig sh` command it is the agent's or the guest's own. `container` is not a value: a shim that shares the host kernel is refused without being asked. See [Exit 7 cases](#exit-7-cases) |
@@ -1426,7 +1426,7 @@ them "global only".
 | `BRIG_CPUS` | the agent's own | guest vCPUs. A value that is not a positive whole number is ignored |
 | `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running |
 | `BRIG_NETWORK` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture, which `brig info` reports) | `shared`, `isolated` or `offline`. Wins over the posture an existing sandbox was started with. An unrecognized value refuses the run. See [policies.md](policies.md) |
-| `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills` |
+| `BRIG_SKILLS` | `0` | `1` copies the profile's selected host configuration paths into the guest home. Same as `--skills` |
 | `BRIG_FORWARD_ENV` | (unset) | a space-separated list of environment variable names to carry into the guest, read live on every run |
 | `BRIG_TITLE` | the agent's own | window title for a graphical agent |
 
