@@ -609,8 +609,7 @@ func TestProfileImportPointsAtTheSecretVerb(t *testing.T) {
 	}
 }
 
-// noSecrets registers a profile that declares no secrets at all, which is
-// the state six of the nine shipped profiles are in.
+// noSecrets registers a profile that declares no secrets at all.
 func noSecrets(t *testing.T) {
 	t.Helper()
 	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `

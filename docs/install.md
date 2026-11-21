@@ -94,9 +94,8 @@ included. It checks every archive against a SHA-256 checksum. It installs to
 ### cosign
 
 `cosign` verifies the container image behind an agent. For a `genericBoot`
-profile, seven of the nine shipped profiles, it also verifies the kernel, the
-initrd and the guest agent that the sandbox boots. `install.sh` skips
-`cosign` when one is already on `PATH`.
+profile, it also verifies the kernel, the initrd and the guest agent that
+the sandbox boots. `install.sh` skips `cosign` when one is already on `PATH`.
 
 Without `cosign` on `PATH`, those checks report "no tooling". In the default
 mode Brig prints a warning, and still fetches and boots the assets. To make
@@ -224,7 +223,7 @@ On a host without the bundle, `oras` fetches the boot bundle for a
 
 | Profiles | Need `oras` without the bundle |
 | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `opencode`, `ubuntu` (seven of the nine shipped profiles, all `genericBoot`) | Yes |
+| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `omp`, `opencode`, `ubuntu` (all `genericBoot`) | Yes |
 | `claude-desktop`, `cursor` | No |
 
 On such a host, a `genericBoot` run fails when the kernel and initrd are
@@ -335,8 +334,7 @@ The project tests on macOS 26. Brig also runs on macOS 15.
 ### macOS 14
 
 The `hvi` backend needs macOS 15. On an older macOS, Brig refuses a run
-on `hvi`. Seven of the nine shipped profiles ask for `hvi`. To run them on
-macOS 14, set two variables:
+on `hvi`. To run a profile that asks for `hvi` on macOS 14, set two variables:
 
 | Setting | Why |
 | --- | --- |

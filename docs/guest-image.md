@@ -121,7 +121,7 @@ set the user separately.
 
 | profiles | `guestHome` | guest user |
 | --- | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `opencode` | `/root` | root |
+| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `omp`, `opencode` | `/root` | root |
 | `claude-desktop` | `/home/claude` | `claude` |
 | `cursor` | `/home/cursor` | `cursor` |
 | `ubuntu` | `/root/work` | The derived name is `work`, which is not an account in that image. Nothing reads it there, because the image already runs as `root` |
@@ -163,9 +163,8 @@ A profile with `genericBoot: true` says that its image has no kernel and no
 urunc metadata. An image that carries both leaves `genericBoot` off and
 needs none of this section.
 
-Seven of the nine shipped profiles set it. `ubuntu` is one of them, and it
-boots `docker.io/library/ubuntu:latest` unmodified. `claude-desktop` and
-`cursor` leave it off.
+`ubuntu` sets it and boots `docker.io/library/ubuntu:latest` unmodified.
+`claude-desktop` and `cursor` leave it off.
 
 Brig supplies the kernel and the initrd from host files, never from the
 image. See [`genericBoot`](profiles.md#genericboot) for where they live and

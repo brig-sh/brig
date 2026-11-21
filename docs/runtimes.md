@@ -56,11 +56,11 @@ backend.
 | nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux, when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | refused | yes. Brig creates a network for each sandbox |
 | hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, by default when a `hull` is on `PATH`. brig-standalone-linux carries one from v0.1.0-rc22 | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
 
-The nine shipped profiles divide as follows on macOS:
+The built-in profiles use these defaults on macOS:
 
 | profiles | backend | network |
 | --- | --- | --- |
-| seven of the nine | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
+| Built-in `hvi` profiles | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
 | `claude-desktop` | none named, so `vz` | `shared` |
 | `cursor` | none named, so `vz` | none named, so `shared` |
 
@@ -417,7 +417,7 @@ On an old build, Brig drops one feature at a time:
   [Things Brig does not claim](security.md#things-brig-does-not-claim) for the
   answer per backend.
 
-The seven `hvi` profiles also set `genericBoot: true`
+The built-in `hvi` profiles also set `genericBoot: true`
 (`internal/profile/specs`). So the default macOS path needs the `hvi`
 binary beside hull, a working gateway and the boot bundle.
 `BRIG_HYPERVISOR=vz` with `BRIG_NETWORK=shared` moves those profiles to

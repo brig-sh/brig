@@ -130,10 +130,9 @@ project. The restart warning names the missing directory.
 
 ## What survives
 
-Only three of the nine built-in agents, `claude-code`, `claude-desktop` and
-`herdr`, declare a memory-backed mount. For the other six, an in-guest
-login lands on host disk and survives every stop. `brig rm` deletes it when
-Brig created the guest home.
+`claude-code`, `claude-desktop` and `herdr` declare a memory-backed mount.
+For the other built-in profiles, an in-guest login lands on host disk and
+survives every stop. `brig rm` deletes it when Brig created the guest home.
 
 | Event | Guest home | Memory-backed mount (`claude-code`, `claude-desktop`, `herdr`) | The sandbox | What Brig recorded |
 | --- | --- | --- | --- | --- |

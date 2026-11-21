@@ -16,7 +16,7 @@ func TestBuiltInsLoadFromTheEmbeddedSpecs(t *testing.T) {
 	}
 	want := []string{
 		"claude-code", "claude-desktop", "codex", "cursor",
-		"gemini", "grok", "herdr", "opencode", "ubuntu",
+		"gemini", "grok", "herdr", "omp", "opencode", "ubuntu",
 	}
 	got := Names()
 	if len(got) != len(want) {
@@ -75,7 +75,7 @@ func TestLoadWritesNothing(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("the profile directory was created: %v", err)
 	}
-	if len(Names()) != 9 {
+	if len(Names()) != 10 {
 		t.Errorf("the built-ins are missing: %v", Names())
 	}
 }
