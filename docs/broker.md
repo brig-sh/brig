@@ -746,6 +746,7 @@ The broker runs the host's `aws` CLI, found on its `PATH`:
 | --- | --- |
 | role | `aws sts assume-role --profile <p> --role-arn <arn> --role-session-name <sandbox-id> [--source-identity <id>] --duration-seconds <s> [--policy-arns arn=<policy>...] --output json` |
 | self | `aws configure export-credentials --profile <p> --format process` |
+| scoped | `aws sts get-scoped-credentials --profile <p> --policy <json> --scoped-session-description <sandbox-id> --duration-seconds <s> --output json` |
 
 The session name is the sandbox id, cut to 64 bytes, with each character
 outside `A-Za-z0-9+=,.@_-` replaced by `-`. The keys come back on stdout. No
@@ -754,18 +755,26 @@ broker's environment with every `AWS_` variable removed. Each call has 30
 seconds. A credential with no `Expiration` is refused. `<s>` is the secret's
 `--session-duration` in seconds, 1800 by default. `--policy-arns` is passed
 only when the secret names session policies, one `arn=<policy>` for each.
+`<json>` is the scope policy that the secret stores, and the session
+description is the sandbox id, as the session name is. When STS answers
+that your session has less than `<s>` seconds left
+(`InsufficientSessionLifetime`), the broker runs the same scoped command once
+more without `--duration-seconds`, so the keys end with your session. If
+those keys would outlive `<s>` seconds, because your session was renewed
+between the two calls, it runs the first command again and uses its answer.
+No other command fetches the keys of a scoped secret.
 
 The broker holds the keys in memory, per sandbox and route. A request gets
 the keys held while they have at least 20 minutes left. Below that, the
 broker fetches new ones. Requests that arrive during a fetch wait for it, so
 a burst of requests is one call, and each gets the keys as `aws` returned
-them. Self mode can return keys with less than 20 minutes left. The broker
-serves those for one minute after the fetch while they are valid, so it runs
-`aws` at most once a minute per route. A failed fetch is an error even when
-older keys are held, since those are about to expire. After the secret is
-imported again with another profile, mode, role, session length or list of
-session policies, the next request fetches new keys. A sandbox removed from
-the broker takes its keys with it.
+them. Self and scoped mode can return keys with less than 20 minutes left.
+The broker serves those for one minute after the fetch while they are valid,
+so it runs `aws` at most once a minute per route. A failed fetch is an error
+even when older keys are held, since those are about to expire. After the
+secret is imported again with another profile, mode, role, session length,
+list of session policies or scope policy, the next request fetches new keys.
+A sandbox removed from the broker takes its keys with it.
 
 A fetch that fails is a 502 with `check=vend`:
 
@@ -773,6 +782,8 @@ A fetch that fails is a 502 with `check=vend`:
 | --- | --- |
 | `aws` reports that the profile's SSO login has expired | names the fix, `aws sso login --profile <p>` |
 | No `aws` on the broker's `PATH` | names the AWS CLI v2 install page |
+| A scoped secret and an `aws` older than 2.41.2 | names the upgrade to 2.41.2 or later |
+| A scoped secret and a profile with no region, so the call reaches the STS global endpoint | names `aws configure set region <r> --profile <p>` |
 | Anything else | `brig broker: the credentials of route <route> could not be fetched; see the broker log` |
 
 The error of the last row goes to `broker.log`, with the sandbox and the
@@ -805,6 +816,7 @@ prints one line per route, which `-q` hides:
 ```
 brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent, assumed from your profile dev
 brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent with session policies arn:aws:iam::111122223333:policy/brig-read-ec2, assumed from your profile dev
+brig: route aws: AWS as your own identity, narrowed by the scope policy in the secret (profile dev)
 brig: route aws: AWS as your own identity (profile dev); the sandbox can do what you can
 ```
 

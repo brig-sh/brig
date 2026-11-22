@@ -572,7 +572,8 @@ says why, and [The aws route](security.md#the-aws-route) states what that
 hands the guest.
 
 The route's secret holds a pointer, not keys: the AWS profile on your host,
-and whether the sandbox assumes a role or gets your own identity.
+and whether the sandbox assumes a role, gets your own identity, or gets your
+own identity narrowed by a scope policy.
 `brig secret import` writes it. See
 [An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route).
 
@@ -598,7 +599,8 @@ rule for the AWS endpoints the agent uses. A host rule does not make the
 access read-only. `*.amazonaws.com` lets the guest make every call the keys
 allow, writes included, and reach resources in other accounts, such as an
 S3 bucket that someone else owns. The role's policy limits the calls, and
-the secret's session policies, if it names any, limit them further.
+the secret's session policies, if it names any, limit them further. In
+scoped mode, your own identity and the secret's scope policy limit them.
 
 The route itself needs no `allow` rule. The guest fetches keys from
 `169.254.170.2`, which Brig sends to the broker. The rest of

@@ -391,7 +391,9 @@ guest's AWS SDK with temporary keys, and the guest calls AWS itself. See
 session token. They work anywhere AWS answers, outside the sandbox too,
 until they expire. In role mode they last 30 minutes, or 25 minutes to an
 hour with `brig secret import --session-duration`. In self mode they expire
-when the credentials of your AWS profile do. The broker fetches new keys
+when the credentials of your AWS profile do. In scoped mode they last 30
+minutes, or 25 minutes to an hour with `--session-duration`, and never longer
+than the credentials of your AWS profile. The broker fetches new keys
 before the ones it holds run out. It refuses credentials with no expiry,
 such as the long-lived keys of an IAM user.
 
@@ -404,10 +406,13 @@ do. In role mode that is the role's policy, so give the sandbox a role with
 a narrow policy. Session policies from `brig secret import --policy-arns`
 narrow it further: the keys get what both the role and those policies
 allow. In self mode it is your whole identity in that profile: the
-sandbox can do what you can. Self mode is never a default: `brig secret
-import` refuses an import that names neither mode, or both. Each run and
-exec prints a line that names the role and its session policies, or says
-that the sandbox has your own identity.
+sandbox can do what you can. In scoped mode it is your own identity, limited
+to what both your identity and the scope policy in the secret allow. AWS
+enforces the policy. It stays in the broker and is never sent to the guest.
+Self mode is never a default: `brig secret import` refuses an import that
+names no mode, or more than one. Each run and exec prints a line that names the role and
+its session policies, says that the sandbox has your own identity narrowed
+by a scope policy, or says that it has your own identity.
 
 **Credentials that win over the route.** An AWS SDK reads its environment
 and `~/.aws` before the container credential provider. A run with a route
@@ -433,12 +438,33 @@ CloudTrail cannot tell the sandbox's calls from yours. They last as long as
 the permission set's session, up to 12 hours. Revoking them revokes your own
 host session too.
 
+**Scoped mode.** The broker gets the keys with STS `GetScopedCredentials`,
+which returns keys of your own session narrowed by the scope policy. A scoped
+secret never yields unscoped keys: the broker fetches its keys only with
+`aws sts get-scoped-credentials`, always with the policy, and a call that
+fails hands out nothing. The guest still holds real AWS keys, and these
+limits apply:
+
+- CloudTrail records the sandbox's calls under your own principal. The
+  `GetScopedCredentials` event carries the sandbox id as its session
+  description. The sandbox's later calls carry only the access key id that
+  event returned.
+- The keys cannot be revoked alone. Revoking them revokes your host session.
+- A scope policy that allows `sts:AssumeRole`, or another call that returns
+  credentials, lets the guest take a role and leave the scope.
+- A resource policy in the same account does not grant what the scope policy
+  leaves out.
+- Some services do not accept scoped keys, MemoryDB and CloudSearch among
+  them.
+- The host needs `aws` 2.41.2 or later, and the profile needs a region. With
+  no region the call goes to the STS global endpoint, which refuses it.
+
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so it can
-fetch no more keys. A secret you import again with another role or mode
-takes effect at the next fetch: the broker does not serve keys it fetched
-for the old secret, and fetches again. Keys already handed out stay valid
-until they expire. To cut them off sooner, change the role's policy or
-revoke its sessions in AWS.
+fetch no more keys. A secret you import again with another role, mode or
+scope policy takes effect at the next fetch: the broker does not serve keys
+it fetched for the old secret, and fetches again. Keys already handed out
+stay valid until they expire. To cut them off sooner, change the role's
+policy or revoke its sessions in AWS.
 
 **The SSO session.** The route keeps working after your SSO login lapses,
 for as long as the credentials the `aws` CLI cached from it last, up to 12
