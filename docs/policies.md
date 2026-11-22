@@ -350,6 +350,13 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
 | `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
 | `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field, and the repository of each node ID a mutation names (both repositories of a pull request), must match. With it, `queries` may list only `repository` and `rateLimit` |
+| `request.body.models` | no | Model names that the request's `model` may name, exact or with `*` as a wildcard. A request for another model is a 403. Only the `claude-code` and `anthropic-api-key` presets take it |
+| `request.body.tools.allow` | no | Exact tool names that the request's `tools` may name. A request that names another tool is a 403. With `tools.deny` alone, every other name passes |
+| `request.body.tools.deny` | no | Exact tool names that the request's `tools` may not name. A request that names one is a 403. Deny wins over allow |
+| `request.body.maxTokens` | no | The largest `max_tokens` a request may ask for. A larger value is a 403, and a request without `max_tokens` passes. Zero, or leaving the key out, sets no limit |
+| `request.body.toolResultDeny` | no | RE2 patterns matched against every string in the body, keys included, at any depth. A match is a 403, and the matched text is never logged |
+| `request.body.toolUse.deny` | no | Exact tool names that the model may not call. A `tool_use` block of one of them in the answer is rewritten, and the request still goes upstream |
+| `request.body.toolUse.action` | no | `refuse`, the default, replaces the rewritten block with a text block that says the tool was refused. `drop` removes the block |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
@@ -368,6 +375,81 @@ exception is `Authorization`, which is always removed and which a route may
 set. No header list names `Host`, `Connection`, `Content-Length`,
 `Transfer-Encoding`, `Upgrade`, `Keep-Alive`, `TE`, `Trailer` or a `Proxy-`
 header, because the broker sets or drops those itself.
+
+### Body rules for the Messages API
+
+`request.body` limits a `POST /v1/messages` by its body, and the tool calls
+in its answer. Only the `claude-code` and `anthropic-api-key` presets take
+it. Brig refuses it on any other preset, and on a route with no preset. A
+compressed body on that path is refused with 415, because the broker reads
+the body as plain JSON.
+
+In `models`, `*` is the only wildcard. It matches any run of characters,
+including none, and every other glob character is refused. `tools` names are
+exact. Where an allow list and a deny list both match a tool, deny wins.
+`toolResultDeny` takes RE2 patterns. The broker matches them against every
+string in the body, each key and each value, at any depth, after it decodes
+JSON escapes. That covers the system prompt, the history the agent sends back,
+tool inputs and results, documents, search results and thinking blocks. It
+skips the `model` when `models` is set, and the tool names when `tools.allow`
+is set, because the policy named those values. It never writes the matched
+text to a log. A pattern finds text as it is written: it does not stop an
+agent that encodes the text first.
+
+`tools` reads the top-level `tools` of the request. The `Anthropic-Beta`
+values `inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`
+may let a request declare or change tools inside `messages`, in shapes the
+rule does not read. On a route with `tools`, the broker drops those two
+values before it forwards the request, as the presets drop a value outside
+their reviewed list. The audit line counts them in `dropped.anthropic-beta`.
+
+A route with the body rules, and the tool calls the model may not make:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-body
+  description: Claude Code with the model, the tools and the tool calls limited
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+      request:
+        body:
+          models: [claude-sonnet-4-5, "claude-haiku-*"]  # any other model is a 403
+          tools:
+            deny: [WebSearch]                # a request naming it is a 403
+          maxTokens: 8192                    # a larger max_tokens is a 403
+          toolResultDeny: ['(?i)BEGIN [A-Z ]*PRIVATE KEY']  # a match is a 403
+          toolUse:
+            deny: [Bash]                     # a Bash call in the answer is rewritten
+            action: refuse                   # the default; drop removes the block
+```
+
+On a route with `toolUse`, the agent does not get the tool call. The answer
+carries a text block in its place, which says that the policy of the route
+refused the tool. When no other tool call remains in the answer, `stop_reason`
+reads `end_turn` rather than `tool_use`, so the agent carries on without the
+tool. Under `drop`, the block is gone, and `stop_reason` is set the same way.
+When the tool call was the only block of the answer, `drop` leaves the
+assistant turn empty, and the Messages API refuses an empty turn when the agent
+sends its history back. `refuse` is the default for that reason.
+
+A route with `request.body` serves three calls. It checks `POST
+/v1/messages`, and it passes `GET /v1/models` and `GET /v1/models/{id}`
+unread, because they take no body and answer with no tool call. It refuses
+every other call with 403, such as `/v1/messages/batches`,
+`/v1/messages/count_tokens`, `/v1/chat/completions` and `/v1/complete`. Those
+calls take a model, tools and a prompt in shapes the rules do not read, or
+answer where the rewrite does not look. The method of the checked call is
+read in any case, so `post` is checked as `POST`. A trailing slash, a
+`;parameter` or a path in another case does not change which call a request
+is.
 
 ### Client certificates
 
@@ -513,6 +595,11 @@ The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 They are the values Claude Code 2.1.292, 2.1.301 and 2.1.309 send. The
 `claude-code` preset does not set the header. It only drops the values
 outside the list.
+Both Anthropic presets take `request.body`, which limits the model, the tools
+and the tool calls of the answer. See
+[Body rules for the Messages API](#body-rules-for-the-messages-api). On a
+route with `request.body.tools`, the broker also drops
+`inline-tools-2026-09-15` and `mid-conversation-tool-changes-2026-07-01`.
 
 A value outside the list costs each session two `400` answers from the
 upstream. Claude Code then retries without the features the value names. The

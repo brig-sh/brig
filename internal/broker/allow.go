@@ -21,8 +21,8 @@ type refusal struct {
 // credential is fetched. rest is the path after the route prefix.
 //
 // It enforces the lists v1alpha1.RequestAllow defines: methods, paths and
-// repos. Every list that is set must match. The models and tools lists of the
-// spec read the request body, and the type does not carry them yet.
+// repos. Every list that is set must match. The rules that read the request
+// body are request.body, and body.go enforces them.
 func allow(a *v1alpha1.RequestAllow, method, rest string) *refusal {
 	if a == nil {
 		return nil
