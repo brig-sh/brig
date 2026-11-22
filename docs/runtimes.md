@@ -50,8 +50,8 @@ backend.
 
 | run path | how it reaches the hypervisor | when Brig uses it | graphical console (`kind: gui`) | `--network isolated` |
 | --- | --- | --- | --- | --- |
-| hull on `vz` | Virtualization.framework, through the `vz-runner` helper | macOS, when neither the profile nor `BRIG_HYPERVISOR` names a backend | yes. It is the only backend that can show a graphical console | refused |
-| hull on `hvi` | Hypervisor.framework directly, through the `hvi` microVM monitor | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | yes. It is the only backend that runs a network gateway of its own |
+| hull on `vz` | Virtualization.framework, through the `vz-runner` helper | macOS, when the profile or `BRIG_HYPERVISOR` names it, and for a graphical profile that names no backend | yes. It is the only backend that can show a graphical console | refused |
+| hull on `hvi` | Hypervisor.framework directly, through the `hvi` microVM monitor | macOS, by default: when the profile or `BRIG_HYPERVISOR` names it, and when neither names a backend | refused | yes. It is the only backend that runs a network gateway of its own |
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
 | nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux, when no `hull` is on `PATH`, or with `BRIG_RUNTIME=nerdctl` | refused | yes. Brig creates a network for each sandbox |
 | hull on Linux | the containerd shim `io.containerd.urunc.v2`, as nerdctl does. A networked sandbox boots on the `hvi` monitor | Linux, by default when a `hull` is on `PATH`. brig-standalone-linux carries one from v0.1.0-rc22 | refused | yes. Brig starts a network gateway for each isolated sandbox, as on `hvi` |
@@ -61,8 +61,8 @@ The nine shipped profiles divide as follows on macOS:
 | profiles | backend | network |
 | --- | --- | --- |
 | seven of the nine | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
-| `claude-desktop` | none named, so `vz` | `shared` |
-| `cursor` | none named, so `vz` | none named, so `shared` |
+| `claude-desktop` | none named, and graphical, so `vz` | `shared` |
+| `cursor` | none named, so `hvi` | none named, so `isolated` |
 
 A profile with no network choice falls back to `shared` on `vz` or `qemu`.
 The `NETWORK` row in `brig info` names the reason. `vz` and `qemu` still

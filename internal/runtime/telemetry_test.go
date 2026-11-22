@@ -85,7 +85,8 @@ func counting(t *testing.T, answered bool) {
 
 func boot(t *testing.T, h *hull) {
 	t.Helper()
-	if err := h.Run(RunSpec{Name: "vm", Image: "img", Mem: 2048, CPUs: 2, Counted: true}); err != nil {
+	// vz, which starts no network gateway: the boot is about what hull is told.
+	if err := h.Run(RunSpec{Name: "vm", Image: "img", Mem: 2048, CPUs: 2, Hypervisor: "vz", Counted: true}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/brig-sh/brig/internal/verify"
 )
 
-// Cursor's default macOS backend cannot isolate, but that must not put its
+// Cursor names no backend, and vz cannot isolate, but that must not put its
 // Linux guests on the shared bridge. Exercise the shipped profile through the
 // boot request: testing an otherwise empty profile would miss this regression.
 func TestCursorUsesTheBackendNetworkDefault(t *testing.T) {
@@ -18,8 +18,9 @@ func TestCursorUsesTheBackendNetworkDefault(t *testing.T) {
 	}{
 		{"nerdctl", "", "isolated"},
 		{"nerdctl", "vz", "isolated"},
-		{"hull", "", "shared"},
+		{"hull", "", "isolated"},
 		{"hull", "hvi", "isolated"},
+		{"hull", "vz", "shared"},
 		{"hull", "qemu", "shared"},
 	} {
 		t.Run(tc.kind+"/"+tc.hypervisor, func(t *testing.T) {

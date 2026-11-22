@@ -44,7 +44,7 @@ checks and writes that document instead and opens no editor.
 `brig policy check` names each policy bound to the profile, and says where
 Brig can enforce it. On a host where a run of the profile cannot enforce the
 egress rules, check refuses them with exit status `7`, as the run does. On
-Linux with nerdctl, or on macOS with `BRIG_HYPERVISOR=hvi`, it prints:
+Linux with nerdctl, or on macOS on `hvi`, the default backend, it prints:
 
 ```
 locked-down
@@ -812,7 +812,7 @@ Each route gets a row per run path under it, with the answer of the
 its mode is served:
 
 ```console
-$ BRIG_HYPERVISOR=hvi brig policy check claude-code
+$ brig policy check claude-code
 claude-only
   route anthropic  preset claude-code  mode endpoint
     hull on hvi  enforced: hull's gateway answers brig.internal with its own address and diverts port 443 of it to the broker, which serves it with TLS under the brig CA; transport: brig.internal
@@ -970,7 +970,7 @@ bindings.
 `check` lists every policy that applies to one profile or, with `-n`, to one
 of its sessions. It covers inline, profile-level and session-level bindings.
 It also runs the same refusal as `attach`. On Linux with hull or nerdctl, or on
-macOS with `BRIG_HYPERVISOR=hvi`:
+macOS on `hvi`, the default backend:
 
 ```console
 $ brig policy check claude-code

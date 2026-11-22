@@ -33,7 +33,8 @@ func recordingRuntime(t *testing.T) (bin, log string) {
 func adapterCalls(rt func(bin string) Runtime, env []Var) map[string]func(bin string) error {
 	return map[string]func(bin string) error{
 		"run": func(bin string) error {
-			return rt(bin).Run(RunSpec{Name: "brig-x", Image: "img", Mem: 1, CPUs: 1, Env: env})
+			// vz, which starts no network gateway before the boot.
+			return rt(bin).Run(RunSpec{Name: "brig-x", Image: "img", Mem: 1, CPUs: 1, Env: env, Hypervisor: "vz"})
 		},
 		"exec": func(bin string) error {
 			_, err := rt(bin).Output(ExecSpec{Name: "brig-x", Cmd: []string{"true"}, Env: env})

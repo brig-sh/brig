@@ -203,7 +203,7 @@ func TestLinuxHullNetworkStaleWhateverTheHypervisor(t *testing.T) {
 			t.Errorf("%q: a sandbox on its own gateway reads as shared", hv)
 		}
 	}
-	if (&hull{bin: "hull"}).NetworkStale("brig-s", "", "shared", Egress{}) {
+	if (&hull{bin: "hull"}).NetworkStale("brig-s", "vz", "shared", Egress{}) {
 		t.Error("the macOS hull on vz compared a gateway it does not use")
 	}
 }

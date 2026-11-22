@@ -53,17 +53,42 @@ func TestANewSandboxBootsOnItsOwnNetworkByDefault(t *testing.T) {
 }
 
 func TestTheVZDefaultIsSharedAndExplained(t *testing.T) {
-	for _, hv := range []string{"", "vz"} {
-		t.Run("hypervisor="+hv, func(t *testing.T) {
+	isolateState(t)
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	rt := &networkDefaultRuntime{livenessRuntime: &livenessRuntime{}, kind: "hull"}
+	c, err := Load(testProfile(t, ""), Options{Workspace: t.TempDir()}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Network != NetShared || !strings.Contains(c.networkLine(), "vz does not support isolated networking") {
+		t.Errorf("vz fallback must name its limitation: %s", c.networkLine())
+	}
+}
+
+// A profile that names no hypervisor boots on hvi on macOS, and gets the
+// isolated network hvi gives. A graphical one boots on vz, the only backend
+// with a window, and keeps vz's shared default.
+func TestHviIsTheMacOSDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, backend string
+		net                 Network
+	}{
+		{"agent", "", "hvi", NetIsolated},
+		{"gui", "kind: gui\n", "vz", NetShared},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			isolateState(t)
-			t.Setenv("BRIG_HYPERVISOR", hv)
+			t.Setenv("BRIG_HYPERVISOR", "")
 			rt := &networkDefaultRuntime{livenessRuntime: &livenessRuntime{}, kind: "hull"}
-			c, err := Load(testProfile(t, ""), Options{Workspace: t.TempDir()}, rt)
+			c, err := Load(testProfile(t, tc.body), Options{Workspace: t.TempDir()}, rt)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.Network != NetShared || !strings.Contains(c.networkLine(), "vz does not support isolated networking") {
-				t.Errorf("vz fallback must name its limitation: %s", c.networkLine())
+			if got := c.hypervisor(); got != tc.backend {
+				t.Errorf("backend = %q, want %q", got, tc.backend)
+			}
+			if c.Network != tc.net {
+				t.Errorf("network = %q, want %q", c.Network, tc.net)
 			}
 		})
 	}

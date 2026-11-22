@@ -57,7 +57,7 @@ func TestNetworkStaleSaysNoWhereBrigOwnsNoNetwork(t *testing.T) {
 	scratchIsolatedDir(t)
 	h := &hull{bin: "hull"}
 
-	for _, hv := range []string{"vz", "qemu", ""} {
+	for _, hv := range []string{"vz", "qemu"} {
 		if h.NetworkStale("brig-s", hv, "shared", Egress{Default: "deny"}) {
 			t.Errorf("hypervisor %q: reported stale with no network of brig's to compare", hv)
 		}

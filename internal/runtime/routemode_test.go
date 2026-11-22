@@ -108,7 +108,8 @@ func TestRoutePathNamesTheBackend(t *testing.T) {
 		hv   string
 		want RunPath
 	}{
-		{kindOnly{kind: "hull"}, "", RunPath{"hull", "vz"}},
+		{kindOnly{kind: "hull"}, "", RunPath{"hull", "hvi"}},
+		{kindOnly{kind: "hull"}, "vz", RunPath{"hull", "vz"}},
 		{kindOnly{kind: "hull"}, "hvi", RunPath{"hull", "hvi"}},
 		{kindOnly{kind: "nerdctl"}, "", RunPath{"nerdctl", uruncShim}},
 	} {

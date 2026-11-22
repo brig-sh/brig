@@ -676,7 +676,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if netValue == "" {
 		netSource = "the default network posture"
 		netOrigin = "default"
-		netFallback = sharedNetworkBackend(rt, env.String("HYPERVISOR", t.Hypervisor))
+		netFallback = sharedNetworkBackend(rt, resolveHypervisor(rt, env.String("HYPERVISOR", t.Hypervisor), t.IsGUI()))
 		if netFallback != "" {
 			netValue, netSource = string(NetShared), "the "+netFallback+" backend's shared default"
 		}

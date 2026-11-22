@@ -63,7 +63,8 @@ func ParseNetworkStrict(s, source string) (Network, error) {
 }
 
 // sharedNetworkBackend names the backends that need shared as their unset
-// default: vz and qemu use vmnet, which cannot honour isolated. Load asks only
+// default: vz and qemu use vmnet, which cannot honour isolated. An empty
+// hypervisor is hvi, the macOS default, which needs none. Load asks only
 // when no posture was named, so an explicit isolated choice is still refused.
 // It also answers for info when no runtime is installed. The selected kind
 // follows DetectFor; a Linux run must never inherit the macOS fallback just
@@ -85,7 +86,7 @@ func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 	}
 	if kind == "hull" {
 		switch hypervisor {
-		case "", "vz":
+		case "vz":
 			return "vz"
 		case "qemu":
 			return "qemu"
