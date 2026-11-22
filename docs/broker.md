@@ -675,8 +675,8 @@ underscores. 255 bytes is the longest name of a directory.
 A broker on its way out answers 503 to a registration or a mint. Brig waits
 for it to exit and starts another. It does the same when the broker it found
 is gone by the time it registers. Brig waits 10 seconds for an answer. It
-waits 30 seconds for a registration, and 70 seconds more for each route that vends:
-the broker runs up to two `aws` calls of 30 seconds each for every one. A
+waits 30 seconds for a registration, and 130 seconds more for each route that vends:
+the broker runs up to four `aws` calls of 30 seconds each for every one. A
 token travels only on the control socket to Brig, and from Brig to the guest
 in the environment of one exec.
 
@@ -770,7 +770,7 @@ broker fetches new ones. Requests that arrive during a fetch wait for it, so
 a burst of requests is one call, and each gets the keys as `aws` returned
 them. Self and scoped mode can return keys with less than 20 minutes left.
 The broker serves those for one minute after the fetch while they are valid,
-so it runs `aws` at most once a minute per route. A failed fetch is an error
+so it starts a fetch at most once a minute per route. A failed fetch is an error
 even when older keys are held, since those are about to expire. After the
 secret is imported again with another profile, mode, role, session length,
 list of session policies or scope policy, the next request fetches new keys.

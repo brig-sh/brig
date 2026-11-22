@@ -25,10 +25,14 @@ var callTimeout = 10 * time.Second
 // does from memory, with room for a slow host.
 //
 // vendTimeout is what each route that vends adds. The broker checks those
-// routes one after another before it answers, up to two aws calls per route
-// at 30s each, and a slow SSO refresh must come back as the broker's
-// credential refusal, not as "the broker did not answer". One fixed bound
-// would cut off a run with two aws routes.
+// routes one after another before it answers, and a slow SSO refresh must
+// come back as the broker's credential refusal, not as "the broker did not
+// answer". One fixed bound would cut off a run with two aws routes. The
+// longest check is a scoped route: up to three get-scoped-credentials calls
+// (the retry without a duration, and the full request again when the
+// parent session was renewed in between) and the region read, at 30s each.
+// The injector cannot tell a scoped secret from another, so every route
+// that vends gets that bound, and a check that ends early ends the wait.
 //
 // mintTimeout is what each gcp route (one with services) adds. For a gcloud
 // pointer the broker runs gcloud (bounded at 30s) and tokeninfo (10s) before
@@ -38,7 +42,7 @@ var callTimeout = 10 * time.Second
 // Variables so a test can shorten them.
 var (
 	addTimeout  = 30 * time.Second
-	vendTimeout = 70 * time.Second
+	vendTimeout = 130 * time.Second
 	mintTimeout = 45 * time.Second
 )
 
