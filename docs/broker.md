@@ -10,8 +10,11 @@ guest with temporary AWS keys. See [Routes that vend](#routes-that-vend).
 `internal/broker` is the request handler, and `brig-broker` the process
 that hosts it. hull on `hvi`, hull on Linux and nerdctl with
 urunc reach a route at `brig.internal`, and a route that vends at
-`169.254.170.2`. A run bound to a policy with routes on any other runtime is
-refused before boot. See [Transports](#transports).
+`169.254.170.2`. A pod on a Kubernetes node reaches a broker that the node's
+shim started with `--listen` at `brig.internal`, over the network. See
+[Running the broker on a node](#running-the-broker-on-a-node). A run bound to
+a policy with routes on any other runtime is refused before boot. See
+[Transports](#transports).
 
 <p align="center">
   <img alt="A request from Claude Code through the claude-code route of the credential broker. The agent in the sandbox holds ANTHROPIC_BASE_URL, the route URL, and CLAUDE_CODE_OAUTH_TOKEN, a session token for the route. It sends its request to brig.internal on a microVM. brig-broker on the host checks the token and the route's request.allow, adds the credential from Brig's secret store, and sends the request to api.anthropic.com on a TLS connection of its own. The response comes back with the credential redacted. The credential stays on the host and never reaches the sandbox, and egress: default: deny refuses a direct connection from the sandbox." src="../assets/credential-broker.svg" width="820">
@@ -464,7 +467,7 @@ changes:
 | Status | When | `check=` on the audit line |
 | --- | --- | --- |
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
-| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on. On a route that vends, any `<rest>` but `/`. On the link-local address, a route that does not vend | `path`, `arrival`, `sandbox`, `route`, `route.cleartext` |
+| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on, or arrived on the address listener from an IP that sandbox did not register, or from an IP no sandbox registered. On a route that vends, any `<rest>` but `/`. On the link-local address, a route that does not vend | `path`, `arrival`, `sandbox`, `route`, `route.cleartext` |
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, or an expired token | `token`, `signature`, `token.sandbox`, `token.route`, `expired` |
 | 400 | The request body could not be read | `body` |
 | 408 | The part of the body the broker holds did not arrive within `BodyTimeout` | `body` |
@@ -634,6 +637,10 @@ While the broker is down, any local process can bind its port, another
 user's included on a host several people use. `brig doctor` then fails its
 `broker` row and names the process that holds the port.
 
+A broker started with `--listen` has no loopback port. It serves the routes
+on the address it was given, and it neither reads nor writes `port`. A `port`
+file left in the directory by an earlier start is left as it is.
+
 `BRIG_BROKER_BIN` names a `brig-broker` to run instead of the one beside
 `brig`, then on `PATH`.
 
@@ -651,7 +658,7 @@ file is created `0600`.
 | `control.sock` | The control socket |
 | `broker.pid` | The pid of the running broker and its start time |
 | `broker.lock` | Held by the running broker. A second one exits |
-| `port` | The loopback port, written by the broker at first start and bound at every start after. See [The port](#the-port) |
+| `port` | The loopback port, written by the broker at first start and bound at every start after. See [The port](#the-port). A broker started with `--listen` neither reads nor writes it |
 | `start.lock` | Held by `brig` while it starts the broker |
 | `audit.log`, `audit.log.1` | The [audit line](#audit-line) of every request and of every diverted connection. Rotated at 64 MiB, one previous file kept |
 | `divert/<hash>.sock` | The divert socket of a sandbox that reaches `brig.internal`, 0600 in a 0700 directory. `<hash>` is the first 12 hex digits of the SHA-256 of the sandbox id. It is removed with the sandbox and when the broker stops |
@@ -666,10 +673,10 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal, address, uid}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports). `address` is the sandbox's own IP, for a broker started with `--listen`. The answer then carries the CA certificate and no divert socket. `uid` is the UID of the pod with that address. A second sandbox with the same address is refused with 409, unless both registrations carry a `uid` and the two differ. Then the second one replaces the first. See [Running the broker on a node](#running-the-broker-on-a-node) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. `port` is 0 for a broker started with `--listen`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. A secret on a read-only store, see [Running the broker on a node](#running-the-broker-on-a-node), is never named, because no write is waiting. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
@@ -700,6 +707,9 @@ broker. The cache refreshes it and writes it back, as
 [Renewal on the host](secrets.md#renewal-on-the-host) describes, so two
 sandboxes that share it share one refresh.
 
+A broker on a Kubernetes node reads the files of a mounted Secret instead.
+See [Running the broker on a node](#running-the-broker-on-a-node).
+
 The broker reads the keychain with `security`, from its own session. Measured
 on macOS 26: a process in a new session, whose parent had exited, read a
 keychain item of the login session with no prompt. A broker started from an
@@ -710,6 +720,176 @@ AWS profile, and the broker runs the host's `aws` CLI. A `gcp` route's
 secret can point at a gcloud configuration in place of a token, and the
 broker runs the host's `gcloud` CLI. See [Routes that vend](#routes-that-vend)
 and [Minted tokens](#minted-tokens).
+
+## Running the broker on a node
+
+On a Kubernetes node the broker has no keychain, no Secret Service and no
+host `aws` CLI. `brig-broker` takes flags for that case. They are for a node
+daemon that a shim of the platform starts and registers sandboxes with. Brig
+does not pass them, and nothing here changes how `brig` starts the broker on
+a workstation.
+
+| Flag | What it does |
+| --- | --- |
+| `--listen <host:port>` | Serves the routes on this TCP address, with TLS, instead of on a loopback port |
+| `--secret-dir <path>` | Reads every credential from the files of this directory, one file per secret, instead of from Brig's secret store |
+
+The flags combine. A node broker is usually started with both.
+
+### The address listener
+
+`--listen` replaces the loopback listener. The broker serves the routes on the
+address, presenting the `brig.internal` certificate its CA signs, the one the
+divert sockets present. It neither reads nor writes `port`, and
+`GET /status` reports `port` 0. The divert sockets keep working beside it: a
+registration with `brigInternal` or a route mode besides `endpoint` still gets
+one.
+
+The broker closes a connection from an IP that no sandbox registered as soon
+as it accepts it, before the TLS handshake. Every pod of the cluster can
+reach the listener, and such a connection would otherwise hold one of the 256
+connections the broker holds open. The TLS handshake runs when the server
+first reads a connection, under the 10 seconds a request header has to
+arrive. A client that never finishes it is closed then.
+
+A pod does not need a divert socket. It resolves `brig.internal` to the
+listener, trusts the CA from the answer to its registration, and sends its
+requests to `https://brig.internal/<sandbox-id>/r/<route>`.
+
+The registration says which pod. `address` is the pod's own IP, and `uid` is
+the pod's UID. A Kubernetes shim knows both from the pod:
+
+```json
+{"id": "pod-7f3a", "profile": "inventory", "address": "10.244.1.17", "uid": "6f1c2a9e-4b7d-4e0a-9c2b-3d5e8f1a7b40", "routes": []}
+```
+
+The broker normalizes the IP, so an IPv4-mapped IPv6 spelling reads as the
+IPv4 address. It refuses, with 400, an address that is not one IP, that is
+unspecified, multicast, loopback or link-local, or that has a zone. A pod
+never has a loopback or a link-local address. A connection from one comes
+from the node's host network namespace, which every `hostNetwork` pod, the
+kubelet and the node's daemons share, so the address would not name one pod.
+It also refuses `address` with `brigInternal` or `modes`, which belong to a
+divert socket, and `address` on a broker started without `--listen`.
+
+The arrival rule is the one a divert socket applies, with the peer IP of the
+connection in place of the socket:
+
+| Request | Answer |
+| --- | --- |
+| The peer IP is the `address` of the sandbox the path names | Served, and the token is checked next |
+| The peer IP is the `address` of another sandbox | 404, `check=arrival`, `arrived=<that sandbox>` |
+| The peer IP is no sandbox's `address` | Closed at accept. A connection whose sandbox was removed while it stayed open gets 404, `check=arrival`, before any token is read |
+
+So a pod that holds the token of another sandbox cannot use it, and cannot
+tell another sandbox from one that does not exist. The address goes back when
+its sandbox registers another one or is removed. The audit line carries the
+sandbox the address bound the request to in `arrived`.
+
+Two sandboxes may not register the same `address`. The CNI gives the IP of a
+pod that is gone to a new pod, and the shim can miss the removal of the
+first, after a crash or a lost watch event. `uid` tells the two pods apart:
+
+| Second registration of an `address` | What the broker does |
+| --- | --- |
+| Both carry a `uid`, and they differ | Removes the first sandbox and registers the second. The first sandbox's tokens stop working, and `broker.log` names both pods |
+| Both carry the same `uid` | Refuses the second with 409 |
+| Either has no `uid` | Refuses the second with 409. The first stays bound to the address until it is removed |
+
+The peer IP is what the network delivers, so the rule holds where the pod
+network does not rewrite or share source addresses. These are its limits:
+
+- A pod network that puts several pods behind one address, such as SNAT, or
+  a pod with `hostNetwork`, cannot be told apart by it.
+- A registration has no lifetime, and a pod IP is reused. A shim that does
+  not send `uid` leaves a stale registration bound to the IP until it removes
+  the sandbox. A token of that sandbox works from the pod that has the IP
+  now, for as long as the token lives. The replacement above needs a shim
+  that sends `uid`.
+- A request carries no client identity besides its token. The TLS is
+  server-only, and the source IP is the only binding to the sandbox.
+
+### The secret directory
+
+`--secret-dir` selects a read-only store of files. Each secret is one regular
+file named after the secret, and its bytes are the value, a trailing newline
+included. The shape is a Kubernetes Secret mounted as a volume: one file per
+key. A route's `credential.secretRef.name` names the file.
+
+```yaml
+volumes:
+  - name: brig-secrets
+    secret:
+      secretName: brig-credentials
+      defaultMode: 0440
+```
+
+The broker checks the files and not the directory. The kubelet mounts a
+Secret as a root-owned `0755` directory whose entries are symlinks through
+`..data`, so no rule about the directory's owner or mode could pass. Each
+entry is followed through its links, and these rules apply to what it
+reaches:
+
+| Entry | What the broker does |
+| --- | --- |
+| A regular file that is not world-readable (`mode & 0004 == 0`) | Serves it |
+| A regular file that any user on the node can read | Refuses to start, and the error names the file. Set `defaultMode: 0440` on the volume |
+| A name inside the secret-name grammar whose link dangles, or that cannot be read | Refuses to start, and the error names it |
+| A name outside the grammar, such as `ca.crt` (letters, digits, `-` and `_`, starting with a letter; a dot does not fit) | Skips it, and `broker.log` names it once at start |
+| A directory, or another entry that is not a regular file | Skips it, and `broker.log` names it once at start |
+| A name that starts with a dot, such as `..data` | Ignores it. It is the kubelet's own |
+
+There is no ownership rule. The node broker runs as root, or the Secret's
+`fsGroup` makes the files readable to it. A directory that does not open is
+fatal, and the broker does not start. A secret that has no file is a 502 on
+the route that reads it, with `check=credential`.
+
+The store is read-only. `Create`, `Update` and `Delete` return an error, and
+nothing writes to the directory. A secret with a lifecycle is still renewed,
+as [Renewal on the host](secrets.md#renewal-on-the-host) describes, with one
+difference. The renewed document stays in memory, because there is nowhere to
+write it. The broker logs once per secret that it cannot write the credential
+back, and serves the value it has. `GET /status` does not name the secret in
+`pending`, because no write is waiting. A restart starts from the file again,
+and a changed file replaces the held value at the next recheck, within five
+minutes. See [The renewal journal](secrets.md#the-renewal-journal).
+
+### What a node broker refuses
+
+A node has no host `aws` CLI and no AWS profile. A broker started with
+`--listen` or `--secret-dir` refuses a registration that names a route that
+vends, which is a route on the `aws` preset, with 400 at `POST /sandboxes`:
+
+```
+sandbox pod-7f3a: route aws vends AWS keys through the host's aws CLI and profile, and a broker started with --listen has neither. Use the platform's own credential vending for this workload
+```
+
+The error names the route and the flag. The broker runs no `aws`, keeps no
+state for the sandbox, and does not register its other routes. The platform
+gives a workload on a node its AWS keys by its own means, such as a role
+bound to the pod.
+
+A `gcp` route whose secret is a gcloud pointer is refused the same way, with
+400. It runs the host's `gcloud`, and a node has no user login for it. On
+GKE, `gcloud` there falls back to the node's own service account, an
+identity nobody named for the sandbox:
+
+```
+sandbox pod-7f3a: route gcp mints Google tokens through the host's gcloud CLI and login, and a broker started with --secret-dir has neither. On a node, gcloud would mint as the node's own service account. Store a token the platform mints for this workload instead of a gcloud pointer
+```
+
+A `gcp` route whose secret is a token is served. A mounted Secret can change
+while the broker runs, so a node broker also refuses a pointer at the
+request: the answer is 502, `broker.log` carries the error, and `gcloud` does
+not run.
+
+The rest of the registration checks are the ones everywhere else. A route
+mode the build does not serve, `splice` for one, is refused with 400 and
+`route mode splice is not part of this build of brig`. A sandbox with
+`address` is refused when it also names `brigInternal` or `modes`, and when
+the broker has no `--listen`. `uid` is refused without `address`, or when it
+is not letters, digits and dashes, at most 64 of them. A shared `address` is
+a 409, unless both registrations carry different `uid` values.
 
 ## Routes that vend
 
@@ -781,6 +961,10 @@ host.
 
 ### Registration
 
+A broker started with `--listen` or `--secret-dir` refuses a route that vends
+at registration, before any of this. See
+[What a node broker refuses](#what-a-node-broker-refuses).
+
 A registration checks every route that vends before the broker answers,
 also when it is the same registration again. The broker resolves the secret,
 fetches keys when those it holds have less than 15 minutes left, and reads
@@ -821,7 +1005,8 @@ token or the pointer.
 A pointer is minted on a route with `services` alone. On any other route the
 broker answers 502 with `check=credential.gcponly` and sends nothing
 upstream, since the pointer names your gcloud configuration and service
-account.
+account. A broker started with `--listen` or `--secret-dir` mints no pointer.
+See [What a node broker refuses](#what-a-node-broker-refuses).
 
 ### Minting a token
 
@@ -1002,6 +1187,15 @@ takes the `isolated` posture, which gives the sandbox a network of its own.
 hull on `vz` and `qemu` takes its network from vmnet, and docker manages its
 own bridges, so neither has a gateway to answer the name on. A
 run with a route there is refused before boot, with exit `7`.
+
+**The address listener.** A pod has no divert socket. A broker started with
+`--listen` serves the same routes on a TCP address, with TLS and the same
+`brig.internal` certificate. The registration of a sandbox carries `address`,
+the pod's own IP, and the answer carries the CA the pod trusts. The platform
+resolves `brig.internal` to the listener. Each request carries the IP its
+connection came from, and the arrival check binds it to the sandbox registered
+with that IP, as a divert socket binds it to its own sandbox. See
+[Running the broker on a node](#running-the-broker-on-a-node).
 
 **link-local.** Plain HTTP to `169.254.170.2` on port 80, the address of
 the AWS container credential provider. The AWS SDKs need it:
@@ -1326,7 +1520,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `status` | The status sent to the guest |
 | `dur` | The time from the request to the end of the response |
 | `check` | The check that refused the request |
-| `arrived` | The sandbox whose divert socket the request arrived on. A request on the loopback port has none |
+| `arrived` | The sandbox whose divert socket the request arrived on, or, on the address listener, the sandbox registered with the IP of its connection. A request on the loopback port has none, and so does one from an IP no sandbox registered |
 | `policy`, `rule`, `reason` | The refusal of a `request.allow` miss |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
 | `cert` | The fingerprint of the client certificate that the connection of the request presented, `sha256:` and 16 hex digits. Only on a route with `inject.tls.clientCertificate` |

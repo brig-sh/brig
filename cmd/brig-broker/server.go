@@ -64,6 +64,16 @@ type serverConfig struct {
 	dir string
 	// openStore opens brig's secret store, the keychain on macOS.
 	openStore func() (secret.Store, error)
+	// secretDir, when set, is a directory with one file per secret, and the
+	// broker reads its credentials from it instead of from openStore. It is
+	// the mounted Secret of a broker on a Kubernetes node. The directory is
+	// read-only, and a directory that does not open stops the broker.
+	secretDir string
+	// listen, when set, is the host:port the routes are served on, with
+	// TLS, instead of the loopback port. It is the address a pod of a
+	// Kubernetes node reaches the broker at. No port file is read or
+	// written, and the divert sockets keep working beside it.
+	listen string
 	// transport carries the upstream requests. nil is the broker's own,
 	// with the system roots.
 	transport http.RoundTripper
@@ -93,6 +103,10 @@ type serverConfig struct {
 	// tokens. nil is time.Now. A minted token's expiry comes from the host's
 	// clock, not from now.
 	now func() time.Time
+	// loopbackAddresses lets a test register a sandbox with a loopback
+	// address, because a test can dial from no other. run never sets it. See
+	// canonicalAddr.
+	loopbackAddresses bool
 }
 
 // lifecycleRenewer returns the Renewer that keeps a credential of lifecycle
@@ -131,7 +145,9 @@ type server struct {
 	// through TLS, and the link-local ones in plain HTTP, for the route
 	// server that serves them.
 	internal *connListener
-	port     int
+	// port is the loopback port of the routes, or 0 when they are served on
+	// cfg.listen.
+	port int
 	// storeErr is why brig's secret store did not open at start.
 	storeErr error
 
@@ -142,6 +158,14 @@ type server struct {
 	sandboxes map[string]string // id -> the registration, as canonical JSON
 	// diverts are the divert sockets, by sandbox id.
 	diverts map[string]*divertSandbox
+	// addrs are the registered addresses of the sandboxes, by sandbox id,
+	// and byAddr is the same map the other way. A request on the address
+	// listener is bound to the sandbox registered with its peer IP.
+	addrs  map[string]string
+	byAddr map[string]string
+	// uids are the pod UIDs of the sandboxes registered with an address and
+	// a UID, by sandbox id.
+	uids map[string]string
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
 	vends    map[string]map[string]vendRoute
@@ -159,6 +183,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
+		addrs: map[string]string{}, byAddr: map[string]string{}, uids: map[string]string{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
 		resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
@@ -201,19 +226,35 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	s.logger = log.New(out, "brig-broker: ", log.LstdFlags)
 	s.aws = newAWSVendor(cfg.awsBin, cfg.now, s.logger)
 	s.gcp = newGCPMinter(cfg.gcloudBin, cfg.tokenInfoURL, cfg.now, s.logger)
-	// A store that does not open fails the routes that read it, not the
-	// broker: a host with no keyring still registers sandboxes and mints
-	// their tokens.
-	store, err := cfg.openStore()
-	if err != nil {
-		s.storeErr = err
-		store = newLazyStore(cfg.openStore)
+	s.gcp.node = s.nodeFlags()
+	var store secret.Store
+	if cfg.secretDir != "" {
+		// The operator chose this directory, so a file in it that cannot be
+		// served is a mistake to stop on and not a store to retry.
+		files, err := secret.OpenFiles(cfg.secretDir)
+		if err != nil {
+			return nil, err
+		}
+		if skipped := files.Skipped(); len(skipped) > 0 {
+			s.logger.Printf("the secret directory %s holds %q, which are not brig secret names or not files, "+
+				"and brig does not serve them", cfg.secretDir, skipped)
+		}
+		store = files
+	} else {
+		// A store that does not open fails the routes that read it, not the
+		// broker: a host with no keyring still registers sandboxes and mints
+		// their tokens.
+		store, err = cfg.openStore()
+		if err != nil {
+			s.storeErr = err
+			store = newLazyStore(cfg.openStore)
+		}
 	}
 	renewerFor := cfg.renewerFor
 	if renewerFor == nil {
 		renewerFor = lifecycleRenewer
 	}
-	s.creds = newCredentials(store, renewerFor)
+	s.creds = newCredentials(store, renewerFor, s.logger.Printf)
 	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
 	s.handler, err = broker.New(broker.Config{
 		HostKey:      hostKey,
@@ -231,12 +272,20 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	ln, err := listenRoutes(cfg.dir)
-	if err != nil {
-		return nil, err
+	if cfg.listen != "" {
+		// The port file is the loopback listener's. A node broker neither
+		// reads nor writes it, so a stale one stays as it is.
+		if s.routes, err = listenAddress(cfg.listen, s.ca, s.registeredAddr); err != nil {
+			return nil, err
+		}
+	} else {
+		ln, err := listenRoutes(cfg.dir)
+		if err != nil {
+			return nil, err
+		}
+		s.routes = newLimitListener(ln, maxConns)
+		s.port = ln.Addr().(*net.TCPAddr).Port
 	}
-	s.routes = newLimitListener(ln, maxConns)
-	s.port = ln.Addr().(*net.TCPAddr).Port
 	// The lock is held, so a socket file here was left by a broker that did
 	// not exit cleanly.
 	sock := filepath.Join(cfg.dir, injector.SocketName)
@@ -263,9 +312,16 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 // for, then closes both listeners and removes the socket and the pid file.
 func (s *server) serve(ctx context.Context) error {
 	logger := s.logger
+	// The routes are on the loopback port, or on the address listener with
+	// TLS. Each marks its connections, and the handler's clear-text check
+	// reads the mark.
+	connContext, where := loopbackContext, fmt.Sprintf("127.0.0.1:%d", s.port)
+	if s.cfg.listen != "" {
+		connContext, where = addressContext, s.routes.Addr().String()+" with TLS"
+	}
 	routes := &http.Server{
 		Handler:           s.handler,
-		ConnContext:       loopbackContext,
+		ConnContext:       connContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
@@ -295,7 +351,7 @@ func (s *server) serve(ctx context.Context) error {
 	go func() { errs <- routes.Serve(s.routes) }()
 	go func() { errs <- internal.Serve(s.internal) }()
 	go func() { errs <- control.Serve(s.control) }()
-	logger.Printf("serving routes on 127.0.0.1:%d, control on %s", s.port, s.control.Addr())
+	logger.Printf("serving routes on %s, control on %s", where, s.control.Addr())
 	if s.storeErr != nil {
 		logger.Printf("brig's secret store did not open, and every route answers 502 until it does: %v", s.storeErr)
 	}
@@ -434,6 +490,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
+	addr, uid, err := s.sandboxAddr(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	// The settings of each route mode besides endpoint go to that mode's
 	// divert handler, which checks them before anything is registered.
 	for _, m := range slices.Sorted(maps.Keys(req.Modes)) {
@@ -456,11 +517,17 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		sb.Routes = append(sb.Routes, broker.Route{Policy: rt.Policy, Route: expanded})
 	}
+	if err := s.refuseHostRoutes(r.Context(), sb); err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
+		Address      string
+		UID          string
 		Settings     map[v1alpha1.RouteMode]json.RawMessage
-	}{sb, req.BrigInternal, req.Modes})
+	}{sb, req.BrigInternal, addr, uid, req.Modes})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -491,6 +558,20 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	if s.refuseStopping(w) {
 		return
+	}
+	// One address binds the requests of one sandbox. The same sandbox
+	// registered again keeps its own. Pod IPs are reused, so a sandbox whose
+	// pod has another UID than the one registering now held the address for
+	// a pod that is gone, and the new registration replaces it. Without both
+	// UIDs the broker cannot tell a stale registration from a live one.
+	var stale string
+	if other, ok := s.byAddr[addr]; addr != "" && ok && other != req.ID {
+		if uid == "" || s.uids[other] == "" || s.uids[other] == uid {
+			http.Error(w, fmt.Sprintf("sandbox %s: the address %s is registered by another sandbox", req.ID, addr),
+				http.StatusConflict)
+			return
+		}
+		stale = other
 	}
 	if s.sandboxes[req.ID] == string(key) {
 		s.setVends(req.ID, vends)
@@ -549,6 +630,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
 			delete(s.vends, req.ID)
+			s.setAddress(req.ID, "", "")
 			s.aws.forget(req.ID)
 			s.gcp.forget(req.ID)
 			untrack()
@@ -557,7 +639,15 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		s.diverts[req.ID] = l
 	}
+	if stale != "" {
+		// Its key goes with it, so its tokens stop working, and a request
+		// from the address is bound to the new sandbox from here on.
+		s.logger.Printf("sandbox %s: the address %s is now pod %s, so sandbox %s of pod %s is removed",
+			req.ID, addr, uid, stale, s.uids[stale])
+		s.forget(stale)
+	}
 	s.sandboxes[req.ID] = string(key)
+	s.setAddress(req.ID, addr, uid)
 	s.setVends(req.ID, vends)
 	for _, name := range tracked {
 		s.creds.recover(name)
@@ -570,6 +660,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 // it by, and never its key.
 func (s *server) added(id string) injector.AddResponse {
 	var resp injector.AddResponse
+	if s.addrs[id] != "" {
+		resp.CA = string(s.ca.certPEM())
+	}
 	if l := s.diverts[id]; l != nil {
 		resp.DivertSocket = l.path
 		if l.internal.IsValid() {
@@ -631,6 +724,131 @@ func (s *server) setVends(id string, vends map[string]vendRoute) {
 	s.vends[id] = vends
 }
 
+// nodeFlags names the flags that make the broker a node daemon, or "" for a
+// broker on a workstation.
+func (s *server) nodeFlags() string {
+	switch {
+	case s.cfg.listen != "" && s.cfg.secretDir != "":
+		return "--listen and --secret-dir"
+	case s.cfg.listen != "":
+		return "--listen"
+	case s.cfg.secretDir != "":
+		return "--secret-dir"
+	}
+	return ""
+}
+
+// refuseHostRoutes refuses a registration whose routes need the host, when
+// the broker runs as a node daemon. A route that vends runs the host's aws
+// CLI against a profile there, and a node has neither. A gcp route whose
+// secret is a gcloud pointer runs the host's gcloud. A node has no user login
+// for it, and on GKE gcloud falls back to the node's own service account, an
+// identity nobody named for the sandbox. The error names the route and says
+// where the credential comes from instead.
+func (s *server) refuseHostRoutes(ctx context.Context, sb broker.Sandbox) error {
+	flags := s.nodeFlags()
+	if flags == "" {
+		return nil
+	}
+	for _, rt := range sb.Routes {
+		if rt.Route.Vends() {
+			return fmt.Errorf("route %s vends AWS keys through the host's aws CLI and profile, and a broker "+
+				"started with %s has neither. Use the platform's own credential vending for this workload",
+				rt.Route.Name, flags)
+		}
+	}
+	wl := secret.Workload{Sandbox: sb.ID, Profile: sb.Profile}
+	for _, rt := range sb.Routes {
+		if len(rt.Route.Services) == 0 || rt.Route.Credential == nil {
+			continue
+		}
+		// A secret that does not resolve is left to the request, as
+		// checkMints leaves it. gcpMinter refuses a pointer on a node too, so
+		// a file that becomes one later still never reaches gcloud.
+		doc, err := s.creds.Resolve(ctx, rt.Route.Credential.SecretRef.Name, wl)
+		if err == nil && gcpcred.IsPointer(doc) {
+			return gcloudOnNode(rt.Route.Name, flags)
+		}
+	}
+	return nil
+}
+
+// gcloudOnNode is the refusal of a gcp route whose secret is a gcloud
+// pointer, on a broker started with flags.
+func gcloudOnNode(route, flags string) error {
+	return fmt.Errorf("route %s mints Google tokens through the host's gcloud CLI and login, and a broker "+
+		"started with %s has neither. On a node, gcloud would mint as the node's own service account. "+
+		"Store a token the platform mints for this workload instead of a gcloud pointer", route, flags)
+}
+
+// sandboxAddr reads the address of a registration and the UID of its pod:
+// "" for none, or the canonical spelling of one IP. A broker without --listen
+// has no listener a pod could reach, and a sandbox is bound by its address or
+// by a divert socket and not by both, so the registration is refused in those
+// cases. A UID names the pod that has the address, so it needs one.
+func (s *server) sandboxAddr(req injector.Sandbox) (addr, uid string, err error) {
+	addr, err = canonicalAddr(req.Address, s.cfg.loopbackAddresses)
+	if err != nil {
+		return "", "", err
+	}
+	switch {
+	case addr == "":
+		if req.UID != "" {
+			return "", "", errors.New("it has a pod UID and no address")
+		}
+	case s.cfg.listen == "":
+		return "", "", errors.New("it has an address, and this broker runs without --listen, so no pod can reach it")
+	case req.BrigInternal != "" || len(req.Modes) > 0:
+		return "", "", errors.New("it has an address, and a sandbox on the address listener has no brig.internal " +
+			"address and no route mode besides endpoint")
+	}
+	if !validUID(req.UID) {
+		return "", "", fmt.Errorf("the pod UID %q is not letters, digits and dashes, at most %d of them", req.UID, maxUID)
+	}
+	return addr, req.UID, nil
+}
+
+// maxUID bounds a pod UID. Kubernetes gives a pod a 36-character UUID.
+const maxUID = 64
+
+// validUID reports whether uid is "" or letters, digits and dashes, at most
+// maxUID of them. The broker log names the UID, so nothing else gets in.
+func validUID(uid string) bool {
+	if len(uid) > maxUID {
+		return false
+	}
+	for _, c := range uid {
+		if c != '-' && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// setAddress records the address of sandbox id and the UID of its pod, or
+// none, and releases the address it had. s.mu is held.
+func (s *server) setAddress(id, addr, uid string) {
+	if old := s.addrs[id]; old != "" {
+		delete(s.byAddr, old)
+	}
+	delete(s.addrs, id)
+	delete(s.uids, id)
+	if addr != "" {
+		s.addrs[id], s.byAddr[addr] = addr, id
+		if uid != "" {
+			s.uids[id] = uid
+		}
+	}
+}
+
+// registeredAddr reports whether a sandbox is registered with ip.
+func (s *server) registeredAddr(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.byAddr[ip]
+	return ok
+}
+
 // brigInternalAddr reads the brig.internal address of a registration: "" for
 // none, or one IP address in its canonical spelling, never unspecified,
 // loopback or multicast. The broker serves brig.internal on connections to
@@ -654,8 +872,18 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	_, removed := s.sandboxes[id]
+	s.forget(id)
+	remaining := len(s.sandboxes)
+	s.mu.Unlock()
+	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
+}
+
+// forget removes sandbox id and what the broker holds for it. Its key goes,
+// so the tokens minted for it stop working. s.mu is held.
+func (s *server) forget(id string) {
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
+	s.setAddress(id, "", "")
 	delete(s.vends, id)
 	s.aws.forget(id)
 	s.gcp.forget(id)
@@ -663,9 +891,6 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 		l.close()
 		delete(s.diverts, id)
 	}
-	remaining := len(s.sandboxes)
-	s.mu.Unlock()
-	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
 }
 
 func (s *server) mint(w http.ResponseWriter, r *http.Request) {
@@ -744,6 +969,9 @@ type credentials struct {
 	store      secret.Store
 	base       secret.Broker
 	renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error)
+	// logf takes the lines of the caches, such as the one that says a
+	// renewed credential cannot be written back to a read-only store.
+	logf func(format string, args ...any)
 
 	mu     sync.Mutex
 	caches map[string]*renew.Cache
@@ -757,11 +985,13 @@ type credentials struct {
 
 var _ broker.Renewer = (*credentials)(nil)
 
-func newCredentials(store secret.Store, renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error)) *credentials {
+func newCredentials(store secret.Store, renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error),
+	logf func(format string, args ...any)) *credentials {
 	return &credentials{
 		store:      store,
 		base:       secret.StoreBroker(store),
 		renewerFor: renewerFor,
+		logf:       logf,
 		caches:     map[string]*renew.Cache{},
 	}
 }
@@ -782,7 +1012,9 @@ func (c *credentials) track(name string, l v1alpha1.Lifecycle) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c.caches[name] = renew.NewCache(c.base, c.store, map[string]secret.Renewer{name: r})
+	cache := renew.NewCache(c.base, c.store, map[string]secret.Renewer{name: r})
+	cache.Logf = c.logf
+	c.caches[name] = cache
 	return true, nil
 }
 

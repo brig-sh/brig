@@ -775,6 +775,18 @@ item next to the secret and never a file.
 4. The secret takes the new document.
 5. The broker deletes the journal.
 
+The exception is a store that takes no writes at all: the directory a broker
+on a Kubernetes node reads with `--secret-dir`. See
+[Running the broker on a node](broker.md#running-the-broker-on-a-node). The
+journal cannot be created there, and the refresh is sent without it. The
+broker serves the renewed document from memory, and the file keeps the
+document it had. It logs once per secret that the document cannot be written
+back, and `pending` does not name the secret, because no write is waiting.
+A restart loses the held document and starts from the file again. A provider
+that rotates its refresh tokens has then spent the one in the file, so
+replace the Secret before that happens. A file that changes replaces the held
+document at the next recheck, within five minutes.
+
 A write that fails is retried, and the broker serves the new document from
 memory meanwhile. No other refresh of the secret starts until the journal is
 gone. A refused access token in that window is not renewed again.

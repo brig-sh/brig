@@ -125,6 +125,22 @@ type Sandbox struct {
 	// divert socket, and the broker serves brig.internal there, with TLS. A
 	// sandbox registered with it is refused over loopback.
 	BrigInternal string `json:"brigInternal,omitempty"`
+	// Address is the sandbox's own IP, which a Kubernetes shim knows from
+	// the pod, or "" for a sandbox that reaches the broker some other way.
+	// It is only for a broker started with --listen. The broker binds each
+	// request that arrives on that listener to the sandbox registered with
+	// the IP the connection came from, and refuses a token of another
+	// sandbox the way a divert socket does. Two sandboxes may not share one,
+	// and it cannot be combined with BrigInternal or Modes. The answer to the
+	// registration carries the CA to trust for brig.internal.
+	Address string `json:"address,omitempty"`
+	// UID is the Kubernetes UID of the sandbox's pod, or "". It is only for
+	// a sandbox with an Address. The CNI gives a pod's IP to another pod
+	// once the first is gone, and a shim can miss the removal of the first.
+	// A registration whose Address another sandbox holds under a different
+	// UID replaces that sandbox, whose tokens then stop working. Without a
+	// UID on both registrations, the second one is refused instead.
+	UID string `json:"uid,omitempty"`
 	// Modes holds the settings of the sandbox's routes in each route mode
 	// besides endpoint, by mode, or is nil. The broker refuses a route in
 	// such a mode without them, and hands them to the mode's divert handler.
@@ -161,7 +177,8 @@ type AddResponse struct {
 	// connection.
 	DivertSocket string `json:"divertSocket,omitempty"`
 	// CA is the brig CA certificate, in PEM, for a sandbox with a
-	// BrigInternal address. The guest trusts it for brig.internal. Its key
+	// BrigInternal address or an Address. The guest trusts it for
+	// brig.internal. Its key
 	// never leaves the broker.
 	CA string `json:"ca,omitempty"`
 	// Regions maps each vending route to the AWS region the guest gets as
@@ -226,7 +243,9 @@ type Status struct {
 	// Sandboxes are the registered sandbox ids, sorted.
 	Sandboxes []string `json:"sandboxes"`
 	// Pending are the secrets whose refreshed value is held in memory and
-	// not yet written back to the store.
+	// not yet written back to the store. A secret on a read-only store
+	// (--secret-dir) is not named: its refreshed value stays in memory for
+	// good, and no write is waiting.
 	Pending []string `json:"pending,omitempty"`
 	// Failing are the secrets whose last refresh failed.
 	Failing []string `json:"failing,omitempty"`
