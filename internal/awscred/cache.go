@@ -16,8 +16,9 @@ const (
 	// again, while a key that is about to need replacing still does.
 	ensureMargin = 15 * time.Minute
 	// refetchFloor is how long keys stay servable after a fetch, under the
-	// margin, while they are valid. Self mode can return keys with less than
-	// getMargin left, and without a floor every request would run aws.
+	// margin, while they are valid. Self and scoped mode can return keys with
+	// less than getMargin left, and without a floor every request would run
+	// aws.
 	refetchFloor = time.Minute
 )
 
@@ -57,6 +58,10 @@ type Cache struct {
 
 // NewCache returns an empty cache. now is the clock, so tests need no sleeps.
 func NewCache(cli CLI, now func() time.Time) *Cache {
+	// The scoped fetch reads the clock too, and must read the same one.
+	if cli.now == nil {
+		cli.now = now
+	}
 	return &Cache{cli: cli, now: now, entries: map[key]*entry{}}
 }
 

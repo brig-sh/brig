@@ -169,3 +169,158 @@ func TestParsePointerReadsPastABOMAndUnicodeSpace(t *testing.T) {
 		}
 	}
 }
+
+const scopePolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"}]}`
+
+func scopedPtr() Pointer {
+	return Pointer{Kind: "aws", AWSProfile: "dev", Mode: ModeScoped, ScopePolicy: scopePolicy}
+}
+
+// A scoped session keeps the caller's identity, so the fields that only a
+// role session has are mistakes to refuse, not values to drop.
+func TestPointerScopedRefusesRoleFields(t *testing.T) {
+	if err := scopedPtr().Validate(); err != nil {
+		t.Fatalf("a valid scoped pointer refused: %v", err)
+	}
+	for name, edit := range map[string]func(*Pointer){
+		"roleArn":           func(p *Pointer) { p.RoleARN = "arn:aws:iam::0:role/r" },
+		"sourceIdentity":    func(p *Pointer) { p.SourceIdentity = "me@example.com" },
+		"policyArns":        func(p *Pointer) { p.PolicyARNs = []string{"arn:aws:iam::0:policy/p"} },
+		"empty policyArns":  func(p *Pointer) { p.PolicyARNs = []string{} },
+		"no scopePolicy":    func(p *Pointer) { p.ScopePolicy = "" },
+		"policy is a space": func(p *Pointer) { p.ScopePolicy = " " },
+	} {
+		p := scopedPtr()
+		edit(&p)
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// A scope policy on a role or self pointer would be dropped by assume-role
+// and export-credentials, and the pointer would claim a narrower session
+// than the keys have.
+func TestPointerRoleAndSelfRefuseAScopePolicy(t *testing.T) {
+	for _, doc := range []string{
+		`{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r","scopePolicy":"{}"}`,
+		`{"kind":"aws","awsProfile":"p","mode":"self","scopePolicy":"{}"}`,
+	} {
+		_, err := ParsePointer([]byte(doc))
+		if err == nil || !strings.Contains(err.Error(), "scopePolicy") {
+			t.Errorf("%s: err = %v, want a refusal naming scopePolicy", doc, err)
+		}
+	}
+}
+
+// The policy reaches the aws CLI as the value of --policy. The CLI loads a
+// value that starts with file:// or fileb:// from the host, and a value that
+// starts with - could be read as a flag, so a stored pointer is data that
+// must hold a compact JSON object and nothing else.
+func TestPointerScopePolicyMustBeACompactObject(t *testing.T) {
+	for name, policy := range map[string]string{
+		"file":          "file:///etc/passwd",
+		"fileb":         "fileb://x",
+		"flag":          "--profile",
+		"array":         `[1]`,
+		"string":        `"x"`,
+		"not compact":   `{ "a": 1 }`,
+		"trailing data": `{"a":1} {}`,
+		"two objects":   `{"a":1}{}`,
+		"leading space": ` {"a":1}`,
+		"not json":      `{a:1}`,
+		"over 2048":     `{"a":"` + strings.Repeat("x", MaxScopePolicy-7) + `"}`,
+	} {
+		p := scopedPtr()
+		p.ScopePolicy = policy
+		doc, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParsePointer(doc); err == nil {
+			t.Errorf("%s: a scopePolicy of %d characters was accepted", name, len(policy))
+		}
+	}
+	// The limit itself is accepted.
+	p := scopedPtr()
+	p.ScopePolicy = `{"a":"` + strings.Repeat("x", MaxScopePolicy-8) + `"}`
+	if err := p.Validate(); err != nil {
+		t.Errorf("a policy of exactly %d characters: %v", MaxScopePolicy, err)
+	}
+}
+
+// The cache tells keys of two pointers apart with Equal, so the policy must
+// survive a round trip byte for byte, and two policies must not compare
+// equal.
+func TestPointerScopePolicyRoundTrip(t *testing.T) {
+	p := scopedPtr()
+	p.ScopePolicy = `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::a<b>&c/*"}]}`
+	doc, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := ParsePointer(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !q.Equal(p) || q.ScopePolicy != p.ScopePolicy {
+		t.Errorf("round trip: %+v, want %+v", q, p)
+	}
+	other := scopedPtr()
+	if other.Equal(p) {
+		t.Error("two pointers with different scope policies are Equal")
+	}
+	// A pointer with no scope policy marshals as it did before the field.
+	doc, err = json.Marshal(Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "scopePolicy") {
+		t.Errorf("a pointer with no scope policy marshals with the key: %s", doc)
+	}
+}
+
+func TestCompactPolicy(t *testing.T) {
+	got, err := CompactPolicy([]byte("{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": []\n}\n"))
+	if err != nil || got != `{"Version":"2012-10-17","Statement":[]}` {
+		t.Errorf("got %q, %v", got, err)
+	}
+	for doc, want := range map[string]string{
+		`[]`:              "must be a JSON object",
+		`"x"`:             "must be a JSON object",
+		`{"a":`:           "is not valid JSON",
+		`{"a":1} {"b":2}`: "is not valid JSON",
+		``:                "is not valid JSON",
+		`{"a":"` + strings.Repeat("x", MaxScopePolicy) + `"}`: "2048",
+	} {
+		_, err := CompactPolicy([]byte(doc))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%.20q: err = %v, want %q", doc, err, want)
+		}
+	}
+	// A decode error never quotes the document: it can hold an account id
+	// or a bucket name the user did not mean to print.
+	if _, err := CompactPolicy([]byte(`{"Resource":"arn:aws:s3:::private-bucket" oops}`)); err == nil ||
+		strings.Contains(err.Error(), "private-bucket") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestPointerScopedSessionBounds(t *testing.T) {
+	p := scopedPtr()
+	if got := p.Session(); got != DefaultSessionSeconds {
+		t.Errorf("no session named: Session() = %d, want %d", got, DefaultSessionSeconds)
+	}
+	for _, s := range []int{MinSessionSeconds, MaxSessionSeconds} {
+		p.SessionSeconds = s
+		if err := p.Validate(); err != nil {
+			t.Errorf("%ds refused: %v", s, err)
+		}
+	}
+	for _, s := range []int{MinSessionSeconds - 1, MaxSessionSeconds + 1} {
+		p.SessionSeconds = s
+		if err := p.Validate(); err == nil {
+			t.Errorf("%ds accepted", s)
+		}
+	}
+}

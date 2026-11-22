@@ -339,3 +339,71 @@ func TestCacheShortLivedKeysFetchAtMostOncePerFloor(t *testing.T) {
 			n.Load(), got.Expiration, clk.now(), err)
 	}
 }
+
+var scopedCachePtr = Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeScoped,
+	ScopePolicy: `{"Statement":[{"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"}]}`}
+
+// Scoped keys end with the calling session when it has less left than the
+// secret asks for, so they can have less than getMargin left too. The floor
+// covers them as it covers self mode.
+func TestCacheScopedShortLivedKeysFetchAtMostOncePerFloor(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	var n atomic.Int32
+	cli := CLI{run: func(_ context.Context, _ string, args, _ []string) ([]byte, []byte, error) {
+		n.Add(1)
+		if !slices.Contains(args, "get-scoped-credentials") {
+			return nil, []byte("unexpected"), errors.New("exit status 2")
+		}
+		exp := clk.now().Add(10 * time.Minute).Format(time.RFC3339)
+		return []byte(fmt.Sprintf(`{"Credentials":{"AccessKeyId":"A","SecretAccessKey":"S","SessionToken":"T","Expiration":%q}}`, exp)), nil, nil
+	}}
+	c := NewCache(cli, clk.now)
+	get := func() {
+		t.Helper()
+		if _, err := c.Get(context.Background(), "a", "aws", scopedCachePtr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get()
+	clk.advance(59 * time.Second)
+	get()
+	if n.Load() != 1 {
+		t.Fatalf("fetches within the floor = %d, want 1", n.Load())
+	}
+	clk.advance(2 * time.Second)
+	get()
+	if n.Load() != 2 {
+		t.Errorf("fetches after the floor = %d, want 2", n.Load())
+	}
+}
+
+// Re-importing with another scope policy changes what the keys may do. Keys
+// of the old policy must not be served for the new one.
+func TestCacheRefetchesOnScopePolicyChange(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	var n int
+	var policies []string
+	cli := CLI{run: func(_ context.Context, _ string, args, _ []string) ([]byte, []byte, error) {
+		n++
+		policies = append(policies, args[slices.Index(args, "--policy")+1])
+		exp := clk.now().Add(time.Hour).Format(time.RFC3339)
+		return []byte(fmt.Sprintf(`{"Credentials":{"AccessKeyId":"K%d","SecretAccessKey":"S","SessionToken":"T","Expiration":%q}}`, n, exp)), nil, nil
+	}}
+	c := NewCache(cli, clk.now)
+	first, err := c.Get(context.Background(), "a", "aws", scopedCachePtr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := scopedCachePtr
+	other.ScopePolicy = `{"Statement":[{"Effect":"Allow","Action":"sts:GetCallerIdentity","Resource":"*"}]}`
+	second, err := c.Get(context.Background(), "a", "aws", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || second.AccessKeyID == first.AccessKeyID {
+		t.Errorf("fetches = %d, keys %s then %s: keys of the old policy were served", n, first.AccessKeyID, second.AccessKeyID)
+	}
+	if len(policies) != 2 || policies[1] != other.ScopePolicy {
+		t.Errorf("policies sent = %q", policies)
+	}
+}
