@@ -445,6 +445,8 @@ func TestACleanColdBootWarnsAboutNothing(t *testing.T) {
 	// so itself, which is a warning a client should get: it is a control the
 	// user turned off, not something the run did along the way.
 	t.Setenv("BRIG_VERIFY", "off")
+	// vz, which starts no network gateway for the stub hull to answer.
+	t.Setenv("BRIG_HYPERVISOR", "vz")
 
 	socket := filepath.Join(shortDir(t), "brigd.sock")
 	startDaemon(t, socket)

@@ -158,7 +158,7 @@ func TestPlanAgreesWithInfo(t *testing.T) {
 	}{
 		{name: "a profile's isolated network on vz", hypervisor: "vz", body: "network: isolated\n",
 			want: "the x profile sets network: isolated, and the vz backend cannot"},
-		{name: "the vz default with no posture named", body: "",
+		{name: "vz with no posture named", hypervisor: "vz", body: "",
 			want: "vz does not support isolated networking"},
 		{name: "a running shared sandbox whose next boot is offline", hypervisor: "vz",
 			opts: Options{Network: "offline"}, running: true, want: "offline from its next boot"},

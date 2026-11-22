@@ -132,7 +132,7 @@ func TestARunOfAProfileHandsTheRuntimeWhatItDid(t *testing.T) {
    ],
    "GUI": false,
    "GUITitle": "",
-   "Hypervisor": "",
+   "Hypervisor": "hvi",
    "RootfsType": "",
    "RootfsMode": "",
    "Tmpfs": null,

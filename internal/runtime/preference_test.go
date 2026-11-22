@@ -224,11 +224,14 @@ func TestRuntimeBinExpandsHome(t *testing.T) {
 	}
 }
 
-// The hypervisor a profile asks for reaches the command line, and vz remains
-// the default when nothing asks.
+// The hypervisor a profile asks for reaches the command line. hvi is the
+// default when nothing asks, and vz for a graphical profile.
 func TestHypervisorComesFromTheSpec(t *testing.T) {
-	if got := hypervisor(RunSpec{}); got != "vz" {
-		t.Errorf("default hypervisor = %q, want vz", got)
+	if got := hypervisor(RunSpec{}); got != "hvi" {
+		t.Errorf("default hypervisor = %q, want hvi", got)
+	}
+	if got := hypervisor(RunSpec{GUI: true}); got != "vz" {
+		t.Errorf("default hypervisor of a graphical spec = %q, want vz", got)
 	}
 	if got := hypervisor(RunSpec{Hypervisor: "hvi"}); got != "hvi" {
 		t.Errorf("hypervisor = %q, want the requested hvi", got)

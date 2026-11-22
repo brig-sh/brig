@@ -533,15 +533,25 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 
 // hypervisor is the macOS backend this run wants: BRIG_HYPERVISOR (or
 // BRIG_<PROFILE>_HYPERVISOR) beats what the profile asked for, which is the
-// order every other setting follows. Empty means nothing was asked for, and the
-// runtime's own default applies.
+// order every other setting follows. When neither names one, it is the
+// runtime's default, hvi or vz for a graphical profile, named here so that the
+// plan and the approval name the backend that boots. It is empty where the
+// runtime picks its own monitor.
 //
 // One function rather than a copy per caller, because three of them read it
 // now -- the preflight below, the spec handed to the runtime, and the envelope
 // row naming the isolation boundary. A row reporting a backend other than the
 // one that boots is worse than no row at all.
 func (c *Config) hypervisor() string {
-	return c.env.String("HYPERVISOR", c.Profile.Hypervisor)
+	return resolveHypervisor(c.Runtime, c.env.String("HYPERVISOR", c.Profile.Hypervisor), c.Profile.IsGUI())
+}
+
+// resolveHypervisor is the hypervisor asked for, else the default of rt.
+func resolveHypervisor(rt runtime.Runtime, asked string, gui bool) string {
+	if asked != "" {
+		return asked
+	}
+	return runtime.DefaultHypervisor(rt, gui)
 }
 
 // preflightHypervisor refuses a run whose hypervisor the host cannot boot,

@@ -356,19 +356,37 @@ func hullVersionAtLeast(out string, rc int, unknown bool) bool {
 	}
 }
 
-// hypervisor is vz because that is the backend with a graphical console, a
-// virtiofs share per directory and the notarised runner. A profile names
-// another -- hvi for the Hypervisor Virtualization Interface, qemu for a qemu
-// host -- and BRIG_HYPERVISOR beats the profile. Both are resolved before they
-// reach here; see wrap.
-func hypervisor(spec RunSpec) string { return hypervisorOrDefault(spec.Hypervisor) }
+// hypervisor is the backend a run boots on. A profile names one, and
+// BRIG_HYPERVISOR beats the profile; both are resolved before they reach here,
+// see wrap. A spec that names none boots on hvi, the backend with a network
+// gateway of its own, so an isolated network and an egress policy work
+// without a setting. A graphical profile boots on vz, the only backend that
+// opens a window.
+func hypervisor(spec RunSpec) string {
+	if spec.Hypervisor == "" && spec.GUI {
+		return "vz"
+	}
+	return hypervisorOrDefault(spec.Hypervisor)
+}
 
 // hypervisorOrDefault is where the default lives, so the backend that boots and
-// the backend the envelope names are read off one line. Two copies of "vz"
-// would be two things to change, and the one that goes stale is a report about
-// a boundary rather than the boundary itself -- which is the worse half to get
-// wrong, because nothing fails to make it visible.
-func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
+// the backend the envelope names are read off one line.
+func hypervisorOrDefault(hv string) string { return orDefault(hv, "hvi") }
+
+// DefaultHypervisor is the backend a run on rt boots on when neither the
+// profile nor BRIG_HYPERVISOR names one: hvi, or vz for a graphical profile.
+// It is empty where the choice is not a macOS backend: hull on Linux and
+// nerdctl pick their monitor themselves, and with no runtime there is no
+// backend to name.
+func DefaultHypervisor(rt Runtime, gui bool) string {
+	if rt == nil || rt.Kind() != "hull" || IsLinuxHull(rt) {
+		return ""
+	}
+	if gui {
+		return "vz"
+	}
+	return "hvi"
+}
 
 // The kernel and initrd a genericBoot profile needs live in boot.go: both
 // backends take the same two annotations, so resolving them is not hull's

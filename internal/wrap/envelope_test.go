@@ -54,7 +54,7 @@ func TestEnvelopeNamesTheBoundary(t *testing.T) {
 		"SESSION      review",
 		"PROFILE      claude-code",
 		"SANDBOX      brig-claude-code-review (hull)",
-		"ISOLATION    microVM (hull, vz backend, rootfs hull default)",
+		"ISOLATION    microVM (hull, hvi backend, rootfs hull default)",
 		"WORKSPACE    /Users/me/src/brig (read-write)",
 		"IMAGE        ghcr.io/brig-sh/claude-code:latest (pull missing)",
 	} {

@@ -53,12 +53,15 @@ func TestBothAdaptersAnswerCanRun(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		rt   RunChecker
+		hv   string
 	}{
-		{"hull on vz", &hull{bin: "hull"}},
-		{"docker", &nerdctl{bin: "docker"}},
+		{"hull on vz", &hull{bin: "hull"}, "vz"},
+		{"docker", &nerdctl{bin: "docker"}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.rt.CanRun(policied); err == nil {
+			spec := policied
+			spec.Hypervisor = tt.hv
+			if err := tt.rt.CanRun(spec); err == nil {
 				t.Error("a policy this backend cannot enforce was accepted")
 			}
 		})

@@ -149,7 +149,7 @@ func TestBootsUnderTestLeaveTheDevelopersGatewaysAlone(t *testing.T) {
 			if err := down.Run(RunSpec{Name: "brig-x", Image: "img", Hypervisor: "vz"}); err == nil {
 				t.Fatal("a runtime that exited non-zero must fail the boot")
 			}
-			if err := up.Run(RunSpec{Name: "vm", Image: "img", Mem: 2048, CPUs: 2}); err != nil {
+			if err := up.Run(RunSpec{Name: "vm", Image: "img", Mem: 2048, CPUs: 2, Hypervisor: "vz"}); err != nil {
 				t.Fatalf("boot: %v", err)
 			}
 			if err := up.Stop("vm"); err != nil {

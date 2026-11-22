@@ -84,7 +84,7 @@ func TestDockerIsReportedAsDocker(t *testing.T) {
 // unset backend reports the one that would boot rather than a blank.
 func TestHullReportsAMicroVMAndTheBackendUnderIt(t *testing.T) {
 	for _, tc := range []struct{ asked, want string }{
-		{"", "vz"},
+		{"", "hvi"},
 		{"vz", "vz"},
 		{"hvi", "hvi"},
 		{"qemu", "qemu"},
