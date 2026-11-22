@@ -509,6 +509,29 @@ func TestServeRoutesSaysWhoseAWSIdentity(t *testing.T) {
 	}
 }
 
+// A scoped route is your own identity, narrowed. The line says so, and does
+// not claim the sandbox can do what you can.
+func TestServeRoutesScopedDoesNotClaimYourWholeIdentity(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	shortStateDir(t)
+	c.broker = &fakeBroker{vends: map[string]injector.VendInfo{
+		"aws": {Mode: "scoped", AWSProfile: "p"},
+	}}
+	if err := c.serveRoutes(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Err.(*bytes.Buffer).String()
+	want := "route aws: AWS as your own identity, narrowed by the scope policy in the secret (profile p)"
+	if strings.Count(got, want) != 1 {
+		t.Errorf("want %q once in:\n%s", want, got)
+	}
+	if strings.Contains(got, "the sandbox can do what you can") {
+		t.Errorf("a scoped route claims your whole identity:\n%s", got)
+	}
+}
+
 // A role narrowed by session policies is named with them. Without them the
 // line would claim more than the sandbox can do.
 func TestServeRoutesNamesSessionPolicies(t *testing.T) {

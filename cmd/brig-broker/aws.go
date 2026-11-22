@@ -100,6 +100,17 @@ func (v *awsVendor) failed(sandbox, route string, err error, ranAWS bool) error 
 	if errors.As(err, &sso) {
 		return &broker.VendError{Message: sso.Error()}
 	}
+	// An aws too old for scoped mode, and a profile whose calls reach the
+	// STS global endpoint, are fixed on the host. Both texts are Brig's own
+	// and name no path.
+	var old *awscred.ErrCLITooOld
+	if errors.As(err, &old) {
+		return &broker.VendError{Message: old.Error()}
+	}
+	var global *awscred.ErrGlobalEndpoint
+	if errors.As(err, &global) {
+		return &broker.VendError{Message: global.Error()}
+	}
 	// awscred reports a failed start in words, not as exec.ErrNotFound, so
 	// the binary is looked up again here, and only on a failure of aws: a
 	// malformed pointer is not fixed by installing it.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ case "$1 $2" in
 "sts get-caller-identity") echo '{"Arn":"` + awsCaller + `"}' ;;
 "configure get") echo '` + region + `' ;;
 "sts assume-role") echo '{"Credentials":{"AccessKeyId":"ASIAFAKE","SecretAccessKey":"` + awsSecret + `","SessionToken":"` + awsSessionToken + `","Expiration":"2026-10-26T15:04:05+00:00"}}' ;;
+"sts get-scoped-credentials") echo '{"Credentials":{"AccessKeyId":"ASIASCOPED","SecretAccessKey":"` + awsSecret + `","SessionToken":"` + awsSessionToken + `","Expiration":"2026-10-26T15:04:05+00:00"}}' ;;
 *) echo "fake aws: unexpected $*" >&2; exit 2 ;;
 esac
 `
@@ -602,6 +604,258 @@ func TestImportAWSPolicyARNsNeedAnAWSSecret(t *testing.T) {
 	useHost(t, nil)
 	err := importSecrets(&bytes.Buffer{}, []string{"claude-code", "--policy-arns", policyA})
 	if err == nil || !strings.Contains(err.Error(), "--policy-arns is for a secret whose source is aws") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+}
+
+const scopeDoc = `{
+  "Version": "2012-10-17",
+  "Statement": [{"Effect": "Allow", "Action": ["sts:GetCallerIdentity", "s3:ListAllMyBuckets"], "Resource": "*"}]
+}
+`
+
+const scopeCompact = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["sts:GetCallerIdentity","s3:ListAllMyBuckets"],"Resource":"*"}]}`
+
+// scopeFile writes doc to a file and returns its path.
+func scopeFile(t *testing.T, doc string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "scope.json")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestImportAWSScoped(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	stderr := captureImportStderr(t)
+	path := scopeFile(t, scopeDoc)
+	var out bytes.Buffer
+	if err := importSecrets(&out, []string{"devbox", "aws-creds", "--aws-profile", "dev", "--scope-policy", path}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kind":"aws","awsProfile":"dev","mode":"scoped","scopePolicy":` + strconv.Quote(scopeCompact) + `}`
+	if got := string(store.items["aws-creds"]); got != want {
+		t.Errorf("stored %s\nwant   %s", got, want)
+	}
+	got := calls(t, log)
+	if n := strings.Count(got, "sts get-scoped-credentials"); n != 1 {
+		t.Errorf("get-scoped-credentials ran %d times, want 1:\n%s", n, got)
+	}
+	for _, w := range []string{"--scoped-session-description brig-import-check", "--policy " + scopeCompact, "--duration-seconds 1800"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("the check did not pass %q:\n%s", w, got)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if !strings.Contains(line, "--profile dev") {
+			t.Errorf("an aws call did not carry --profile dev: %q", line)
+		}
+		if strings.Contains(line, "export-credentials") || strings.Contains(line, "assume-role") {
+			t.Errorf("a scoped import ran %q", line)
+		}
+	}
+	for _, v := range []string{awsSecret, awsSessionToken} {
+		if strings.Contains(string(store.items["aws-creds"]), v) || strings.Contains(out.String(), v) || strings.Contains(stderr.String(), v) {
+			t.Errorf("a vended value reached the store or the output")
+		}
+	}
+	if !strings.Contains(stderr.String(), "your own identity "+awsCaller+", narrowed by the scope policy in "+path) {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "can do what you can") {
+		t.Errorf("a scoped import claims your whole identity: %q", stderr.String())
+	}
+}
+
+// A scope policy and another mode are two answers. Picking one would give
+// the sandbox something other than what was typed.
+func TestImportAWSScopedNeedsOneAnswer(t *testing.T) {
+	for _, args := range [][]string{
+		{"--role-arn", roleARN},
+		{"--identity", "self"},
+	} {
+		awsProfiles(t)
+		store := newAnnotating(t)
+		log := fakeAWS(t, "eu-west-1")
+		line := append([]string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc)}, args...)
+		err := importSecrets(&bytes.Buffer{}, line)
+		if err == nil || !strings.Contains(err.Error(), "--scope-policy are two answers; pass one") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+		if len(store.items) != 0 {
+			t.Errorf("%v: stored %v", args, store.items)
+		}
+		if got := calls(t, log); got != "" {
+			t.Errorf("%v: aws ran for a refused import:\n%s", args, got)
+		}
+	}
+}
+
+// The policy becomes the value of --policy. A file that holds file:// or
+// anything else that is not one JSON object is refused before aws runs.
+func TestImportAWSScopePolicyMustBeAJSONObject(t *testing.T) {
+	big := `{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::` + strings.Repeat("b", 2048) + `"}]}`
+	for name, tc := range map[string]struct{ path, want string }{
+		"file reference": {scopeFile(t, "file:///etc/passwd"), "is not valid JSON"},
+		"array":          {scopeFile(t, `[{"Effect":"Allow"}]`), "must be a JSON object"},
+		"two documents":  {scopeFile(t, `{"a":1} {"b":2}`), "is not valid JSON"},
+		"over the limit": {scopeFile(t, big), "at most 2048"},
+		"empty file":     {scopeFile(t, ""), "is not valid JSON"},
+		"missing file":   {filepath.Join(t.TempDir(), "nope.json"), "--scope-policy"},
+		"empty value":    {"", "--scope-policy needs a file"},
+		"huge file":      {scopeFile(t, `{"a":"`+strings.Repeat("x", 70<<10)+`"}`), "--scope-policy"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			awsProfiles(t)
+			store := newAnnotating(t)
+			log := fakeAWS(t, "eu-west-1")
+			err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", tc.path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+			if err != nil && strings.Contains(err.Error(), "bbbbbbbb") {
+				t.Errorf("the refusal quotes the policy: %.80s", err)
+			}
+			if len(store.items) != 0 {
+				t.Errorf("stored %v", store.items)
+			}
+			if got := calls(t, log); got != "" {
+				t.Errorf("aws ran for a refused import:\n%s", got)
+			}
+		})
+	}
+}
+
+// A scoped session keeps the caller's source identity and takes one inline
+// policy, so the role flags are refused, not dropped.
+func TestImportAWSScopedRefusesRoleFlags(t *testing.T) {
+	for args, want := range map[string]string{
+		"--source-identity me":     "--source-identity goes with --role-arn",
+		"--policy-arns " + policyA: "--policy-arns requires --role-arn",
+	} {
+		awsProfiles(t)
+		store := newAnnotating(t)
+		log := fakeAWS(t, "eu-west-1")
+		line := append([]string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc)}, strings.Fields(args)...)
+		err := importSecrets(&bytes.Buffer{}, line)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", args, err, want)
+		}
+		if len(store.items) != 0 {
+			t.Errorf("%s: stored %v", args, store.items)
+		}
+		if got := calls(t, log); got != "" {
+			t.Errorf("%s: aws ran for a refused import:\n%s", args, got)
+		}
+	}
+}
+
+// scopedFailingAWS is a fake aws whose get-scoped-credentials fails with
+// stderr, and whose other answers are fakeAWS's.
+func scopedFailingAWS(t *testing.T, stderr string) (log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	script := `#!/bin/sh
+echo "$*" >> "` + log + `"
+case "$1 $2" in
+"sts get-caller-identity") echo '{"Arn":"` + awsCaller + `"}' ;;
+"configure get") echo eu-west-1 ;;
+"sts get-scoped-credentials") echo "` + stderr + `" >&2; exit 254 ;;
+*) echo "fake aws: unexpected $*" >&2; exit 2 ;;
+esac
+`
+	installFakeAWS(t, dir, script)
+	return log
+}
+
+// STS refuses a malformed policy at the import's one call, so nothing is
+// stored, and no other command runs in its place.
+func TestImportAWSScopedFailedCheckStoresNothing(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := scopedFailingAWS(t, "An error occurred (MalformedPolicyDocument) when calling the GetScopedCredentials operation: Syntax error at position (-1,-1)")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, `{"x":1}`)})
+	if err == nil || !strings.Contains(err.Error(), "MalformedPolicyDocument") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+	if got := calls(t, log); strings.Contains(got, "export-credentials") || strings.Contains(got, "assume-role") {
+		t.Errorf("a failed scoped check ran another command:\n%s", got)
+	}
+}
+
+func TestImportAWSScopedOldCLINamesTheUpgrade(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	scopedFailingAWS(t, "aws: [ERROR]: An error occurred (ParamValidation): argument operation: Found invalid choice 'get-scoped-credentials'")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc)})
+	if err == nil || !strings.Contains(err.Error(), "upgrade the AWS CLI to 2.41.2 or later") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+}
+
+func TestImportAWSScopedSessionDuration(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc), "--session-duration", "45m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := awscred.ParsePointer(store.items["aws-creds"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Mode != awscred.ModeScoped || p.SessionSeconds != 2700 {
+		t.Errorf("pointer = %+v", p)
+	}
+	if !strings.Contains(calls(t, log), "--duration-seconds 2700") {
+		t.Errorf("the check did not ask for 2700 seconds:\n%s", calls(t, log))
+	}
+	// Out of range is refused before aws runs, as in role mode.
+	awsProfiles(t)
+	store = newAnnotating(t)
+	log = fakeAWS(t, "eu-west-1")
+	err = importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc), "--session-duration", "2h"})
+	if err == nil || !strings.Contains(err.Error(), "--session-duration") || len(store.items) != 0 || calls(t, log) != "" {
+		t.Errorf("a 2h scoped session: err = %v, stored %v, calls %q", err, store.items, calls(t, log))
+	}
+}
+
+func TestImportAWSScopedDryRunWritesNothing(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--scope-policy", scopeFile(t, scopeDoc), "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 0 || len(store.calls) != 0 {
+		t.Errorf("dry run wrote: %v %v", store.items, store.calls)
+	}
+	if !strings.Contains(calls(t, log), "get-scoped-credentials") {
+		t.Error("dry run skipped the checks")
+	}
+}
+
+func TestImportScopePolicyNeedsAWSSource(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	useHost(t, nil)
+	err := importSecrets(&bytes.Buffer{}, []string{"claude-code", "--scope-policy", scopeFile(t, scopeDoc)})
+	if err == nil || !strings.Contains(err.Error(), "--scope-policy is for a secret whose source is aws") {
 		t.Errorf("err = %v", err)
 	}
 	if len(store.items) != 0 {

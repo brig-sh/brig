@@ -41,7 +41,9 @@ var newGCloudCLI = func() gcpcred.CLI { return gcpcred.CLI{Env: gcpcred.Environ(
 var importStderr io.Writer = os.Stderr
 
 // awsCheckSession is the session name of the one assume-role an import makes
-// to prove the role can be assumed. Its keys are discarded.
+// to prove the role can be assumed, and the session description of the one
+// get-scoped-credentials that proves STS takes the scope policy. Its keys are
+// discarded.
 const awsCheckSession = "brig-import-check"
 
 // hostReader is the slice of hostsrc the importer uses, named here so a test
@@ -94,12 +96,18 @@ type importOptions struct {
 	// and so a wider session.
 	policyARNs    []string
 	policyARNsSet bool
+	// scopePolicy is the --scope-policy file, and scopePolicySet whether the
+	// flag was given: an empty value is a mistake to refuse, and must not
+	// fall through to another mode.
+	scopePolicy    string
+	scopePolicySet bool
 }
 
 // awsOnlyFlag is whether the line carried a flag that only an aws source
 // takes: --identity is the gcloud source's too.
 func (o importOptions) awsOnlyFlag() bool {
-	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet || o.policyARNsSet
+	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet || o.policyARNsSet ||
+		o.scopePolicySet
 }
 
 // anyGCloudFlag is whether the line carried a flag only a gcloud source
@@ -133,6 +141,8 @@ func (o importOptions) awsFlagName() string {
 		return "--source-identity"
 	case o.policyARNsSet:
 		return "--policy-arns"
+	case o.scopePolicySet:
+		return "--scope-policy"
 	}
 	return "--session-duration"
 }
@@ -446,16 +456,24 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 // source identity. The checks run here, at import, so a lapsed SSO login, a
 // role the profile cannot assume or a missing region is refused now rather
 // than at the guest's first AWS call. The one assume-role in role mode proves
-// the role; its keys are dropped on the floor and never reach the store, the
-// output or an error.
+// the role, and the one get-scoped-credentials in scoped mode proves that STS
+// takes the scope policy; their keys are dropped on the floor and never reach
+// the store, the output or an error.
 func readAWS(o importOptions) (hostsrc.Value, error) {
 	switch {
 	case o.roleARN != "" && o.identity != "":
 		return hostsrc.Value{}, errors.New("--role-arn and --identity self are two answers; pass one")
-	case o.roleARN == "" && o.identity == "":
+	case o.roleARN != "" && o.scopePolicySet:
+		return hostsrc.Value{}, errors.New("--role-arn and --scope-policy are two answers; pass one. " +
+			"A role session is narrowed with --policy-arns")
+	case o.identity != "" && o.scopePolicySet:
+		return hostsrc.Value{}, errors.New("--identity self and --scope-policy are two answers; pass one. " +
+			"--scope-policy alone gives the sandbox your identity, narrowed")
+	case o.roleARN == "" && o.identity == "" && !o.scopePolicySet:
 		// Self mode exports the user's own keys, so it is never what a
 		// forgotten flag falls back to.
-		return hostsrc.Value{}, errors.New("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self")
+		return hostsrc.Value{}, errors.New("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self, " +
+			"or --scope-policy <file> for your own identity narrowed by a policy")
 	case o.awsProfile == "":
 		return hostsrc.Value{}, errors.New("--aws-profile is required: name the local AWS profile the sandbox's credentials come from")
 	case o.identity != "" && o.sourceIdentity != "":
@@ -464,12 +482,20 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, errors.New("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
 	case o.identity != "" && o.policyARNsSet:
 		return hostsrc.Value{}, errors.New("--policy-arns requires --role-arn. Self mode exports your own keys, which cannot be narrowed")
+	case o.scopePolicySet && o.sourceIdentity != "":
+		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; scoped keys keep the source identity of your own session")
+	case o.scopePolicySet && o.policyARNsSet:
+		return hostsrc.Value{}, errors.New("--policy-arns requires --role-arn. --scope-policy takes one inline policy")
 	}
 	sessionSeconds, err := sessionSeconds(o)
 	if err != nil {
 		return hostsrc.Value{}, err
 	}
 	policies, err := policyARNs(o)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	scope, err := scopePolicy(o)
 	if err != nil {
 		return hostsrc.Value{}, err
 	}
@@ -503,18 +529,26 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 			}
 		}
 	}
+	if o.scopePolicySet {
+		ptr.Mode, ptr.ScopePolicy, ptr.SessionSeconds = awscred.ModeScoped, scope, sessionSeconds
+	}
 	if err := ptr.Validate(); err != nil {
 		return hostsrc.Value{}, err
 	}
 	if _, err := cli.Region(ctx, o.awsProfile); err != nil {
 		return fail(err)
 	}
-	if ptr.Mode == awscred.ModeRole {
+	switch ptr.Mode {
+	case awscred.ModeSelf:
+		fmt.Fprintf(importStderr, "aws: the sandbox will get your own identity %s\n", caller)
+	default:
 		if _, err := cli.Fetch(ctx, ptr, awsCheckSession); err != nil {
 			return fail(err)
 		}
-	} else {
-		fmt.Fprintf(importStderr, "aws: the sandbox will get your own identity %s\n", caller)
+		if ptr.Mode == awscred.ModeScoped {
+			fmt.Fprintf(importStderr, "aws: the sandbox will get your own identity %s, narrowed by the scope policy in %s\n",
+				caller, o.scopePolicy)
+		}
 	}
 	doc, err := json.Marshal(ptr)
 	if err != nil {
@@ -635,6 +669,42 @@ func policyARNs(o importOptions) ([]string, error) {
 		}
 	}
 	return list, nil
+}
+
+// maxScopeFile bounds the read of a --scope-policy file. A policy is at most
+// awscred.MaxScopePolicy characters once its spaces are gone, so a file far
+// larger than that was never one, and reading it whole would cost memory for
+// nothing.
+const maxScopeFile = 64 << 10
+
+// scopePolicy is the --scope-policy file's policy, compacted, or "" when the
+// flag was not given. It runs before any aws call, so a refused file runs
+// nothing. The errors name the flag and the file, never the content.
+func scopePolicy(o importOptions) (string, error) {
+	if !o.scopePolicySet {
+		return "", nil
+	}
+	if o.scopePolicy == "" {
+		return "", errors.New("--scope-policy needs a file that holds an IAM policy document")
+	}
+	f, err := os.Open(o.scopePolicy)
+	if err != nil {
+		return "", fmt.Errorf("--scope-policy: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	doc, err := io.ReadAll(io.LimitReader(f, maxScopeFile+1))
+	if err != nil {
+		return "", fmt.Errorf("--scope-policy: %w", err)
+	}
+	if len(doc) > maxScopeFile {
+		return "", fmt.Errorf("--scope-policy %s is over %d KiB, and a policy is at most %d characters",
+			o.scopePolicy, maxScopeFile>>10, awscred.MaxScopePolicy)
+	}
+	policy, err := awscred.CompactPolicy(doc)
+	if err != nil {
+		return "", fmt.Errorf("--scope-policy %s: %w", o.scopePolicy, err)
+	}
+	return policy, nil
 }
 
 // sessionSeconds is the session --session-duration asks for, or 0 for the
@@ -936,6 +1006,7 @@ func parseImport(args []string) (importOptions, error) {
 	fs.StringVar(&o.gcloudConfiguration, "gcloud-configuration", "", "")
 	fs.StringVar(&o.serviceAccount, "impersonate-service-account", "", "")
 	fs.Var(repeated{&o.policyARNs}, "policy-arns", "")
+	fs.StringVar(&o.scopePolicy, "scope-policy", "", "")
 
 	var words []string
 	for rest := args; ; {
@@ -949,7 +1020,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity, --session-duration and --policy-arns, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity, --session-duration, --policy-arns and --scope-policy, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -960,6 +1031,7 @@ func parseImport(args []string) (importOptions, error) {
 	o.command = seen(fs, "from-command")
 	o.sessionSet = seen(fs, "session-duration")
 	o.policyARNsSet = seen(fs, "policy-arns")
+	o.scopePolicySet = seen(fs, "scope-policy")
 	// Only "self" is an identity: it is the one non-role answer, and a
 	// misspelling must not fall through to the role path.
 	if o.identity != "" && o.identity != "self" {

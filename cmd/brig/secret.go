@@ -113,11 +113,14 @@ flags:
                     with --role-arn: override the source identity, which is
                     otherwise your login read from the profile's caller ARN
       --session-duration D
-                    with --role-arn: role session lifetime, 25m to 1h
-                    (default 30m)
+                    with --role-arn or --scope-policy: session lifetime, 25m
+                    to 1h (default 30m)
       --policy-arns ARN[,ARN...]
                     with --role-arn: managed policies that narrow the role
                     session. The keys get what both allow
+      --scope-policy FILE
+                    with --aws-profile: the sandbox gets your own identity,
+                    narrowed by the IAM policy in FILE. Needs aws 2.41.2
       --gcloud-configuration NAME
                     with import of a from: gcloud secret: the local gcloud
                     configuration to point at. brig stores the pointer, never
