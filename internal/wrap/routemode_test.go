@@ -12,6 +12,7 @@ import (
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/routemode"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/verify"
@@ -228,5 +229,57 @@ func TestARegisteredRouteModeRunsThroughItsHooks(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "vz")
 	if err := cfg.routeRefusal(); err == nil || !strings.Contains(err.Error(), "vz has no gateway brig owns") {
 		t.Errorf("routeRefusal on vz = %v", err)
+	}
+}
+
+// An offline run with a route is refused before boot for having no network.
+// The refusal names the posture that was asked for, offline, and where it
+// came from, the way the posture parser does. It never names none, the word
+// the runtime is handed: BRIG_NETWORK=none is itself refused as not a posture.
+func TestAnOfflineRouteRefusalNamesThePostureAndItsSource(t *testing.T) {
+	for _, c := range []struct {
+		name, env, field, source string
+		o                        Options
+	}{
+		{"--offline", "", "", "--offline", Options{Network: "offline", NetworkFlag: "--offline"}},
+		{"--network", "", "", "--network", Options{Network: "offline"}},
+		{"BRIG_NETWORK", "offline", "", "BRIG_NETWORK", Options{}},
+		{"the profile's network:", "", "offline", "the profile's network:", Options{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BRIG_HYPERVISOR", "hvi")
+			t.Setenv("BRIG_NETWORK", c.env)
+			registerRelay(t, &fakeMode{})
+			dir := t.TempDir()
+			t.Setenv("BRIG_WORKSPACE", filepath.Join(dir, "ws"))
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			if err := os.WriteFile(filepath.Join(dir, "claude-relay.yaml"), []byte(relayPolicy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			shortStateDir(t)
+			p, ok := profile.Lookup("claude-code")
+			if !ok {
+				t.Fatal("no claude-code profile")
+			}
+			p.Policy, p.Network = []string{"claude-relay"}, c.field
+			cfg, err := Load(p, c.o, &hullRecorder{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Network != NetOffline {
+				t.Fatalf("network = %q, want offline", cfg.Network)
+			}
+			err = cfg.routeRefusal()
+			if err == nil {
+				t.Fatal("an offline run with a route was not refused")
+			}
+			want := "claude-relay (route anthropic) declares routes, and " + c.source + " asks for the offline posture"
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+			if strings.Contains(err.Error(), "none") {
+				t.Errorf("the refusal names the runtime's word for offline: %v", err)
+			}
+		})
 	}
 }
