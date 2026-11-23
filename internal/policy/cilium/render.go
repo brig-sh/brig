@@ -116,7 +116,8 @@ type Options struct {
 // every pod and node (see clusterDeny), and an allow CIDR that covers all of
 // them also opens the cluster entity. A deny of part of them is an error.
 // Without o.ClusterCIDRs, a deny of a private range is an error under an
-// allow default or o.Cluster. An allow of part of the cluster, or of a
+// allow default or o.Cluster, and so is an IPv6 deny when o.ClusterCIDRs
+// names no IPv6 range. A CIDR is read against the ranges of its own family. An allow of part of the cluster, or of a
 // private range, leaves those pods and nodes closed and is listed by
 // Warnings.
 //
@@ -275,13 +276,24 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			// CIDR rule to it. A deny that covers all of the cluster's
 			// ranges is rendered as a deny of every pod and node as well.
 			// A deny of only part of them cannot be rendered.
+			//
+			// An IPv6 cluster gives its pods and nodes global addresses,
+			// so no fallback range can tell whether an IPv6 deny covers
+			// them. Where the pod reaches the cluster, an IPv6 deny needs
+			// the cluster's IPv6 ranges.
+			reaches := !deny || o.Cluster
+			if reaches && netip.MustParsePrefix(c).Addr().Is6() && !res.hasIPv6() {
+				return nil, fmt.Errorf("deny[%d] cidr %q is IPv6, and --cluster-cidr names no IPv6 range: the pods and nodes of an IPv6 cluster have global addresses, which Cilium does not match by address; pass the cluster's IPv6 ranges with --cluster-cidr, or, on a cluster with no IPv6, render the policy without this deny, which no pod could use", i, r.CIDR)
+			}
 			switch reach := res.clusterReach(c); {
 			case reach == reachAll:
 				denyCluster = true
 			case reach == reachPart:
 				return nil, fmt.Errorf("deny[%d] cidr %q covers part of the cluster's ranges, and Cilium matches a pod or a node by its identity, not by its address, so only a deny of all of them can be rendered", i, r.CIDR)
-			case reach == reachMaybe && (!deny || o.Cluster):
+			case reach == reachMaybe && reaches:
 				return nil, fmt.Errorf("deny[%d] cidr %q is a private range and may cover pods or nodes of the cluster, which Cilium does not match by address; pass the cluster's ranges with --cluster-cidr", i, r.CIDR)
+			case reach == reachNone && reaches && len(res.cluster) > 0 && isPrivate(netip.MustParsePrefix(c)):
+				np.warnings = append(np.warnings, fmt.Sprintf("deny[%d] cidr %q is a private range outside --cluster-cidr. If pods or nodes of the cluster take addresses from it, add it to --cluster-cidr, or the deny does not reach them", i, r.CIDR))
 			}
 			np.Spec.EgressDeny = append(np.Spec.EgressDeny, EgressDenyRule{ToCIDR: []string{c}})
 		case r.Host != "":
@@ -472,8 +484,13 @@ func (res resolved) clusterReach(c string) reach {
 		}
 		return reachNone
 	}
+	// A CIDR is read against the ranges of its own family: an IPv6 deny
+	// says nothing of the IPv4 addresses of a dual-stack pod.
 	all, any := true, false
 	for _, r := range res.cluster {
+		if r.Addr().Is4() != p.Addr().Is4() {
+			continue
+		}
 		if !p.Overlaps(r) {
 			all = false
 			continue
@@ -484,12 +501,32 @@ func (res resolved) clusterReach(c string) reach {
 		}
 	}
 	switch {
-	case all:
+	case any && all:
 		return reachAll
 	case any:
 		return reachPart
 	}
 	return reachNone
+}
+
+// hasIPv6 reports whether the cluster's ranges name an IPv6 range.
+func (res resolved) hasIPv6() bool {
+	for _, r := range res.cluster {
+		if r.Addr().Is6() {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivate reports whether p overlaps a range in privateRanges.
+func isPrivate(p netip.Prefix) bool {
+	for _, r := range privateRanges {
+		if p.Overlaps(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // clusterDeny returns the deny rules for every pod and node of the cluster,

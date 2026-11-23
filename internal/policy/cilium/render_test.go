@@ -753,3 +753,89 @@ func TestRenderRefusesABadClusterRange(t *testing.T) {
 		t.Error("a cluster range without a length passed")
 	}
 }
+
+// Negative: an IPv6 deny under an allow default or --cluster is refused when
+// --cluster-cidr names no IPv6 range. The pods and nodes of an EKS IPv6
+// cluster take global addresses (2600:...), outside every fallback range, so
+// the deny was written as a toCIDR rule that reaches none of them.
+func TestRenderRefusesAnIPv6DenyWithoutTheClusterIPv6Ranges(t *testing.T) {
+	cases := []struct {
+		def     v1alpha1.EgressDefault
+		cluster bool
+		ranges  []string
+		cidr    string
+	}{
+		{v1alpha1.EgressAllow, false, nil, "2600:1f14::/32"},
+		{v1alpha1.EgressAllow, false, nil, "2000::/3"},
+		{v1alpha1.EgressAllow, false, []string{"10.2.0.0/16"}, "2600:1f14::/32"},
+		{v1alpha1.EgressDeny, true, []string{"10.2.0.0/16"}, "2000::/3"},
+	}
+	for _, c := range cases {
+		_, err := Render(cidrPolicy(c.def, nil, []string{c.cidr}), Options{Cluster: c.cluster, ClusterCIDRs: c.ranges})
+		if err == nil || !strings.Contains(err.Error(), "names no IPv6 range") {
+			t.Errorf("%s %s cluster=%v ranges=%q: err = %v, want a refusal of the IPv6 deny", c.def, c.cidr, c.cluster, c.ranges, err)
+		}
+	}
+	// A deny default without --cluster never reaches the cluster, so the deny
+	// renders as before.
+	if _, err := Render(cidrPolicy(v1alpha1.EgressDeny, []string{"203.0.113.0/24"}, []string{"2600:1f14::/32"}), Options{}); err != nil {
+		t.Errorf("an IPv6 deny under a deny default was refused: %v", err)
+	}
+}
+
+// With the cluster's IPv6 range, an IPv6 deny outside it renders as toCIDR,
+// and one that covers it denies every pod and node.
+func TestRenderAnIPv6DenyWithTheClusterIPv6Range(t *testing.T) {
+	ranges := []string{"10.2.0.0/16", "2600:1f14:abc::/56"}
+	np, err := Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{"2606:4700::/32"}), Options{ClusterCIDRs: ranges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(np.Spec.EgressDeny) != 1 {
+		t.Errorf("a deny outside the cluster rendered %d rules, want 1: %+v", len(np.Spec.EgressDeny), np.Spec.EgressDeny)
+	}
+	np, err = Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{"2600:1f14::/32"}), Options{ClusterCIDRs: ranges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(np.Spec.EgressDeny); got != 1+len(clusterDeny()) {
+		t.Errorf("a deny of the cluster's IPv6 range rendered %d rules, want the CIDR and the cluster deny", got)
+	}
+}
+
+// A CIDR is read against the cluster's ranges of its own family. On a
+// dual-stack cluster, an IPv4 deny that covers the IPv4 range covers the
+// cluster for IPv4, whatever the IPv6 range.
+func TestClusterReachReadsEachFamilyApart(t *testing.T) {
+	dual := resolved{cluster: []netip.Prefix{netip.MustParsePrefix("10.2.0.0/16"), netip.MustParsePrefix("2600:1f14:abc::/56")}}
+	for c, want := range map[string]reach{
+		"10.0.0.0/8":         reachAll,
+		"2600:1f14::/32":     reachAll,
+		"2600:1f14:abc::/64": reachPart,
+		"192.168.0.0/16":     reachNone,
+		"2606:4700::/32":     reachNone,
+	} {
+		if got := dual.clusterReach(c); got != want {
+			t.Errorf("%s: reach %d, want %d", c, got, want)
+		}
+	}
+}
+
+// A private deny outside the given ranges renders, and stderr asks whether
+// the cluster uses it: a range --cluster-cidr leaves out fails open.
+func TestRenderWarnsOfAPrivateDenyOutsideTheClusterRanges(t *testing.T) {
+	np, err := Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{"100.64.0.0/10"}), Options{ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := np.Warnings(); len(w) != 1 || !strings.Contains(w[0], "outside --cluster-cidr") {
+		t.Errorf("warnings = %q, want one for the private range outside --cluster-cidr", w)
+	}
+	np, err = Render(cidrPolicy(v1alpha1.EgressAllow, nil, []string{"1.1.1.1/32"}), Options{ClusterCIDRs: clusterRanges})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := np.Warnings(); len(w) != 0 {
+		t.Errorf("a public deny warned: %q", w)
+	}
+}

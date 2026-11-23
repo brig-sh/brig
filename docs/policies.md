@@ -1259,6 +1259,14 @@ policy applies.
 | covers all of them | `toCIDR`, and a deny of every pod in every namespace, of kube-dns on every port but 53, and of the `host`, `remote-node`, `kube-apiserver`, `health`, `init`, `ingress` and `unmanaged` entities | `toCIDR`, and a rule to the `cluster` entity |
 | covers part of them | refused: Cilium cannot tell those pods and nodes from the others by address | `toCIDR`. The pods and nodes in it stay closed, and stderr says so |
 | private, with no `--cluster-cidr` | refused under an allow default or `--cluster`, where the pod reaches the cluster. Rendered as `toCIDR` under a deny default without `--cluster` | `toCIDR`, with a warning on stderr |
+| IPv6, and `--cluster-cidr` names no IPv6 range | refused under an allow default or `--cluster`: the pods and nodes of an IPv6 cluster have global addresses | `toCIDR` |
+| private, outside the given ranges | `toCIDR`, with a warning on stderr: if the cluster uses the range, add it to `--cluster-cidr` | `toCIDR` |
+
+Name every range the cluster's pods and nodes use, in both families: a
+secondary pod range, and the IPv6 range of a dual-stack cluster. A CIDR is
+read against the ranges of its own family. A range left out is not denied.
+On a cluster with no IPv6, a policy's IPv6 deny reaches no pod, so render a
+policy without it.
 
 kube-dns stays reachable on port 53 under a deny of the cluster, because the
 DNS rule sends every lookup there. The private ranges are `10.0.0.0/8`,
