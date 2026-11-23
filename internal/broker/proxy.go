@@ -126,7 +126,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	rt := sb.routes[p.route]
+	rt := sb.route(p.route)
 	if rt == nil {
 		a.check = "route"
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)

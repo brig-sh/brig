@@ -243,7 +243,7 @@ func TestRemovedSandboxBuildsNoTransportAfterwards(t *testing.T) {
 	up, started, release := holdingUpstream(t)
 	r := newRig(t, up, []Route{certRoute(t, "inventory", up.URL, "inventory-client", "", false)})
 
-	rt := r.h.sandbox("brig-a").routes["inventory"]
+	rt := r.h.sandbox("brig-a").route("inventory")
 	later := r.mint("brig-a", "inventory")
 	held := r.heldRequest("brig-a", "inventory", "/hold")
 	<-started
@@ -329,7 +329,7 @@ func TestRouteTransportSharesNoTLSStateWithTheBase(t *testing.T) {
 	base.TLSClientConfig.Certificates = []tls.Certificate{pki().server}
 	r := newRig(t, up, []Route{certRoute(t, "inventory", up.URL, "inventory-client", "", false)}, withTransport(base))
 
-	rt := r.h.sandbox("brig-a").routes["inventory"]
+	rt := r.h.sandbox("brig-a").route("inventory")
 	cc, err := tlspem.ParseClientCertificate(validFor(t, pki().ca, "c"), rigStart)
 	if err != nil {
 		t.Fatal(err)
@@ -372,7 +372,7 @@ func TestRouteTransportSharesNoTLSStateWithTheBase(t *testing.T) {
 func TestTransportsAreKeyedByTheCertificateTheyPresent(t *testing.T) {
 	up := newMTLSUpstream(t, pki().server, pki().ca.Pool(), nil)
 	r := newRig(t, up, []Route{certRoute(t, "inventory", up.URL, "inventory-client", "", false)})
-	rt := r.h.sandbox("brig-a").routes["inventory"]
+	rt := r.h.sandbox("brig-a").route("inventory")
 	a, err := tlspem.ParseClientCertificate(validFor(t, pki().ca, "a"), rigStart)
 	if err != nil {
 		t.Fatal(err)

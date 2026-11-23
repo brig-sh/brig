@@ -378,7 +378,7 @@ func TestAddSandboxBuildsAnUpstreamPerService(t *testing.T) {
 	if err := h.AddSandbox(Sandbox{ID: "brig-a", Routes: []Route{rt}}); err != nil {
 		t.Fatal(err)
 	}
-	got := h.sandbox("brig-a").routes["gcp"].services
+	got := h.sandbox("brig-a").route("gcp").services
 	for name, want := range map[string]string{
 		"storage": "https://storage.googleapis.com",
 		"logging": "https://logging.googleapis.com",

@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -213,7 +214,13 @@ type sandbox struct {
 	id      string
 	profile string
 	key     []byte
-	routes  map[string]*route
+	// modes are the route modes the sandbox was registered with, which a
+	// route that SetRoutes puts in place is checked against.
+	modes []v1alpha1.RouteMode
+	// routes is the route table, by name. SetRoutes swaps it whole, and a
+	// request loads it once and keeps the route it found, so a request in
+	// flight during a swap runs under the rules of one table, never a mix.
+	routes atomic.Pointer[map[string]*route]
 
 	// placeholders counts the requests refused for a session token outside
 	// its carrier.
@@ -349,19 +356,39 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 	if err != nil {
 		return err
 	}
-	sb := &sandbox{id: s.ID, profile: s.Profile, key: key, routes: map[string]*route{}}
-	for _, r := range s.Routes {
+	routes, err := h.buildRoutes(s.ID, s.Modes, s.Routes)
+	if err != nil {
+		return err
+	}
+	sb := &sandbox{id: s.ID, profile: s.Profile, key: key, modes: slices.Clone(s.Modes)}
+	sb.routes.Store(&routes)
+	h.mu.Lock()
+	old := h.sandboxes[s.ID]
+	h.sandboxes[s.ID] = sb
+	h.mu.Unlock()
+	if old != nil {
+		old.closeTransports()
+		h.pruneCerts()
+	}
+	return nil
+}
+
+// buildRoutes checks the routes of sandbox id, registered with modes, and
+// returns them parsed, by name.
+func (h *Handler) buildRoutes(id string, modes []v1alpha1.RouteMode, routes []Route) (map[string]*route, error) {
+	table := make(map[string]*route, len(routes))
+	for _, r := range routes {
 		name := r.Route.Name
-		if _, dup := sb.routes[name]; dup {
-			return fmt.Errorf("sandbox %s: route %s is registered twice", s.ID, name)
+		if _, dup := table[name]; dup {
+			return nil, fmt.Errorf("sandbox %s: route %s is registered twice", id, name)
 		}
 		if !r.Route.Passthrough &&
 			(r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly())) {
-			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
+			return nil, fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", id, name)
 		}
-		if m := r.Route.Mode; !m.AtBrigInternal() && !slices.Contains(s.Modes, m) {
-			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
-				"to serve it", s.ID, name, m)
+		if m := r.Route.Mode; !m.AtBrigInternal() && !slices.Contains(modes, m) {
+			return nil, fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
+				"to serve it", id, name, m)
 		}
 		// A route that vends answers the guest itself and has no upstream,
 		// and a route with services has one per service instead.
@@ -373,37 +400,89 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if len(r.Route.Services) > 0 {
 			var err error
 			if services, names, err = h.serviceUpstreams(r.Route); err != nil {
-				return fmt.Errorf("sandbox %s: route %s: %w", s.ID, name, err)
+				return nil, fmt.Errorf("sandbox %s: route %s: %w", id, name, err)
 			}
 		} else if r.Route.Vends() {
 			// checkDivertedRoutes reads the upstream of every route not in
 			// endpoint mode.
 			if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint {
-				return fmt.Errorf("sandbox %s: route %s vends credentials and cannot be mode %q", s.ID, name, m)
+				return nil, fmt.Errorf("sandbox %s: route %s vends credentials and cannot be mode %q", id, name, m)
 			}
 		} else {
 			var err error
 			u, err = url.Parse(r.Route.Upstream)
 			if err != nil || u.Scheme != "https" || u.Host == "" {
-				return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
+				return nil, fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", id, name, r.Route.Upstream)
 			}
 		}
-		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u,
+		table[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u,
 			services: services, serviceNames: names}
 	}
-	if err := checkDivertedRoutes(sb.routes); err != nil {
-		return fmt.Errorf("sandbox %s: %w", s.ID, err)
+	if err := checkDivertedRoutes(table); err != nil {
+		return nil, fmt.Errorf("sandbox %s: %w", id, err)
+	}
+	return table, nil
+}
+
+// CheckRoutes reports whether SetRoutes would take routes for the sandbox
+// id, and changes nothing. A caller that updates several sandboxes checks
+// every one first, so a refusal leaves all of them as they were.
+func (h *Handler) CheckRoutes(id string, routes []Route) error {
+	sb := h.sandbox(id)
+	if sb == nil {
+		return fmt.Errorf("sandbox %q is not registered with the broker", id)
+	}
+	_, err := h.buildRoutes(id, sb.modes, routes)
+	return err
+}
+
+// SetRoutes replaces the routes of the registered sandbox id and keeps its
+// key, so the tokens minted for a route that stays keep working. A route
+// that is gone answers 404 from the next request on, and a route whose rules
+// changed applies them from the next request on. A route left exactly as it
+// was keeps its state, such as an open mTLS transport.
+//
+// The table is swapped whole. A request that already looked its route up
+// finishes under the rules it found.
+func (h *Handler) SetRoutes(id string, routes []Route) error {
+	sb := h.sandbox(id)
+	if sb == nil {
+		return fmt.Errorf("sandbox %q is not registered with the broker", id)
+	}
+	table, err := h.buildRoutes(id, sb.modes, routes)
+	if err != nil {
+		return err
 	}
 	h.mu.Lock()
-	old := h.sandboxes[s.ID]
-	h.sandboxes[s.ID] = sb
-	h.mu.Unlock()
-	if old != nil {
-		old.closeTransports()
-		h.pruneCerts()
+	if h.sandboxes[id] != sb {
+		h.mu.Unlock()
+		return fmt.Errorf("sandbox %s was registered again while its routes were replaced", id)
 	}
+	old := sb.routeTable()
+	for name, rt := range table {
+		if prev := old[name]; prev != nil && prev.policy == rt.policy && reflect.DeepEqual(prev.spec, rt.spec) {
+			table[name] = prev
+		}
+	}
+	sb.routes.Store(&table)
+	h.mu.Unlock()
+	// A route that was replaced or removed builds no transport from here on,
+	// and its parsed certificates go unless another route names them.
+	for name, rt := range old {
+		if table[name] != rt {
+			rt.closeTransport()
+		}
+	}
+	h.pruneCerts()
 	return nil
 }
+
+// routeTable returns the routes of the sandbox, by name. The map is never
+// changed once stored.
+func (sb *sandbox) routeTable() map[string]*route { return *sb.routes.Load() }
+
+// route returns the route name of the sandbox, or nil.
+func (sb *sandbox) route(name string) *route { return sb.routeTable()[name] }
 
 // serviceUpstreams returns the origin of each service of r, and their names
 // sorted. Route.Validate already holds a gcp route to the services brig wires,

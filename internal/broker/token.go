@@ -129,7 +129,7 @@ func (h *Handler) Mint(sandbox, session, route string, ttl time.Duration) (strin
 	if sb == nil {
 		return "", fmt.Errorf("sandbox %q is not registered with the broker", sandbox)
 	}
-	if _, ok := sb.routes[route]; !ok {
+	if sb.route(route) == nil {
 		return "", fmt.Errorf("sandbox %s has no route %q", sandbox, route)
 	}
 	exp := h.now().Add(ttl).Unix()

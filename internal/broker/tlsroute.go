@@ -255,7 +255,7 @@ func (h *Handler) caPool(ctx context.Context, name string, wl secret.Workload) (
 func (h *Handler) named() (certs, cas map[string]bool) {
 	certs, cas = map[string]bool{}, map[string]bool{}
 	for _, sb := range h.sandboxes {
-		for _, rt := range sb.routes {
+		for _, rt := range sb.routeTable() {
 			in := rt.spec.Inject
 			if in == nil || in.TLS == nil {
 				continue
@@ -321,14 +321,19 @@ func (h *Handler) pruneCerts() {
 // closed, so a removed or replaced sandbox leaves no connection that holds
 // its certificate open, and a request still on its way builds none.
 func (sb *sandbox) closeTransports() {
-	for _, rt := range sb.routes {
-		rt.tlsMu.Lock()
-		rt.closed = true
-		if rt.cur != nil {
-			rt.cur.retire()
-			rt.cur = nil
-		}
-		rt.tlsMu.Unlock()
+	for _, rt := range sb.routeTable() {
+		rt.closeTransport()
+	}
+}
+
+// closeTransport retires the route's transport and marks the route closed.
+func (rt *route) closeTransport() {
+	rt.tlsMu.Lock()
+	defer rt.tlsMu.Unlock()
+	rt.closed = true
+	if rt.cur != nil {
+		rt.cur.retire()
+		rt.cur = nil
 	}
 }
 
