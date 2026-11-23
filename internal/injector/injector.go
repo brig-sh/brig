@@ -145,6 +145,11 @@ type Sandbox struct {
 	// besides endpoint, by mode, or is nil. The broker refuses a route in
 	// such a mode without them, and hands them to the mode's divert handler.
 	Modes map[v1alpha1.RouteMode]json.RawMessage `json:"modes,omitempty"`
+	// PolicyRef names a policy stored on the broker, whose routes the
+	// sandbox gets, in place of Routes. The broker refuses both at once, and
+	// a policy it does not hold with 424. A sandbox registered by reference
+	// follows the policy while it runs: see PutPolicyResponse.
+	PolicyRef *PolicyRef `json:"policyRef,omitempty"`
 }
 
 // DivertDirName is the directory of the divert sockets, under the broker
@@ -188,6 +193,18 @@ type AddResponse struct {
 	// Vends describes each vending route for the run to print: mode, local
 	// profile, role.
 	Vends map[string]VendInfo `json:"vends,omitempty"`
+	// Routes are the routes of a sandbox registered by reference, in the
+	// order the policy lists them, with what each one sets in the guest.
+	Routes []RouteEnv `json:"routes,omitempty"`
+}
+
+// RouteEnv is one route of a sandbox registered by reference: its name, to
+// mint its token by, and its guest.env as the policy writes it, with the
+// placeholders such as {route.url} and {session.token} left for the caller
+// to fill.
+type RouteEnv struct {
+	Name     string            `json:"name"`
+	GuestEnv map[string]string `json:"guestEnv"`
 }
 
 // VendInfo is what a run prints of a vending route: whose credentials the

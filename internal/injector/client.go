@@ -122,8 +122,8 @@ func (c Client) callWithin(timeout time.Duration, method, path string, body, out
 			msg = resp.Status
 		}
 		ref := &RefusedError{Status: resp.StatusCode, Message: msg}
-		if resp.Header.Get(RefusalHeader) == RefusalCredential {
-			ref.Kind = RefusalCredential
+		if kind := resp.Header.Get(RefusalHeader); kind == RefusalCredential || kind == RefusalPolicy {
+			ref.Kind = kind
 		}
 		return ref
 	}
@@ -139,7 +139,8 @@ type RefusedError struct {
 	Status  int
 	Message string
 	// Kind is "credential" for a refusal the user fixes by fixing a
-	// credential on the host, such as an expired AWS login.
+	// credential on the host, such as an expired AWS login, and "policy"
+	// for a registration by reference to a policy the broker does not hold.
 	Kind string
 }
 
@@ -150,6 +151,10 @@ const RefusalHeader = "X-Brig-Refusal"
 
 // RefusalCredential is the RefusalHeader value of a credential refusal.
 const RefusalCredential = "credential"
+
+// RefusalPolicy is the RefusalHeader value of a registration by reference
+// to a policy that is not stored.
+const RefusalPolicy = "policy"
 
 func (e *RefusedError) Error() string { return "the credential broker refused: " + e.Message }
 

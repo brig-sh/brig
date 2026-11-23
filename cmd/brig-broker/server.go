@@ -177,6 +177,9 @@ type server struct {
 	// policies are the stored policies, by policyKey. mu guards it, and a
 	// change also holds polMu.
 	policies map[string]*storedPolicy
+	// bound are the sandboxes registered by reference to a stored policy,
+	// by sandbox id.
+	bound    map[string]*binding
 	stopping bool
 	stop     chan struct{}
 }
@@ -192,7 +195,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
 		addrs: map[string]string{}, byAddr: map[string]string{}, uids: map[string]string{},
-		vends: map[string]map[string]vendRoute{}, policies: map[string]*storedPolicy{},
+		vends: map[string]map[string]vendRoute{}, policies: map[string]*storedPolicy{}, bound: map[string]*binding{},
 		stop: make(chan struct{}), internal: newConnListener(), resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
 		s.resolve = lookupHost
@@ -486,6 +489,10 @@ func (s *server) refuseStopping(w http.ResponseWriter) bool {
 // a credential lifecycle comes only from a preset brig ships. The same
 // registration again changes nothing, and the tokens minted for it stay
 // valid.
+//
+// A registration by reference names a stored policy in place of its routes,
+// and gets every route of the policy. The broker expanded those routes
+// itself when it stored the policy.
 func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	var req injector.Sandbox
 	if !decode(w, r, &req) {
@@ -494,6 +501,33 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	if err := broker.ValidID(req.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	var stored *storedPolicy
+	if ref := req.PolicyRef; ref != nil {
+		if len(req.Routes) > 0 {
+			http.Error(w, fmt.Sprintf("sandbox %s: a registration names its routes or a policy, not both", req.ID),
+				http.StatusBadRequest)
+			return
+		}
+		if err := checkPolicyRef(*ref); err != nil {
+			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+			return
+		}
+		// Held to the end, so the policy cannot change between the routes
+		// read here and the registration that lands with them.
+		s.polMu.RLock()
+		defer s.polMu.RUnlock()
+		s.mu.Lock()
+		stored = s.policies[policyKey(*ref)]
+		s.mu.Unlock()
+		if stored == nil {
+			// The policy sync on the node has not stored it, or it was
+			// deleted. The sandbox gets nothing rather than a policy that is
+			// not the one named.
+			w.Header().Set(injector.RefusalHeader, injector.RefusalPolicy)
+			http.Error(w, fmt.Sprintf("policy %s is not loaded", policyKey(*ref)), http.StatusFailedDependency)
+			return
+		}
 	}
 	sb := broker.Sandbox{ID: req.ID, Profile: req.Profile}
 	internal, err := brigInternalAddr(req.BrigInternal)
@@ -528,6 +562,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		sb.Routes = append(sb.Routes, broker.Route{Policy: rt.Policy, Route: expanded})
 	}
+	if stored != nil {
+		sb.Routes = stored.brokerRoutes()
+	}
 	if err := s.refuseHostRoutes(r.Context(), sb); err != nil {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
@@ -536,13 +573,21 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
+	// A registration by reference is the same one again whatever the
+	// policy holds now: an update has already moved the sandbox to it, and
+	// a new key would revoke the tokens of the running pod.
+	keyed := sb
+	if stored != nil {
+		keyed.Routes = nil
+	}
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
 		Address      string
 		UID          string
 		Settings     map[v1alpha1.RouteMode]json.RawMessage
-	}{sb, req.BrigInternal, addr, uid, req.Modes})
+		PolicyRef    *injector.PolicyRef
+	}{keyed, req.BrigInternal, addr, uid, req.Modes, req.PolicyRef})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -644,6 +689,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
+			delete(s.bound, req.ID)
 			delete(s.vends, req.ID)
 			s.setAddress(req.ID, "", "")
 			s.aws.forget(req.ID)
@@ -662,6 +708,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		s.forget(stale)
 	}
 	s.sandboxes[req.ID] = string(key)
+	if stored != nil {
+		s.bound[req.ID] = &binding{key: policyKey(stored.ref), routes: stored.routeNames()}
+	} else {
+		delete(s.bound, req.ID)
+	}
 	s.setAddress(req.ID, addr, uid)
 	s.setVends(req.ID, vends)
 	for _, name := range tracked {
@@ -684,6 +735,7 @@ func (s *server) added(id string) injector.AddResponse {
 			resp.CA = string(s.ca.certPEM())
 		}
 	}
+	resp.Routes = s.boundRoutes(id)
 	for name, v := range s.vends[id] {
 		if resp.Regions == nil {
 			resp.Regions, resp.Vends = map[string]string{}, map[string]injector.VendInfo{}
@@ -916,6 +968,7 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 func (s *server) forget(id string) {
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
+	delete(s.bound, id)
 	s.setAddress(id, "", "")
 	delete(s.vends, id)
 	s.aws.forget(id)
