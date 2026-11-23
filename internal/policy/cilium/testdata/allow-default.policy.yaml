@@ -1,0 +1,13 @@
+# An allow default: the allow host adds nothing Cilium does not already let
+# through, so it must not appear, and the deny CIDR is the only refusal.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: allow-default
+spec:
+  egress:
+    default: allow
+    allow:
+      - host: ignored.example.com
+    deny:
+      - cidr: 203.0.113.0/24

@@ -2632,3 +2632,249 @@ func TestCheckRefusesEgressTheRunCannotEnforce(t *testing.T) {
 		})
 	}
 }
+
+const renderDenyBody = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: web_only
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.example.com
+      - cidr: 10.0.0.0/8
+`
+
+func writeRenderFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// render-cilium prints a CiliumNetworkPolicy and honors every flag, with the
+// flags on either side of the file.
+func TestRenderCiliumPrintsTheObject(t *testing.T) {
+	path := writeRenderFile(t, strings.Replace(renderDenyBody, "web_only", "web-only", 1))
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--namespace", "agents",
+			"--selector", "app=claude", "--selector", "tier=agent", "--pod-identity"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"apiVersion: cilium.io/v2", "kind: CiliumNetworkPolicy",
+		"name: web-only", "namespace: agents",
+		"app: claude", "tier: agent",
+		"matchName: api.example.com", "169.254.170.23/32", "enableDefaultDeny",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	out, err = captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", "--name", "custom", path})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "name: custom") || strings.Contains(out, "169.254.170.23") {
+		t.Errorf("--name or the pod identity default is wrong:\n%s", out)
+	}
+}
+
+// A policy whose name is not a Kubernetes name is refused unless --name gives
+// one.
+func TestRenderCiliumRefusesAnUnusableName(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	if _, err := captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) }); err == nil {
+		t.Error("an underscore name rendered")
+	}
+	if _, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "web-only"})
+	}); err != nil {
+		t.Errorf("--name did not rescue the name: %v", err)
+	}
+}
+
+// A usage mistake fails before any output.
+func TestRenderCiliumUsageErrors(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	for name, args := range map[string][]string{
+		"no file":      {"render-cilium"},
+		"two files":    {"render-cilium", path, path},
+		"bad selector": {"render-cilium", path, "--selector", "app"},
+		"no key":       {"render-cilium", path, "--selector", "=x"},
+		"unknown flag": {"render-cilium", path, "--bogus"},
+		"missing file": {"render-cilium", filepath.Join(t.TempDir(), "none.yaml")},
+		// Negative: these rendered and exited 0.
+		"bad broker address": {"render-cilium", path, "--name", "x", "--broker-address", "not-an-address"},
+		"bad namespace":      {"render-cilium", path, "--name", "x", "--namespace", "Agents_1"},
+		"glob search domain": {"render-cilium", path, "--name", "x", "--dns-search", "*.example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := captureStdout(t, func() error { return policyCmd(args) })
+			if err == nil {
+				t.Fatalf("no error, output:\n%s", out)
+			}
+			if out != "" {
+				t.Errorf("printed before failing: %q", out)
+			}
+		})
+	}
+}
+
+// A refused rule reaches the caller with its error.
+func TestRenderCiliumRefusesAGlobCiliumCannotExpress(t *testing.T) {
+	path := writeRenderFile(t, strings.Replace(renderDenyBody, "api.example.com", "a?.example.com", 1))
+	_, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "x"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "a?.example.com") {
+		t.Errorf("error does not name the rule: %v", err)
+	}
+}
+
+// A flag value Kubernetes or Cilium would not take is a usage mistake.
+func TestRenderCiliumRefusesABadFlagValueAsUsage(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	for _, args := range [][]string{
+		{"render-cilium", path, "--name", "x", "--broker-address", "not-an-address"},
+		{"render-cilium", path, "--name", "x", "--namespace", "Agents"},
+	} {
+		_, err := captureStdout(t, func() error { return policyCmd(args) })
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%q: err = %v, want a usage error", args, err)
+		}
+	}
+}
+
+// --dns-search and --broker-address reach the rendered object.
+func TestRenderCiliumHonorsTheDNSAndBrokerFlags(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "x",
+			"--dns-search", "us-west-2.compute.internal", "--dns-search", "corp.example",
+			"--broker-address", "169.254.171.9"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"'*.us-west-2.compute.internal'", "'*.corp.example'", "'*.cluster.local'"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "matchPattern: '*'\n") {
+		t.Errorf("a deny default answers every lookup:\n%s", out)
+	}
+}
+
+// brig policy --help names every render-cilium flag.
+func TestPolicyHelpNamesEveryRenderCiliumFlag(t *testing.T) {
+	for _, flag := range []string{"--name", "--namespace", "--selector", "--pod-identity",
+		"--cluster", "--broker-address", "--dns-search", "--cluster-cidr"} {
+		if !strings.Contains(policyUsage, flag) {
+			t.Errorf("brig policy --help does not name %s", flag)
+		}
+	}
+}
+
+// A deny host the object leaves out is named on stderr, and stdout holds only
+// the object, so it can be piped to kubectl.
+func TestRenderCiliumWarnsOfADroppedDenyHost(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: dropped
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.example.com
+    deny:
+      - host: evil.example.com
+`)
+	var out string
+	var err error
+	stderr := captureStderr(t, func() {
+		out, err = captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, `"evil.example.com" is left out`) {
+		t.Errorf("stderr does not name the dropped host: %q", stderr)
+	}
+	if strings.Contains(out, "evil.example.com") || !strings.HasPrefix(out, "apiVersion:") {
+		t.Errorf("stdout is not the object alone:\n%s", out)
+	}
+}
+
+// --cluster-cidr reaches the renderer: a deny of the cluster's range renders
+// the cluster deny, and without the flag the same policy is refused with a
+// pointer to it.
+func TestRenderCiliumHonorsClusterCIDR(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: lan
+spec:
+  egress:
+    default: allow
+    deny:
+      - cidr: 10.0.0.0/8
+`)
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0/16"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"remote-node", "kube-apiserver", "operator: NotIn", "endPort: 65535"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	_, err = captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) })
+	if err == nil || !strings.Contains(err.Error(), "--cluster-cidr") {
+		t.Errorf("err = %v, want a refusal naming --cluster-cidr", err)
+	}
+	_, err = captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0"})
+	})
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("a bad --cluster-cidr: err = %v, want a usage error", err)
+	}
+}
+
+// An allow of part of the cluster stays closed, and stderr says so.
+func TestRenderCiliumWarnsOfAClosedClusterAllow(t *testing.T) {
+	path := writeRenderFile(t, `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: one-pod
+spec:
+  egress:
+    default: deny
+    allow:
+      - cidr: 10.2.145.91/32
+`)
+	var err error
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error {
+			return policyCmd([]string{"render-cilium", path, "--cluster-cidr", "10.2.0.0/16"})
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, `allow[0] cidr "10.2.145.91/32" covers part of the cluster`) {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
