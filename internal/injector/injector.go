@@ -176,6 +176,8 @@ type AddResponse struct {
 // VendInfo is what a run prints of a vending route: whose credentials the
 // sandbox gets. It names the identity and holds no key.
 type VendInfo struct {
+	// Mode is the pointer's: role, self or scoped. It is a string here so
+	// that the run path links nothing of awscred.
 	Mode       string `json:"mode"`
 	AWSProfile string `json:"awsProfile"`
 	RoleARN    string `json:"roleArn,omitempty"`

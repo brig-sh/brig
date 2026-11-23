@@ -31,6 +31,15 @@ type CLI struct {
 
 	// run is the seam tests replace; nil means clirun.Exec.
 	run clirun.Runner
+	// now is the clock; nil means time.Now.
+	now func() time.Time
+}
+
+func (c CLI) clock() time.Time {
+	if c.now == nil {
+		return time.Now()
+	}
+	return c.now()
 }
 
 const (
@@ -79,12 +88,95 @@ var ssoMarkers = []string{
 	"Error loading SSO Token",
 }
 
+// ErrCLITooOld means the host's aws has no get-scoped-credentials, which
+// only an upgrade fixes.
+type ErrCLITooOld struct{}
+
+func (*ErrCLITooOld) Error() string {
+	return "the aws CLI on this host has no `sts get-scoped-credentials`; upgrade the AWS CLI to 2.41.2 or later"
+}
+
+// ErrGlobalEndpoint means the call reached the STS global endpoint, which
+// refuses get-scoped-credentials. The aws CLI goes there for a profile with
+// no region.
+type ErrGlobalEndpoint struct{ Profile string }
+
+func (e *ErrGlobalEndpoint) Error() string {
+	return fmt.Sprintf("STS refuses get-scoped-credentials on its global endpoint; check that profile %s has a region "+
+		"(`aws configure set region <r> --profile %s`)", e.Profile, e.Profile)
+}
+
+// errShortSession is a scoped call that asked for more time than the calling
+// session has left. Its text is the call's own error, so the reason survives
+// when the retry fails too.
+type errShortSession struct{ msg string }
+
+func (e *errShortSession) Error() string { return e.msg }
+
+const scopedCommand = "get-scoped-credentials"
+
 // Fetch gets credentials for p. In role mode the session is named
-// sessionName.
+// sessionName. In scoped mode sessionName is the session description, which
+// is the only field of the session that names the sandbox: the principal is
+// the user's own.
 func (c CLI) Fetch(ctx context.Context, p Pointer, sessionName string) (Credentials, error) {
 	if err := p.Validate(); err != nil {
 		return Credentials{}, err
 	}
+	args, err := fetchArgs(p, sessionName)
+	if err != nil {
+		return Credentials{}, err
+	}
+	if p.Mode == ModeScoped {
+		return c.fetchScoped(ctx, p, args)
+	}
+	return c.fetchOnce(ctx, p, args)
+}
+
+// fetchScoped runs the scoped call, and once more without
+// --duration-seconds if the calling session has less left than p asks for.
+// No failure runs another command: the only retry that stays inside the
+// scope is the one that keeps --policy, and the retry argv is the first one
+// filtered, so --policy cannot be left out of it.
+func (c CLI) fetchScoped(ctx context.Context, p Pointer, args []string) (Credentials, error) {
+	creds, err := c.fetchOnce(ctx, p, args)
+	var short *errShortSession
+	if !errors.As(err, &short) {
+		return creds, err
+	}
+	var retry []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--duration-seconds" {
+			i++
+			continue
+		}
+		retry = append(retry, args[i])
+	}
+	creds, err = c.fetchOnce(ctx, p, retry)
+	if err != nil {
+		return Credentials{}, err
+	}
+	// Keys with no duration end with the calling session. If that session
+	// was renewed between the two calls they can outlive what the secret
+	// asks for, so the full request runs once more and is the answer.
+	if creds.Expiration.After(c.clock().Add(time.Duration(p.Session())*time.Second + time.Minute)) {
+		return c.fetchOnce(ctx, p, args)
+	}
+	return creds, nil
+}
+
+func (c CLI) fetchOnce(ctx context.Context, p Pointer, args []string) (Credentials, error) {
+	out, err := c.output(ctx, p.AWSProfile, args)
+	if err != nil {
+		return Credentials{}, err
+	}
+	return parseCreds(p, args, out)
+}
+
+// fetchArgs is the aws argv that fetches p's keys. A mode it does not name
+// runs nothing: export-credentials as a fall-through would hand out the
+// profile's whole keys for a pointer that asked for less.
+func fetchArgs(p Pointer, sessionName string) ([]string, error) {
 	var args []string
 	switch p.Mode {
 	case ModeRole:
@@ -102,14 +194,27 @@ func (c CLI) Fetch(ctx context.Context, p Pointer, sessionName string) (Credenti
 			}
 		}
 		args = append(args, "--duration-seconds", strconv.Itoa(p.Session()), "--output", "json")
-	default:
+	case ModeScoped:
+		// STS wants a description of 2 to 256 characters. SessionName cuts
+		// to 64, and an id shorter than 2 gets a prefix.
+		if len(sessionName) < 2 {
+			sessionName = "brig-" + sessionName
+		}
+		args = []string{"sts", scopedCommand, "--profile", p.AWSProfile, "--policy", p.ScopePolicy,
+			"--scoped-session-description", sessionName,
+			"--duration-seconds", strconv.Itoa(p.Session()), "--output", "json"}
+	case ModeSelf:
 		args = []string{"configure", "export-credentials", "--profile", p.AWSProfile, "--format", "process"}
+	default:
+		return nil, fmt.Errorf("the pointer mode %q is not handled", p.Mode)
 	}
-	out, err := c.output(ctx, p.AWSProfile, args)
-	if err != nil {
-		return Credentials{}, err
-	}
-	// The same four fields in both shapes; role mode nests them.
+	return args, nil
+}
+
+// parseCreds reads the keys out of a fetch's stdout. Every error path
+// returns no keys.
+func parseCreds(p Pointer, args []string, out []byte) (Credentials, error) {
+	// The same four fields in both shapes; role and scoped mode nest them.
 	var doc struct {
 		Credentials *struct {
 			AccessKeyID     string `json:"AccessKeyId"`
@@ -128,7 +233,7 @@ func (c CLI) Fetch(ctx context.Context, p Pointer, sessionName string) (Credenti
 		return Credentials{}, fmt.Errorf("%s %s printed output that is not JSON", awsCommand, clirun.CmdName(args))
 	}
 	id, secret, token, exp := doc.AccessKeyID, doc.SecretAccessKey, doc.SessionToken, doc.Expiration
-	if p.Mode == ModeRole {
+	if p.Mode != ModeSelf {
 		if doc.Credentials == nil {
 			return Credentials{}, fmt.Errorf("%s %s printed no Credentials", awsCommand, clirun.CmdName(args))
 		}
@@ -197,5 +302,21 @@ func (c CLI) output(ctx context.Context, profile string, args []string) ([]byte,
 			return nil, &ErrSSOExpired{Profile: profile}
 		}
 	}
-	return nil, fmt.Errorf("%s %s failed: %v: %s", awsCommand, clirun.CmdName(args), err, clirun.Clip(stderr))
+	failed := fmt.Errorf("%s %s failed: %v: %s", awsCommand, clirun.CmdName(args), err, clirun.Clip(stderr))
+	if len(args) >= 2 && args[1] == scopedCommand {
+		// An aws without the command says "invalid choice", capitalised in
+		// some versions, and does not always repeat the name it refused.
+		// The only other value of this argv that the CLI checks against a
+		// list is --output json, which every aws takes.
+		if bytes.Contains(bytes.ToLower(stderr), []byte("invalid choice")) {
+			return nil, &ErrCLITooOld{}
+		}
+		if bytes.Contains(stderr, []byte("Operation not supported on STS global endpoint")) {
+			return nil, &ErrGlobalEndpoint{Profile: profile}
+		}
+		if bytes.Contains(stderr, []byte("InsufficientSessionLifetime")) {
+			return nil, &errShortSession{msg: failed.Error()}
+		}
+	}
+	return nil, failed
 }

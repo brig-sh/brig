@@ -247,8 +247,9 @@ which it cannot. To declare sources in your own profile, see
 | `--role-arn <arn>` | with `--aws-profile`: the sandbox assumes this role. The recommended answer |
 | `--identity self` | with `--aws-profile` or `--gcloud-configuration`: the sandbox gets your own identity |
 | `--source-identity <id>` | with `--role-arn`: the source identity of the role session, in place of the one Brig reads from the profile |
-| `--session-duration <d>` | with `--role-arn`: the lifetime of the role session, `25m` to `1h`. Default `30m` |
+| `--session-duration <d>` | with `--role-arn` or `--scope-policy`: the lifetime of the session, `25m` to `1h`. Default `30m` |
 | `--policy-arns <arn>[,<arn>...]` | with `--role-arn`: managed policies that narrow the role session; repeat it to add more |
+| `--scope-policy <file>` | with `--aws-profile`: the sandbox gets your own identity, narrowed by the IAM policy in the file. See [A scope policy](#a-scope-policy) |
 | `--gcloud-configuration <c>` | for a secret whose source is `gcloud`: the gcloud configuration on your host that the sandbox's tokens come from. See [A gcloud login behind a route](#a-gcloud-login-behind-a-route) |
 | `--impersonate-service-account <email>` | with `--gcloud-configuration`: the sandbox acts as this service account. The recommended answer |
 
@@ -587,9 +588,10 @@ brig secret import <profile> aws-creds --aws-profile dev \
 | --- | --- | --- |
 | role | `--role-arn <arn>` | keys of a session of that role, assumed with your profile for 30 minutes at a time (`--session-duration`). The session is named after the sandbox, so CloudTrail shows which sandbox made a call |
 | self | `--identity self` | keys of your own identity in that profile. The sandbox can do what you can |
+| scoped | `--scope-policy <file>` | keys of your own identity in that profile, narrowed by the policy in the file, for 30 minutes at a time (`--session-duration`). The sandbox can do only what both your identity and the policy allow |
 
-`import` refuses a line that names neither mode, or both, so self mode is
-never a default. An `aws` flag on a secret whose source is not `aws` is
+`import` refuses a line that names no mode, or more than one, so self mode
+is never a default. An `aws` flag on a secret whose source is not `aws` is
 refused too. On a profile with other secrets, name the `aws` secret on the
 line. The flags answer for one secret, so a line that selects two `aws`
 secrets is refused. Import each on its own line.
@@ -623,6 +625,8 @@ brig secret import <profile> aws-creds --aws-profile dev \
 Before it stores anything, `import` checks with `aws` that the profile
 works, that it has a region, and in role mode that it can assume the role,
 with any session policies, so a policy that does not exist fails at import.
+In scoped mode it makes one scoped call with the policy, so a policy that
+STS refuses fails at import too.
 The guest gets the region as `AWS_REGION` and `AWS_DEFAULT_REGION`. A
 profile with no region is refused with the command that sets one.
 `--dry-run` runs the same checks and stores nothing. In self mode, `import`
@@ -638,6 +642,45 @@ run is refused with exit `6`. The message names
 `aws sso login --profile <profile>`.
 [The aws route](security.md#the-aws-route) lists what the guest holds and
 how to revoke it.
+
+#### A scope policy
+
+Scoped mode needs no role. The keys are those of your own session, narrowed
+by an IAM policy that you write in a file:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity", "s3:ListAllMyBuckets"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+```bash
+brig secret import <profile> aws-creds --aws-profile dev \
+  --scope-policy ./scope.json
+```
+
+Brig fetches the keys with STS `GetScopedCredentials`, so the host needs
+`aws` 2.41.2 or later. An older `aws` is refused, at import and at the run,
+with the upgrade named. The profile needs a region: with none, the call
+goes to the STS global endpoint, which refuses it.
+
+The secret stores the policy with its spaces removed. It must be one JSON
+object, at most 2048 characters in that form. `--policy-arns` and
+`--source-identity` are refused with `--scope-policy`: the session takes one
+inline policy and keeps the source identity of your own session. The
+import's scoped call proves that your profile is allowed to make it. The
+keys last 30 minutes, or what `--session-duration` sets, and end earlier if
+your own session ends first. A run prints
+`AWS as your own identity, narrowed by the scope policy in the secret`.
+[The aws route](security.md#the-aws-route) lists what the scope does not
+cover.
 
 ### A gcloud login behind a route
 
@@ -844,7 +887,11 @@ store into.
 | `nothing to import for "x": … held no value` | the sources of the profile exist and none of them held a value. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. Pass `-y` if you want to replace it |
 | `--from-command fills one secret, so it needs one name` | `--from-command` supplies a value, and nothing in the command says which secret the value is for |
-| `say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self` | an import of an `aws` source that names neither mode |
+| `say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self, or --scope-policy <file> …` | an import of an `aws` source that names no mode |
+| `--role-arn and --scope-policy are two answers; pass one. …` | an import of an `aws` source that names a role and a scope policy. Narrow a role with `--policy-arns` |
+| `--identity self and --scope-policy are two answers; pass one. …` | `--scope-policy` alone is the mode. Drop `--identity self` |
+| ``the aws CLI on this host has no `sts get-scoped-credentials`; upgrade the AWS CLI to 2.41.2 or later`` | a scoped import or run on a host whose `aws` is older than 2.41.2 |
+| `STS refuses get-scoped-credentials on its global endpoint; …` | the profile of a scoped secret has no region. Set one with `aws configure set region <r> --profile <p>` |
 | `the AWS SSO session for profile x has expired; …` | the SSO login of the profile lapsed. Run the command on the host, then run again |
 | `the aws command was not found; install the AWS CLI v2: …` | the `aws` CLI is not on `PATH`. For the broker, that is the `PATH` of the `brig` that started it |
 | `say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self` | an import of a `gcloud` source that names neither mode |

@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/brig-sh/brig/internal/pointerkind"
 )
@@ -34,6 +35,10 @@ const (
 	// ModeSelf exports the profile's own credentials. It is never a default:
 	// those keys are the user's, not a session scoped to a sandbox.
 	ModeSelf Mode = "self"
+	// ModeScoped is the profile's own identity, narrowed by an inline policy
+	// that STS enforces. The keys can do only what both the identity and the
+	// policy allow.
+	ModeScoped Mode = "scoped"
 )
 
 // Pointer is what a stored secret holds for an AWS route: where to get
@@ -44,13 +49,18 @@ type Pointer struct {
 	Mode           Mode   `json:"mode"`
 	RoleARN        string `json:"roleArn,omitempty"`
 	SourceIdentity string `json:"sourceIdentity,omitempty"`
-	// SessionSeconds is the role session lifetime, or 0 for
+	// SessionSeconds is the role or scoped session lifetime, or 0 for
 	// DefaultSessionSeconds. Pointers stored before this field get 0.
 	SessionSeconds int `json:"sessionSeconds,omitempty"`
 	// PolicyARNs are managed policies passed as session policies. The keys
 	// get only what both the role and these policies allow, so the list can
 	// narrow the session and never widen it.
 	PolicyARNs []string `json:"policyArns,omitempty"`
+	// ScopePolicy is the inline policy of a scoped session, compacted. It is
+	// a string and not a json.RawMessage so that it has one empty form, and
+	// compact so that the same policy is the same bytes: the cache compares
+	// pointers, and two spellings of one policy would fetch twice.
+	ScopePolicy string `json:"scopePolicy,omitempty"`
 }
 
 // Equal is whether p and q name the same credentials. Pointer holds a slice,
@@ -60,9 +70,9 @@ func (p Pointer) Equal(q Pointer) bool {
 	return reflect.DeepEqual(p, q)
 }
 
-// Role session bounds. A leaked key works until its session ends. IAM cannot
-// cap the length below an hour (max_session_duration starts at 3600 and no
-// condition key covers it), so the broker requests it.
+// Role and scoped session bounds. A leaked key works until its session ends.
+// IAM cannot cap the length below an hour (max_session_duration starts at
+// 3600 and no condition key covers it), so the broker requests it.
 const (
 	// DefaultSessionSeconds is the session a pointer gets when it names none.
 	DefaultSessionSeconds = 1800
@@ -74,7 +84,28 @@ const (
 	MaxSessionSeconds = 3600
 )
 
-// Session is how long the keys of p's role session work.
+// MaxScopePolicy is the STS limit on an inline session policy, in
+// characters.
+const MaxScopePolicy = 2048
+
+// CompactPolicy is doc as a scope policy: a JSON object with its spaces
+// removed, at most MaxScopePolicy characters. The errors never quote doc,
+// which can name accounts and buckets the user did not mean to print.
+func CompactPolicy(doc []byte) (string, error) {
+	var b bytes.Buffer
+	if json.Compact(&b, doc) != nil {
+		return "", errors.New("the scope policy is not valid JSON")
+	}
+	if b.Len() == 0 || b.Bytes()[0] != '{' {
+		return "", errors.New("the scope policy must be a JSON object")
+	}
+	if n := utf8.RuneCount(b.Bytes()); n > MaxScopePolicy {
+		return "", fmt.Errorf("the scope policy is %d characters without spaces, and STS takes at most %d", n, MaxScopePolicy)
+	}
+	return b.String(), nil
+}
+
+// Session is how long the keys of p's role or scoped session work.
 func (p Pointer) Session() int {
 	if p.SessionSeconds == 0 {
 		return DefaultSessionSeconds
@@ -143,6 +174,11 @@ func (p Pointer) Validate() error {
 		if !roleARNRE.MatchString(p.RoleARN) {
 			return fmt.Errorf("mode role needs a roleArn that is an IAM role ARN, got %q", p.RoleARN)
 		}
+		// assume-role is not passed the policy, so the keys would be the
+		// whole role's while the pointer names a narrower session.
+		if p.ScopePolicy != "" {
+			return errors.New("mode role takes no scopePolicy")
+		}
 		// The broker passes --policy-arns only for a non-empty list, so an
 		// empty one would vend the whole role where the import refuses it.
 		// Refusing it also keeps nil the one form of "no policies", so two
@@ -172,8 +208,34 @@ func (p Pointer) Validate() error {
 		if p.PolicyARNs != nil {
 			return errors.New("mode self takes no policyArns")
 		}
+		// Nor can it take an inline policy, for the same reason.
+		if p.ScopePolicy != "" {
+			return errors.New("mode self takes no scopePolicy")
+		}
+	case ModeScoped:
+		if p.RoleARN != "" {
+			return errors.New("mode scoped takes no roleArn")
+		}
+		// STS keeps the caller's own source identity on a scoped session.
+		if p.SourceIdentity != "" {
+			return errors.New("mode scoped takes no sourceIdentity")
+		}
+		if p.PolicyARNs != nil {
+			return errors.New("mode scoped takes no policyArns")
+		}
+		if p.ScopePolicy == "" {
+			return errors.New("mode scoped needs a scopePolicy")
+		}
+		// The policy is the value of --policy. The aws CLI reads a value
+		// that starts with file:// or fileb:// from the host, and one that
+		// starts with - could be taken for a flag. A compact JSON object
+		// starts with { and is neither.
+		if c, err := CompactPolicy([]byte(p.ScopePolicy)); err != nil || c != p.ScopePolicy {
+			return fmt.Errorf("the scopePolicy is not a compact JSON object of at most %d characters. "+
+				"Import the pointer again with brig secret import", MaxScopePolicy)
+		}
 	default:
-		return fmt.Errorf("the pointer mode %q is not role or self", p.Mode)
+		return fmt.Errorf("the pointer mode %q is not role, self or scoped", p.Mode)
 	}
 	if p.SourceIdentity != "" && !identityRE.MatchString(p.SourceIdentity) {
 		return fmt.Errorf("the source identity %q is not 2-64 characters of A-Za-z0-9+=,.@_-", p.SourceIdentity)

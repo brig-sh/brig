@@ -303,3 +303,317 @@ func TestEnvironDropsAWSVariables(t *testing.T) {
 		t.Errorf("Environ(nil) = %#v, want an empty non-nil slice", got)
 	}
 }
+
+// scopedDoc is a get-scoped-credentials answer, with an access key id of its
+// own so a test can tell which command answered.
+func scopedDoc(exp time.Time) string {
+	return `{"Credentials":{"AccessKeyId":"ASIASCOPED","SecretAccessKey":"scoped-sek","SessionToken":"scoped-tok","Expiration":"` +
+		exp.Format(time.RFC3339) + `"},"SessionInfo":{"Arn":"arn:aws:sts::111122223333:assumed-role/R/me"},"ScopedPoliciesCount":1}`
+}
+
+// reply is one answer of a scripted aws.
+type reply struct {
+	stdout, stderr string
+	err            error
+}
+
+// script answers each call with the next reply, and the last one after that.
+func script(calls *[]call, replies ...reply) func(context.Context, string, []string, []string) ([]byte, []byte, error) {
+	return func(_ context.Context, bin string, args, env []string) ([]byte, []byte, error) {
+		*calls = append(*calls, call{bin, slices.Clone(args), env})
+		r := replies[min(len(*calls), len(replies))-1]
+		return []byte(r.stdout), []byte(r.stderr), r.err
+	}
+}
+
+var scopedExp = time.Date(2026, 10, 26, 12, 30, 0, 0, time.UTC)
+
+// scopedCLI is a CLI whose clock reads half an hour before scopedExp.
+func scopedCLI(calls *[]call, replies ...reply) CLI {
+	return CLI{run: script(calls, replies...), now: func() time.Time { return scopedExp.Add(-30 * time.Minute) }}
+}
+
+func scopedPointer() Pointer {
+	return Pointer{Kind: "aws", AWSProfile: "dev", Mode: ModeScoped,
+		ScopePolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"}]}`}
+}
+
+// The observed answer of aws when the request asks for more than the
+// calling session has left.
+const insufficientLifetime = "An error occurred (InsufficientSessionLifetime) when calling the GetScopedCredentials operation: " +
+	"The requested DurationSeconds exceeds the remaining lifetime of the calling session. Remaining session lifetime is 3075 seconds."
+
+// wantOnlyScoped fails the test if any call was not get-scoped-credentials
+// with the pointer's policy. export-credentials would hand out the profile's
+// whole keys, and assume-role a session the scope policy does not bound.
+func wantOnlyScoped(t *testing.T, calls []call, p Pointer) {
+	t.Helper()
+	if len(calls) == 0 {
+		t.Fatal("aws never ran")
+	}
+	for _, c := range calls {
+		joined := strings.Join(c.args, " ")
+		if len(c.args) < 2 || c.args[0] != "sts" || c.args[1] != "get-scoped-credentials" {
+			t.Errorf("a scoped fetch ran %q", joined)
+		}
+		if strings.Contains(joined, "export-credentials") || strings.Contains(joined, "assume-role") {
+			t.Errorf("a scoped fetch ran %q", joined)
+		}
+		i := slices.Index(c.args, "--policy")
+		if i < 0 || i+1 >= len(c.args) || c.args[i+1] != p.ScopePolicy {
+			t.Errorf("a scoped call did not carry the pointer's policy: %q", joined)
+		}
+	}
+}
+
+func TestFetchScopedNeverExportsCredentials(t *testing.T) {
+	var calls []call
+	cli := scopedCLI(&calls, reply{stdout: scopedDoc(scopedExp)})
+	p := scopedPointer()
+	c, err := cli.Fetch(context.Background(), p, "brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessKeyID != "ASIASCOPED" || c.SecretAccessKey != "scoped-sek" || c.SessionToken != "scoped-tok" || !c.Expiration.Equal(scopedExp) {
+		t.Errorf("credentials = %+v", c)
+	}
+	wantOnlyScoped(t, calls, p)
+}
+
+// No failure of the scoped call falls back to another command, and none
+// returns keys.
+func TestFetchScopedFailureReturnsNoKeys(t *testing.T) {
+	old := fetchTimeout
+	fetchTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { fetchTimeout = old })
+	exit := errors.New("exit status 254")
+	for name, r := range map[string]reply{
+		"access denied":    {stderr: "An error occurred (AccessDenied) when calling the GetScopedCredentials operation: not authorized", err: exit},
+		"malformed":        {stderr: "An error occurred (MalformedPolicyDocument) when calling the GetScopedCredentials operation: Syntax error at position (-1,-1)", err: exit},
+		"packed too big":   {stderr: "An error occurred (PackedPolicyTooLarge) when calling the GetScopedCredentials operation", err: exit},
+		"timeout":          {err: context.DeadlineExceeded},
+		"not json":         {stdout: "ASIASCOPED scoped-sek"},
+		"no Credentials":   {stdout: `{"SessionInfo":{}}`},
+		"the flat shape":   {stdout: selfDoc},
+		"no expiration":    {stdout: `{"Credentials":{"AccessKeyId":"ASIASCOPED","SecretAccessKey":"scoped-sek","SessionToken":"scoped-tok"}}`},
+		"retry also fails": {stderr: insufficientLifetime, err: exit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls []call
+			cli := scopedCLI(&calls, r)
+			if name == "timeout" {
+				cli.run = func(ctx context.Context, bin string, args, env []string) ([]byte, []byte, error) {
+					calls = append(calls, call{bin, slices.Clone(args), env})
+					<-ctx.Done()
+					return []byte(selfDoc), nil, ctx.Err()
+				}
+			}
+			p := scopedPointer()
+			c, err := cli.Fetch(context.Background(), p, "brig-x")
+			if err == nil {
+				t.Error("no error")
+			}
+			if c != (Credentials{}) {
+				t.Errorf("returned keys with the error: %+v", c)
+			}
+			if err != nil && (strings.Contains(err.Error(), "sek") || strings.Contains(err.Error(), "tok")) {
+				t.Errorf("the error carries a key: %v", err)
+			}
+			wantOnlyScoped(t, calls, p)
+		})
+	}
+}
+
+// The one retry drops --duration-seconds and nothing else. A retry without
+// --policy would be the profile's whole identity.
+func TestFetchScopedRetryKeepsThePolicy(t *testing.T) {
+	var calls []call
+	exit := errors.New("exit status 254")
+	cli := scopedCLI(&calls, reply{stderr: insufficientLifetime, err: exit}, reply{stdout: scopedDoc(scopedExp.Add(-10 * time.Minute))})
+	p := scopedPointer()
+	c, err := cli.Fetch(context.Background(), p, "brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessKeyID != "ASIASCOPED" {
+		t.Errorf("credentials = %+v", c)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+	var want []string
+	for i := 0; i < len(calls[0].args); i++ {
+		if calls[0].args[i] == "--duration-seconds" {
+			i++
+			continue
+		}
+		want = append(want, calls[0].args[i])
+	}
+	if !slices.Equal(calls[1].args, want) || slices.Contains(calls[1].args, "--duration-seconds") {
+		t.Errorf("retry argv = %v, want %v", calls[1].args, want)
+	}
+	wantOnlyScoped(t, calls, p)
+
+	// A second InsufficientSessionLifetime is an error after exactly two
+	// calls.
+	calls = nil
+	cli = scopedCLI(&calls, reply{stderr: insufficientLifetime, err: exit})
+	if c, err := cli.Fetch(context.Background(), p, "brig-x"); err == nil || c != (Credentials{}) {
+		t.Errorf("got %+v, %v", c, err)
+	} else if !strings.Contains(err.Error(), "InsufficientSessionLifetime") {
+		t.Errorf("the error lost the reason: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Errorf("calls = %d, want 2", len(calls))
+	}
+}
+
+// The retry asks for keys that end with the calling session. If that
+// session was renewed between the two calls, they could outlive the bound
+// the secret names, so the full request runs once more and its answer is the
+// one returned.
+func TestFetchScopedRetryDoesNotOutliveTheSession(t *testing.T) {
+	var calls []call
+	exit := errors.New("exit status 254")
+	cli := scopedCLI(&calls,
+		reply{stderr: insufficientLifetime, err: exit},
+		reply{stdout: strings.Replace(scopedDoc(scopedExp.Add(12*time.Hour)), "ASIASCOPED", "ASIALONG", 1)},
+		reply{stdout: scopedDoc(scopedExp)})
+	p := scopedPointer()
+	c, err := cli.Fetch(context.Background(), p, "brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessKeyID != "ASIASCOPED" || !c.Expiration.Equal(scopedExp) {
+		t.Errorf("credentials = %+v, want the third call's", c)
+	}
+	if len(calls) != 3 || !slices.Equal(calls[2].args, calls[0].args) {
+		t.Errorf("calls = %v, want the full request again", calls)
+	}
+	wantOnlyScoped(t, calls, p)
+
+	// When that third call fails, the long-lived keys of the retry are not
+	// the answer either.
+	calls = nil
+	cli = scopedCLI(&calls,
+		reply{stderr: insufficientLifetime, err: exit},
+		reply{stdout: strings.Replace(scopedDoc(scopedExp.Add(12*time.Hour)), "ASIASCOPED", "ASIALONG", 1)},
+		reply{stderr: "An error occurred (AccessDenied)", err: exit})
+	c, err = cli.Fetch(context.Background(), p, "brig-x")
+	if err == nil || c != (Credentials{}) {
+		t.Errorf("got %+v, %v; want no keys and an error", c, err)
+	}
+	if len(calls) != 3 {
+		t.Errorf("calls = %d, want 3", len(calls))
+	}
+	wantOnlyScoped(t, calls, p)
+}
+
+func TestFetchScopedArgv(t *testing.T) {
+	var calls []call
+	cli := scopedCLI(&calls, reply{stdout: scopedDoc(scopedExp)})
+	p := scopedPointer()
+	p.SessionSeconds = 2700
+	if _, err := cli.Fetch(context.Background(), p, SessionName("brig-devbox-api")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sts", "get-scoped-credentials", "--profile", "dev", "--policy", p.ScopePolicy,
+		"--scoped-session-description", "brig-devbox-api", "--duration-seconds", "2700", "--output", "json"}
+	if !slices.Equal(calls[0].args, want) {
+		t.Errorf("argv = %v\nwant %v", calls[0].args, want)
+	}
+	// STS wants a description of at least two characters.
+	calls = nil
+	if _, err := cli.Fetch(context.Background(), scopedPointer(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.Index(calls[0].args, "--scoped-session-description"); calls[0].args[i+1] != "brig-x" {
+		t.Errorf("a one-character name went out as %q", calls[0].args[i+1])
+	}
+}
+
+// An aws older than 2.41.2 has no such command. The user can fix that, so
+// the error says how, and no other command runs in its place.
+func TestFetchScopedNamesTheCLIUpgrade(t *testing.T) {
+	for _, stderr := range []string{
+		"aws: [ERROR]: An error occurred (ParamValidation): argument operation: Found invalid choice 'get-scoped-credentials'",
+		"aws: error: argument operation: Invalid choice, valid choices are:\n\nassume-role | get-caller-identity\nget-session-token",
+	} {
+		var calls []call
+		cli := scopedCLI(&calls, reply{stderr: stderr, err: errors.New("exit status 252")})
+		c, err := cli.Fetch(context.Background(), scopedPointer(), "brig-x")
+		var old *ErrCLITooOld
+		if !errors.As(err, &old) {
+			t.Fatalf("err = %v, want *ErrCLITooOld", err)
+		}
+		if !strings.Contains(err.Error(), "2.41.2") || c != (Credentials{}) {
+			t.Errorf("got %+v, %v", c, err)
+		}
+		if len(calls) != 1 {
+			t.Errorf("calls = %d, want 1", len(calls))
+		}
+	}
+}
+
+// A profile with no region reaches the STS global endpoint, which refuses
+// the call. The error names the region setting, not the raw InvalidAction.
+func TestFetchScopedNamesTheGlobalEndpoint(t *testing.T) {
+	var calls []call
+	cli := scopedCLI(&calls, reply{stderr: "aws: [ERROR]: An error occurred (InvalidAction) when calling the GetScopedCredentials operation: " +
+		"Operation not supported on STS global endpoint", err: errors.New("exit status 254")})
+	_, err := cli.Fetch(context.Background(), scopedPointer(), "brig-x")
+	var global *ErrGlobalEndpoint
+	if !errors.As(err, &global) || global.Profile != "dev" {
+		t.Fatalf("err = %v, want *ErrGlobalEndpoint for dev", err)
+	}
+	if !strings.Contains(err.Error(), "aws configure set region <r> --profile dev") {
+		t.Errorf("err = %v, want the fix", err)
+	}
+}
+
+// Fetch validates the pointer before the switch, so a mode it does not know
+// never reaches it. fetchArgs is the switch itself, and a mode it does not
+// handle must run nothing: falling through to export-credentials would hand
+// out the profile's whole keys.
+func TestFetchArgsDefaultRunsNothing(t *testing.T) {
+	for _, m := range []Mode{"", "admin", "Scoped", "SELF"} {
+		args, err := fetchArgs(Pointer{Kind: "aws", AWSProfile: "dev", Mode: m}, "brig-x")
+		if err == nil || args != nil {
+			t.Errorf("mode %q: args %v, err %v", m, args, err)
+		}
+	}
+}
+
+func TestExecFakeAWSScoped(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	bin, err := filepath.Abs("testdata/fake-aws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "argv")
+	cli := CLI{Bin: bin, Env: []string{"PATH=/usr/bin:/bin", "FAKE_AWS_LOG=" + log},
+		now: func() time.Time { return time.Date(2026, 10, 26, 14, 30, 0, 0, time.UTC) }}
+	p := scopedPointer()
+	c, err := cli.Fetch(context.Background(), p, "brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessKeyID != "ASIASCOPED" || c.SecretAccessKey != "fake-secret-value" || c.SessionToken != "fake-token-value" {
+		t.Errorf("credentials = %+v", c)
+	}
+	argv, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argv)), "\n")
+	if len(lines) < 2 || lines[0] != "sts" || lines[1] != "get-scoped-credentials" || !slices.Contains(lines, p.ScopePolicy) {
+		t.Errorf("argv = %q", lines)
+	}
+	for _, secret := range []string{c.SecretAccessKey, c.SessionToken} {
+		if strings.Contains(string(argv), secret) {
+			t.Errorf("argv carries a credential: %s", argv)
+		}
+	}
+}

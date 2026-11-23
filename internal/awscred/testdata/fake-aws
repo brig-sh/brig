@@ -6,6 +6,9 @@ case "$1 $2" in
 "sts assume-role")
   printf '%s\n' '{"Credentials":{"AccessKeyId":"ASIAFAKE","SecretAccessKey":"fake-secret-value","SessionToken":"fake-token-value","Expiration":"2026-10-26T15:04:05+00:00"}}'
   ;;
+"sts get-scoped-credentials")
+  printf '%s\n' '{"Credentials":{"AccessKeyId":"ASIASCOPED","SecretAccessKey":"fake-secret-value","SessionToken":"fake-token-value","Expiration":"2026-10-26T15:04:05+00:00"},"ScopedPoliciesCount":1}'
+  ;;
 "configure export-credentials")
   printf '%s\n' '{"Version":1,"AccessKeyId":"ASIAFAKE","SecretAccessKey":"fake-secret-value","SessionToken":"fake-token-value","Expiration":"2026-10-26T15:04:05+00:00"}'
   ;;

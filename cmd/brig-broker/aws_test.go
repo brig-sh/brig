@@ -31,6 +31,15 @@ const (
 		`"roleArn":"arn:aws:iam::111122223333:role/brig-sandbox"}`
 	// ssoExpiredStderr is what the aws CLI prints when the SSO login lapsed.
 	ssoExpiredStderr = "Error when retrieving token from sso: Token has expired and refresh failed"
+	// The keys of the fake's get-scoped-credentials, distinct from the
+	// assume-role ones so a test can tell which command answered.
+	fakeScopedAccess  = "ASIASCOPEDBROKERTESTKEY"
+	fakeScopedSecret  = "fake-scoped-secret-for-the-broker-tests"
+	fakeScopedSession = "fake-scoped-session-token-for-the-broker-tests"
+	scopedPointer     = `{"kind":"aws","awsProfile":"dev","mode":"scoped",` +
+		`"scopePolicy":"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:ListAllMyBuckets\",\"Resource\":\"*\"}]}"}`
+	// oldCLIStderr is what aws 2.35.1 prints for get-scoped-credentials.
+	oldCLIStderr = "aws: [ERROR]: An error occurred (ParamValidation): argument operation: Found invalid choice 'get-scoped-credentials'"
 )
 
 // awsBase is the fake clock's start. The fake aws hands out keys that expire
@@ -39,7 +48,8 @@ var awsBase = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
 // fakeAWS is an aws binary that records each call and its environment in its
 // directory, and fails with the SSO-expired stderr while the file
-// sso-expired is there.
+// sso-expired is there. Its get-scoped-credentials fails with the content of
+// the file scoped-fail while that is there.
 type fakeAWS struct {
 	dir string
 	bin string
@@ -54,6 +64,8 @@ func newFakeAWS(t *testing.T) *fakeAWS {
 	f.bin = filepath.Join(f.dir, "aws")
 	creds := fmt.Sprintf(`{"Credentials":{"AccessKeyId":%q,"SecretAccessKey":%q,"SessionToken":%q,"Expiration":%q}}`,
 		fakeAWSAccess, fakeAWSSecret, fakeAWSSession, awsBase.Add(time.Hour).Format(time.RFC3339))
+	scoped := fmt.Sprintf(`{"Credentials":{"AccessKeyId":%q,"SecretAccessKey":%q,"SessionToken":%q,"Expiration":%q}}`,
+		fakeScopedAccess, fakeScopedSecret, fakeScopedSession, awsBase.Add(time.Hour).Format(time.RFC3339))
 	script := fmt.Sprintf(`#!/bin/sh
 d=%q
 echo "$*" >> "$d/calls"
@@ -64,10 +76,13 @@ if [ -e "$d/sso-expired" ]; then
 fi
 case "$1 $2" in
 "sts assume-role") printf '%%s' %q ;;
+"sts get-scoped-credentials")
+	if [ -e "$d/scoped-fail" ]; then cat "$d/scoped-fail" >&2; exit 254; fi
+	printf '%%s' %q ;;
 "configure get") echo us-east-1 ;;
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
-`, f.dir, ssoExpiredStderr, creds)
+`, f.dir, ssoExpiredStderr, creds, scoped)
 	if err := os.WriteFile(f.bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +112,58 @@ func (f *fakeAWS) expireSSO(t *testing.T, expired bool) {
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// failScoped makes the fake's get-scoped-credentials fail with stderr.
+func (f *fakeAWS) failScoped(t *testing.T, stderr string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.dir, "scoped-fail"), []byte(stderr), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// calls is every call the fake saw, one per line.
+func (f *fakeAWS) calls(t *testing.T) []string {
+	t.Helper()
+	blob, err := os.ReadFile(filepath.Join(f.dir, "calls"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(blob)), "\n")
+}
+
+// scopedFetches counts the get-scoped-credentials calls the fake answered or
+// refused.
+func (f *fakeAWS) scopedFetches(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, c := range f.calls(t) {
+		if strings.HasPrefix(c, "sts get-scoped-credentials ") {
+			n++
+		}
+	}
+	return n
+}
+
+// wantOnlyScopedCalls fails the test unless every call that fetched keys was
+// get-scoped-credentials with the pointer's policy. export-credentials would
+// be the profile's whole keys, and assume-role a session the policy does not
+// bound.
+func (f *fakeAWS) wantOnlyScopedCalls(t *testing.T) {
+	t.Helper()
+	const policy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"}]}`
+	if f.scopedFetches(t) == 0 {
+		t.Fatal("the fake never ran get-scoped-credentials")
+	}
+	for _, c := range f.calls(t) {
+		if strings.HasPrefix(c, "configure get region ") {
+			continue
+		}
+		if !strings.HasPrefix(c, "sts get-scoped-credentials ") || !strings.Contains(c, "--policy "+policy+" ") ||
+			strings.Contains(c, "export-credentials") || strings.Contains(c, "assume-role") {
+			t.Errorf("a scoped route ran %q", c)
+		}
 	}
 }
 
@@ -577,5 +644,112 @@ func TestAWSPointerDocIsVendOnly(t *testing.T) {
 		if awsPointerDoc([]byte(doc)) {
 			t.Errorf("%q was taken for an AWS pointer", doc)
 		}
+	}
+}
+
+// A scoped route is named as such to brig, which prints a line that does not
+// claim the sandbox has your whole identity.
+func TestRegisterReportsScopedMode(t *testing.T) {
+	r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, scopedPointer)
+	added, err := r.client.Add(awsSandbox("brig-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := added.Vends["aws"], (injector.VendInfo{Mode: "scoped", AWSProfile: "dev"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Vends[aws] = %+v, want %+v", got, want)
+	}
+	if !slices.ContainsFunc(f.calls(t), func(c string) bool {
+		return strings.Contains(c, "--scoped-session-description brig-a ")
+	}) {
+		t.Errorf("no scoped call named the sandbox: %q", f.calls(t))
+	}
+}
+
+func TestScopedVendNeverRunsExportCredentials(t *testing.T) {
+	r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, scopedPointer)
+	if _, err := r.client.Add(awsSandbox("brig-a")); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(45 * time.Minute)
+	code, body := r.vendGet(t, "brig-a")
+	if code != http.StatusOK || !strings.Contains(body, fakeScopedAccess) {
+		t.Fatalf("vend = %d, want 200 with the scoped keys", code)
+	}
+	if strings.Contains(body, fakeAWSSecret) {
+		t.Error("a scoped route handed out keys of another command")
+	}
+	if n := f.scopedFetches(t); n != 2 {
+		t.Errorf("scoped fetches = %d, want 2", n)
+	}
+	f.wantOnlyScopedCalls(t)
+}
+
+// A scoped fetch that fails hands out nothing, not older keys and not keys
+// of another command.
+func TestScopedVendFailureHandsOutNoKeys(t *testing.T) {
+	for name, stderr := range map[string]string{
+		"access denied": "An error occurred (AccessDenied) when calling the GetScopedCredentials operation: not authorized",
+		"malformed":     "An error occurred (MalformedPolicyDocument) when calling the GetScopedCredentials operation: Syntax error",
+		"short session": "An error occurred (InsufficientSessionLifetime) when calling the GetScopedCredentials operation: " +
+			"Remaining session lifetime is 300 seconds.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, scopedPointer)
+			if _, err := r.client.Add(awsSandbox("brig-a")); err != nil {
+				t.Fatal(err)
+			}
+			f.failScoped(t, stderr)
+			f.advance(45 * time.Minute)
+			code, body := r.vendGet(t, "brig-a")
+			if code != http.StatusBadGateway {
+				t.Errorf("vend = %d, want 502", code)
+			}
+			for _, v := range []string{fakeScopedAccess, fakeScopedSecret, fakeScopedSession, fakeAWSAccess, fakeAWSSecret, fakeAWSSession} {
+				if strings.Contains(body, v) {
+					t.Errorf("the refusal holds a key value: %q", body)
+				}
+			}
+			f.wantOnlyScopedCalls(t)
+		})
+	}
+}
+
+// An aws with no get-scoped-credentials is fixed by an upgrade, so the run
+// refusal and the guest's 502 both say so.
+func TestScopedRouteNamesTheCLIUpgrade(t *testing.T) {
+	r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, scopedPointer)
+	f.failScoped(t, oldCLIStderr)
+	_, err := r.client.Add(awsSandbox("brig-a"))
+	ref := refusal(t, err)
+	if ref.Status != http.StatusFailedDependency || !strings.Contains(ref.Message, "upgrade the AWS CLI to 2.41.2") ||
+		!strings.HasPrefix(ref.Message, "route aws: ") {
+		t.Errorf("refusal = %d %q, want 424 naming the upgrade", ref.Status, ref.Message)
+	}
+	if err := os.Remove(filepath.Join(f.dir, "scoped-fail")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.client.Add(awsSandbox("brig-a")); err != nil {
+		t.Fatal(err)
+	}
+	f.failScoped(t, oldCLIStderr)
+	f.advance(45 * time.Minute)
+	code, body := r.vendGet(t, "brig-a")
+	if code != http.StatusBadGateway || !strings.Contains(body, "upgrade the AWS CLI to 2.41.2") {
+		t.Errorf("vend = %d %q, want 502 naming the upgrade", code, body)
+	}
+	f.wantOnlyScopedCalls(t)
+}
+
+// The registration fetches before it reads the region, so a profile with no
+// region meets the STS global endpoint first. The refusal names the region
+// setting, not the raw InvalidAction.
+func TestScopedRouteNamesTheGlobalEndpoint(t *testing.T) {
+	r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, scopedPointer)
+	f.failScoped(t, "aws: [ERROR]: An error occurred (InvalidAction) when calling the GetScopedCredentials operation: "+
+		"Operation not supported on STS global endpoint")
+	_, err := r.client.Add(awsSandbox("brig-a"))
+	ref := refusal(t, err)
+	if ref.Status != http.StatusFailedDependency || !strings.Contains(ref.Message, "aws configure set region <r> --profile dev") {
+		t.Errorf("refusal = %d %q, want 424 naming the region setting", ref.Status, ref.Message)
 	}
 }
