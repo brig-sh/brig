@@ -49,6 +49,9 @@ func parse(blob []byte) (Policy, bool, error) {
 	if _, err := Routes([]Policy{p}); err != nil {
 		return Policy{}, flat, err
 	}
+	if err := refuseOwnAllow(p); err != nil {
+		return Policy{}, flat, err
+	}
 	return p, flat, nil
 }
 

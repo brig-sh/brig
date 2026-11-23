@@ -521,6 +521,10 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
+	if err := refuseUnboundPassthrough(sb, addr, internal); err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
@@ -779,6 +783,24 @@ func gcloudOnNode(route, flags string) error {
 	return fmt.Errorf("route %s mints Google tokens through the host's gcloud CLI and login, and a broker "+
 		"started with %s has neither. On a node, gcloud would mint as the node's own service account. "+
 		"Store a token the platform mints for this workload instead of a gcloud pointer", route, flags)
+}
+
+// refuseUnboundPassthrough refuses a passthrough route of a sandbox that is
+// bound neither by an address nor by a brig.internal address. A passthrough
+// request carries no session token, so the connection it arrives on is all
+// that ties it to the sandbox. Such a sandbox would reach the route only on
+// the loopback port, where the handler refuses it.
+func refuseUnboundPassthrough(sb broker.Sandbox, addr string, internal netip.Addr) error {
+	if addr != "" || internal.IsValid() {
+		return nil
+	}
+	for _, rt := range sb.Routes {
+		if rt.Route.Passthrough {
+			return fmt.Errorf("route %s is passthrough, and the sandbox has no address and no brig.internal "+
+				"address to bind its requests to", rt.Route.Name)
+		}
+	}
+	return nil
 }
 
 // sandboxAddr reads the address of a registration and the UID of its pod:

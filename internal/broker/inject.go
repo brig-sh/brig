@@ -236,12 +236,20 @@ func fold(name string) string {
 // undoes itself, and the response body the broker redacts is plain. Where the
 // transport asks for none, forward asks for identity.
 //
+// On a passthrough route, Authorization and every other header that carries
+// the guest's own credential go upstream. The route's inject holds at most
+// headers.allow, which still filters, and the other drops still apply.
+//
 // ReverseProxy has already removed the hop-by-hop headers and the ones
 // Connection named.
-func dropGuestHeaders(in *v1alpha1.Inject, h http.Header, token string) map[string]int {
-	rules := []string{"authorization"}
+func dropGuestHeaders(spec *v1alpha1.Route, h http.Header, token string) map[string]int {
+	in := spec.Inject
+	var rules []string
+	if !spec.Passthrough {
+		rules = append(rules, "authorization")
+	}
 	var allowed []v1alpha1.HeaderAllow
-	if in.Headers != nil {
+	if in != nil && in.Headers != nil {
 		for _, name := range in.Headers.Remove {
 			rules = append(rules, fold(name))
 		}
@@ -310,8 +318,12 @@ func filterValues(h http.Header, a v1alpha1.HeaderAllow) int {
 
 // injectCredential sets the route's headers with value in place of {value},
 // or Authorization: Basic for a basicAuth route. A set header replaces any
-// guest header of the same name.
+// guest header of the same name. A passthrough route sets nothing: its
+// inject is nil, or holds only headers.allow.
 func injectCredential(in *v1alpha1.Inject, h http.Header, value string) {
+	if in == nil {
+		return
+	}
 	if in.Headers != nil {
 		for _, s := range in.Headers.Set {
 			h.Set(s.Name, strings.Replace(s.Value, v1alpha1.PlaceholderValue, value, 1))
