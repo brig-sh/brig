@@ -136,3 +136,19 @@ func TestACredentialRouteKeepsItsAllow(t *testing.T) {
 		t.Errorf("a credential route was refused: %v", err)
 	}
 }
+
+// Negative: a deny glob does not keep the upstream refused. The resolver pins
+// only a literal deny host by address, so under allow "*" the guest could ask
+// for another name that resolves to an address of api.anthropic.com and
+// connect there with its own key. Refused when the policy is read, and when
+// the allow comes from another policy bound to the run.
+func TestADenyGlobUnderACoveringAllowGlobIsRefused(t *testing.T) {
+	own := passthroughDoc("own", "  egress:\n    default: deny\n    allow:\n      - host: \"*\"\n    deny:\n      - host: \"*.anthropic.com\"\n")
+	if _, err := Parse([]byte(own)); err == nil || !strings.Contains(err.Error(), "allow host * covers it") {
+		t.Errorf("a passthrough policy with allow * and a deny glob read: %v", err)
+	}
+	a := mustParse(t, passthroughDoc("a", "  egress:\n    default: deny\n    deny:\n      - host: \"*.anthropic.com\"\n"))
+	b := mustParse(t, egressDoc("b", "  egress:\n    default: deny\n    allow:\n      - host: \"*\"\n"))
+	err := RefusePassthroughEgress([]Policy{a, b})
+	wantErr(t, err, "route anthropic of policy a is passthrough", "allow host * of policy b")
+}

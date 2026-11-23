@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/egress"
@@ -14,7 +15,7 @@ import (
 // forwards a credential that the guest holds, so its request rules bind only
 // while the guest cannot send that credential upstream itself. It can with
 // no spec.egress at all, under default: allow, with an allow host glob that
-// covers the upstream and no deny that covers it, and with any allow cidr.
+// covers the upstream and no literal deny of it, and with any allow cidr.
 //
 // A host deny under default: allow is not enough. A connection sent straight
 // to an address asks for no name, so that deny is best effort. An allow cidr
@@ -86,8 +87,13 @@ func passthroughHost(r v1alpha1.Route) (string, error) {
 }
 
 // allowReach returns the allow rule of e that lets the guest reach host: any
-// cidr, or a host glob that covers host when no deny glob does. Deny beats
-// allow at both enforcers, so a covered deny leaves host refused.
+// cidr, or a host glob that covers host when no literal deny names it.
+//
+// Only a literal deny host keeps host refused. The resolver pins its
+// addresses into the deny set, so the guest cannot reach them through another
+// name. A deny glob applies only to the names the guest asks for: another name
+// that an allow glob covers can resolve to an address of host, and the guest
+// then connects there with its own credential.
 func allowReach(e Egress, host string) (Rule, bool) {
 	for _, rule := range e.Allow {
 		if rule.CIDR != "" {
@@ -95,7 +101,7 @@ func allowReach(e Egress, host string) (Rule, bool) {
 		}
 	}
 	for _, rule := range e.Deny {
-		if rule.Host != "" && egress.MatchHost(rule.Host, host) {
+		if rule.Host != "" && !isHostGlob(rule.Host) && egress.MatchHost(rule.Host, host) {
 			return Rule{}, false
 		}
 	}
@@ -135,4 +141,9 @@ func ruleOwner(ps []Policy, rule Rule) string {
 		}
 	}
 	return ""
+}
+
+// isHostGlob reports whether a host rule is a glob rather than one name.
+func isHostGlob(h string) bool {
+	return strings.ContainsAny(h, "*?[")
 }

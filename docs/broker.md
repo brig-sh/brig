@@ -625,7 +625,9 @@ the upstream's host:
 - No bound policy has `spec.egress`.
 - The merged default is `allow`. A host `deny` under it is best effort,
   because a connection sent straight to an address asks for no name.
-- An `allow` glob covers the host, and no `deny` glob does.
+- An `allow` glob covers the host, and no literal `deny` names it. A `deny`
+  glob is not enough: it applies only to the names the guest asks for, and
+  another name the `allow` covers can resolve to an address of the host.
 - Any `allow` cidr is bound. Brig cannot resolve the host before the run, so
   it cannot tell whether the cidr holds one of its addresses.
 
