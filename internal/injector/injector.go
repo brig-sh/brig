@@ -259,4 +259,61 @@ type Status struct {
 	// Vending lists "<sandbox>/<route>" of a route that vends whose last
 	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
+	// Policies maps each stored policy, as "<namespace>/<name>", to the
+	// version it was stored with.
+	Policies map[string]string `json:"policies,omitempty"`
+}
+
+// PolicyRef names a policy stored on the broker. A Kubernetes namespace and
+// a name, so two namespaces can each store a policy of the same name.
+type PolicyRef struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// PutPolicyRequest is the body of put-policy.
+type PutPolicyRequest struct {
+	// Version is the caller's own name for this content, such as the
+	// generation of a Kubernetes object. The broker reports it and does not
+	// read it.
+	Version string `json:"version"`
+	// Policy is the policy document, as a policy file holds it, in JSON.
+	Policy json.RawMessage `json:"policy"`
+}
+
+// PutPolicyResponse is the answer to put-policy.
+type PutPolicyResponse struct {
+	Version string `json:"version"`
+	// Digest is the hex SHA-256 of the canonical JSON of the policy.
+	Digest string `json:"digest"`
+	// Sandboxes is the number of sandboxes registered with the policy.
+	Sandboxes int `json:"sandboxes"`
+	// PendingRoutes are the routes of the policy that a sandbox registered
+	// with it does not have. A running sandbox does not get a new route,
+	// since its token and environment are written when it is created.
+	PendingRoutes []string `json:"pendingRoutes"`
+}
+
+// DeletePolicyResponse is the answer to delete-policy.
+type DeletePolicyResponse struct {
+	// Removed is whether the policy was stored.
+	Removed bool `json:"removed"`
+	// Sandboxes is the number of sandboxes registered with the policy, which
+	// lost every route.
+	Sandboxes int `json:"sandboxes"`
+}
+
+// PolicyInfo is one stored policy in the answer to list-policies.
+type PolicyInfo struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Digest    string `json:"digest"`
+	Sandboxes int    `json:"sandboxes"`
+}
+
+// PoliciesResponse is the answer to list-policies, sorted by namespace and
+// name.
+type PoliciesResponse struct {
+	Policies []PolicyInfo `json:"policies"`
 }

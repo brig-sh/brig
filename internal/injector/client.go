@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -194,6 +195,31 @@ func (c Client) Mint(r MintRequest) (string, error) {
 		return "", errors.New("the credential broker minted an empty token")
 	}
 	return out.Token, nil
+}
+
+// PutPolicy stores a policy on the broker under namespace/name.
+func (c Client) PutPolicy(ref PolicyRef, r PutPolicyRequest) (PutPolicyResponse, error) {
+	var out PutPolicyResponse
+	err := c.call(http.MethodPut, policyPath(ref), r, &out)
+	return out, err
+}
+
+// DeletePolicy removes the policy stored under namespace/name.
+func (c Client) DeletePolicy(ref PolicyRef) (DeletePolicyResponse, error) {
+	var out DeletePolicyResponse
+	err := c.call(http.MethodDelete, policyPath(ref), nil, &out)
+	return out, err
+}
+
+// Policies lists the policies stored on the broker.
+func (c Client) Policies() (PoliciesResponse, error) {
+	var out PoliciesResponse
+	err := c.call(http.MethodGet, "/policies", nil, &out)
+	return out, err
+}
+
+func policyPath(ref PolicyRef) string {
+	return "/policies/" + url.PathEscape(ref.Namespace) + "/" + url.PathEscape(ref.Name)
 }
 
 // Status asks the broker what it serves.

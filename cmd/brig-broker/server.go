@@ -168,7 +168,15 @@ type server struct {
 	uids map[string]string
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
-	vends    map[string]map[string]vendRoute
+	vends map[string]map[string]vendRoute
+	// polMu orders the changes to the stored policies against the
+	// registrations that read one. A registration by reference holds it for
+	// reading from start to end, so the policy it expanded is still the one
+	// stored when it lands. It is taken before mu.
+	polMu sync.RWMutex
+	// policies are the stored policies, by policyKey. mu guards it, and a
+	// change also holds polMu.
+	policies map[string]*storedPolicy
 	stopping bool
 	stop     chan struct{}
 }
@@ -184,8 +192,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
 		addrs: map[string]string{}, byAddr: map[string]string{}, uids: map[string]string{},
-		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
-		resolve: cfg.resolve, dial: cfg.dial}
+		vends: map[string]map[string]vendRoute{}, policies: map[string]*storedPolicy{},
+		stop: make(chan struct{}), internal: newConnListener(), resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
 		s.resolve = lookupHost
 	}
@@ -440,6 +448,9 @@ func (s *server) controlMux() http.Handler {
 	mux.HandleFunc("DELETE /sandboxes/{id}", s.removeSandbox)
 	mux.HandleFunc("POST /tokens", s.mint)
 	mux.HandleFunc("GET /status", s.status)
+	mux.HandleFunc("PUT /policies/{namespace}/{name}", s.putPolicy)
+	mux.HandleFunc("DELETE /policies/{namespace}/{name}", s.deletePolicy)
+	mux.HandleFunc("GET /policies", s.listPolicies)
 	mux.HandleFunc("POST /stop", s.stopRequest)
 	return mux
 }
@@ -948,11 +959,12 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.sandboxes {
 		ids = append(ids, id)
 	}
+	policies := s.policyVersions()
 	s.mu.Unlock()
 	sort.Strings(ids)
 	pending, failing, recovering := s.creds.report()
 	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
-		Pending: pending, Failing: failing, Recovering: recovering}
+		Pending: pending, Failing: failing, Recovering: recovering, Policies: policies}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
