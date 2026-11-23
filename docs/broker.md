@@ -774,11 +774,14 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal, address, uid}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports). `address` is the sandbox's own IP, for a broker started with `--listen`. The answer then carries the CA certificate and no divert socket. `uid` is the UID of the pod with that address. A second sandbox with the same address is refused with 409, unless both registrations carry a `uid` and the two differ. Then the second one replaces the first. See [Running the broker on a node](#running-the-broker-on-a-node) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], policyRef: {namespace, name}, brigInternal, address, uid}` | `{divertSocket, ca, regions, vends, routes}`. `policyRef` names a [stored policy](#policies-by-reference) in place of `routes`, and both at once are refused with 400. A policy the broker does not hold is a 424. The answer to such a registration carries `routes: [{name, guestEnv}]`, the policy's routes in its order. See [Policies by reference](#policies-by-reference). The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports). `address` is the sandbox's own IP, for a broker started with `--listen`. The answer then carries the CA certificate and no divert socket. `uid` is the UID of the pod with that address. A second sandbox with the same address is refused with 409, unless both registrations carry a `uid` and the two differ. Then the second one replaces the first. See [Running the broker on a node](#running-the-broker-on-a-node) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. `port` is 0 for a broker started with `--listen`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. A secret on a read-only store, see [Running the broker on a node](#running-the-broker-on-a-node), is never named, because no write is waiting. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending, policies}`. `policies` maps each stored policy, as `<namespace>/<name>`, to its version. `port` is 0 for a broker started with `--listen`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. A secret on a read-only store, see [Running the broker on a node](#running-the-broker-on-a-node), is never named, because no write is waiting. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
+| `PUT /policies/<namespace>/<name>` | `{version, policy}` | `{version, digest, sandboxes, pendingRoutes}`. Stores the policy document. A document that does not load is a 400, and one a registered sandbox cannot take is a 409. Either way the policy stored before stays. See [Policies by reference](#policies-by-reference) |
+| `DELETE /policies/<namespace>/<name>` | | `{removed, sandboxes}`. Every sandbox registered with the policy loses all its routes |
+| `GET /policies` | | `{policies: [{namespace, name, version, digest, sandboxes}]}`, sorted by namespace and name |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
 for it to exit and starts another. It does the same when the broker it found
@@ -992,6 +995,58 @@ the broker has no `--listen`. `uid` is refused without `address`, or when it
 is not letters, digits and dashes, at most 64 of them. A shared `address` is
 a 409, unless both registrations carry different `uid` values.
 
+### Policies by reference
+
+A node has no policy directory. A sync on the node, such as one that watches
+Policy objects in the cluster, stores each policy on the broker with
+`PUT /policies/<namespace>/<name>`, and a sandbox registers with
+`policyRef` in place of its routes:
+
+```json
+{"version": "4", "policy": {"apiVersion": "brig.sh/v1alpha1", "kind": "Policy", "metadata": {"name": "claude"}, "spec": {"egress": {"default": "deny"}, "routes": [{"name": "anthropic", "preset": "claude-code", "credential": {"secretRef": {"name": "claude-credentials"}}}]}}}
+```
+
+```json
+{"id": "pod-7f3a", "profile": "inventory", "address": "10.244.1.17", "uid": "6f1c2a9e-4b7d-4e0a-9c2b-3d5e8f1a7b40", "policyRef": {"namespace": "sandboxes", "name": "claude"}}
+```
+
+The broker checks the document as it checks a policy file, and expands its
+routes. A document that does not load is refused with 400, and the policy
+stored before it stays and keeps serving. `metadata.name` must be the name in
+the path. `version` is the
+caller's own, such as the generation of the object, and the broker only
+reports it. `digest` is the SHA-256 of the policy's canonical JSON, so the
+same policy spelled another way has the same digest. A stored policy takes
+no route that vends: such a route is checked with the host's `aws` at every
+registration, and an update of a running sandbox could not run that check.
+
+`policyRef` names a namespace and a name, and the broker looks for that pair
+alone. A policy stored under `team-a` is another key than one under `team-b`,
+so a registration that names `team-b` does not get `team-a`'s policy of the
+same name. A policy the broker does not hold is a 424 with
+`X-Brig-Refusal: policy`, and nothing is registered. The answer lists each route with its
+`guest.env`, placeholders such as `{route.url}` left in, for the caller to
+mint one token per route and fill them:
+
+```json
+{"ca": "-----BEGIN CERTIFICATE-----...", "routes": [{"name": "anthropic", "guestEnv": {"ANTHROPIC_BASE_URL": "{route.url}", "CLAUDE_CODE_OAUTH_TOKEN": "{session.token}"}}]}
+```
+
+The same registration again changes nothing, even after the policy changed,
+since an update has already moved the sandbox. A change to the policy
+reaches every sandbox registered with it at once:
+
+| The policy stored again | A sandbox registered with it |
+| --- | --- |
+| The same version and digest | Nothing changes |
+| A route of the same name | Keeps its key and its tokens, and takes the new rules and credential from its next request |
+| A route is gone | Its requests get 404 with `check=route` from the next one on, and no token is minted for it. Stored again later, it is a new route |
+| A new route | Not added. Its token and its environment are written into a pod when it is created, so only a pod registered after the change gets it. `pendingRoutes` names it |
+| A route the sandbox cannot serve, such as a passthrough route for a sandbox bound by nothing | The `PUT` is refused with 409, and the policy and every sandbox stay as they were |
+| `DELETE` | Every route is removed, and the sandbox stays registered with none, so it fails closed until it is removed. The policy stored again gives it nothing back |
+
+A request already in flight when the policy changes finishes under the rules
+it started with, and never under some of the old rules and some of the new.
 ## Routes that vend
 
 A route on the `aws` preset answers the guest itself, and has no upstream.

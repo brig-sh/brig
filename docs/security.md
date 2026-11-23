@@ -514,6 +514,12 @@ CLI on the host. It serves the other routes, with these limits. See
   restart starts again from the file. A provider that rotates the refresh
   token at renewal can leave the file with one that no longer works, and
   the Secret must then be updated.
+- **A stored policy governs the pods that name it.** A pod registered by
+  reference follows the policy while it runs. Whoever can store the policy,
+  through the cluster or the control socket, changes the rules and the
+  credential of the pod's routes from their next request. A route the policy
+  drops stops at once, and a route it adds reaches only a new pod. See
+  [Policies by reference](broker.md#policies-by-reference).
 
 **Named, not ambient.** You name the AWS profile when you run
 `brig secret import`. The secret holds that pointer and no key. Brig does
