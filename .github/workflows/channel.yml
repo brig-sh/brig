@@ -76,7 +76,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.channel.outputs.ref }}
           # The Go toolchain derives the pseudo-version this build reports from
@@ -94,7 +94,7 @@ jobs:
       # branch does not mean running that branch's copy of either -- which is
       # also what lets a ref cut before this workflow existed be promoted at
       # all.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .workflow
@@ -112,7 +112,7 @@ jobs:
       - name: Keep the workflow checkout out of the built tree's status
         run: echo '/.workflow/' >> .git/info/exclude
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: stable
           check-latest: true
@@ -164,11 +164,13 @@ jobs:
       # --snapshot builds every archive and publishes nothing, which is what
       # this job wants: the release below is a per-build prerelease rather
       # than the v-tag release GoReleaser knows how to make.
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          # The major ci.yml checks .goreleaser.yaml against and release.yml
-          # runs, so a new major cannot change what the channel signs.
-          version: "~> v2"
+          # The release ci.yml checks .goreleaser.yaml against and release.yml
+          # runs, so a new goreleaser cannot change what the channel signs.
+          # Like every action in this job, the action is pinned to a commit:
+          # the job holds the signing material and can write here.
+          version: v2.20.3
           # The `before` hooks are skipped: `go mod tidy` ran above with the
           # tree checked afterwards, and `go test ./...` runs in CI on every
           # merge to main. Running tidy here would dirty the tree after
@@ -259,7 +261,7 @@ jobs:
       # fallback. The push below relies on this App being a bypass actor on
       # the tap's main ruleset, which requires a reviewed pull request from
       # anyone else.
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: tap-token
         continue-on-error: true
         with:

@@ -183,7 +183,7 @@ release:
   # instead of opening a second release beside it. Without this, tag
   # v0.1.0-rc16 ended up with two releases of the same name, a Draft and a
   # Pre-release; the fix is to publish the draft, not create another. (GitHub
-  # only, goreleaser >= v2.5; the workflow pins `~> v2`.)
+  # only, goreleaser >= v2.5; the workflows pin an exact v2 release.)
   use_existing_draft: true
   prerelease: auto
   # The Brigfile schema, as an asset of its own. GitHub serves the newest

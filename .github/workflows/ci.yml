@@ -143,18 +143,20 @@ jobs:
 
       # A release config that only runs on a tag is a config nobody has run.
       # Validate it and build a full snapshot here, so the first real tag is
-      # not the first time goreleaser sees this file.
-      - uses: goreleaser/goreleaser-action@v7
+      # not the first time goreleaser sees this file. The action commit and
+      # the goreleaser release are the ones release.yml signs with, so this
+      # checks the config against the goreleaser that runs it.
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: "~> v2"
+          version: v2.20.3
           args: check
 
       # sign and sbom are skipped here: signing needs an OIDC identity a pull
       # request does not have, and both are exercised on the release path.
       # The point of this job is that the build and archive config assembles.
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: "~> v2"
+          version: v2.20.3
           args: release --snapshot --clean --skip=publish,sign,sbom
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ""

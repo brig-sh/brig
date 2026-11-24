@@ -29,8 +29,13 @@ jobs:
   release:
     name: goreleaser
     runs-on: ubuntu-latest
+    # Every action in this job is pinned to a commit, not a tag. The job
+    # holds the Developer ID certificate, the notary key, the tap token and
+    # an id-token Sigstore will certify as this workflow, and an owner can
+    # move a tag onto any code. Dependabot moves the pins and the version
+    # comments beside them; docs/releasing.md says what it does not move.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # goreleaser derives the version and the changelog from the tag
           # history, so a shallow clone gives it the wrong answer.
@@ -44,14 +49,13 @@ jobs:
       # The contributor lists need the GitHub API; the action passes the job
       # token.
       #
-      # A third-party action in the job that signs the release, so it is
-      # pinned to a commit rather than a tag, and runs here, before the notary
-      # key is written to disk and before any tap token is minted.
+      # A third-party action, so it runs here, before the notary key is
+      # written to disk and before any tap token is minted.
       - uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
         with:
           args: --current --output ${{ runner.temp }}/release-notes.md
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: stable
           check-latest: true
@@ -66,10 +70,13 @@ jobs:
           go mod tidy
           git diff --exit-code
 
-      - uses: sigstore/cosign-installer@v3
+      # Each installer's commit fixes the binary it fetches: this one
+      # installs cosign v2.5.2 and the next syft v1.42.3, their defaults at
+      # that commit. A bump of either pin is a bump of the binary.
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       # goreleaser shells out to syft for the SBOMs.
-      - uses: anchore/sbom-action/download-syft@v0
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
       # The notary key is stored as the raw .p8, because hull's own signing
       # workflow writes it straight to disk. GoReleaser wants base64 or a file
@@ -85,7 +92,7 @@ jobs:
       # PAT. continue-on-error because a release must not fail just because
       # the App is not installed yet -- goreleaser then falls back to the PAT
       # secret, and skips publishing the cask if neither exists.
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: tap-token
         continue-on-error: true
         with:
@@ -94,9 +101,12 @@ jobs:
           owner: brig-sh
           repositories: homebrew-brig
 
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: "~> v2"
+          # An exact release, and the one ci.yml checks .goreleaser.yaml
+          # against. Dependabot does not bump it: change it by hand, in
+          # release.yml, channel.yml and ci.yml together.
+          version: v2.20.3
           args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
