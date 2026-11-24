@@ -168,3 +168,46 @@ func TestChainRules(t *testing.T) {
 		t.Errorf("err = %v; want one naming refs", err)
 	}
 }
+
+// brig keeps its own secrets and the login token under these keychain
+// services. A profile that read one would hand the guest a credential brig
+// stores for itself.
+func TestSourceRefusesBrigsOwnKeychainServices(t *testing.T) {
+	for service, refused := range map[string]bool{
+		"sh.brig.login":   true,
+		"sh.brig.secret":  true,
+		"sh.brig":         true,
+		"SH.BRIG.LOGIN":   true,
+		" sh.brig.login ": true,
+		"sh.brigx":        false,
+		"com.example":     false,
+	} {
+		err := validateSource("tok", Source{From: SourceKeychain, Service: service})
+		switch {
+		case refused && (err == nil || !strings.Contains(err.Error(), service)):
+			t.Errorf("service %q: err = %v, want a refusal naming it", service, err)
+		case !refused && err != nil:
+			t.Errorf("service %q refused: %v", service, err)
+		}
+	}
+}
+
+// The same refusal must hold through the profile's own validation, for the
+// singular from:/service: shorthand and for a sources: list, not only where
+// validateSource is called directly.
+func TestProfileRefusesBrigsOwnKeychainServices(t *testing.T) {
+	for name, decl := range map[string]SecretDecl{
+		"shorthand": {Name: "tok", From: SourceKeychain, Service: "sh.brig.login"},
+		"sources":   {Name: "tok", Sources: []Source{{From: SourceKeychain, Service: "sh.brig.secret"}}},
+	} {
+		p := Profile{Secrets: []SecretDecl{decl}}
+		err := p.validateBindings()
+		svc := decl.Service
+		if svc == "" {
+			svc = decl.Sources[0].Service
+		}
+		if err == nil || !strings.Contains(err.Error(), svc) {
+			t.Errorf("%s: err = %v, want a refusal naming %q", name, err, svc)
+		}
+	}
+}
