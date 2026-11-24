@@ -366,6 +366,24 @@ version.
 When you bump the pin, change the version and all three hashes together.
 Take the hashes from the checksums file on the cosign release.
 
+### The action and goreleaser pins
+
+`release.yml` and `channel.yml` pin every action to a commit, with the
+version in a comment after it. A tag can move, and these jobs hold the
+signing certificate, the notary key and the tap token. The `github-actions`
+updates of Dependabot move the commit and the comment together. Minor and
+patch bumps arrive in one grouped pull request, and a major bump arrives
+alone.
+
+The cosign and syft versions come from the commits of their installers. A
+bump of either pin can change the binary that signs or writes the SBOM, so
+read its release notes before you merge it.
+
+Dependabot does not move the goreleaser `version:`. Bump it by hand, to an
+exact release, in `release.yml`, `channel.yml` and `ci.yml` in one commit.
+`ci.yml` then checks the config against the goreleaser that the release
+runs.
+
 ## Final checks
 
 1. Download a binary and run `brig version`. The line must start with
