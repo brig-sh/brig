@@ -1,6 +1,6 @@
 //go:build linux
 
-package secret
+package keyring
 
 import (
 	"context"
@@ -11,18 +11,6 @@ import (
 
 	"github.com/godbus/dbus/v5"
 )
-
-// service is brig's own namespace in the keyring. Every item this package
-// touches carries it as an attribute, so brig never reaches outside its own
-// namespace and List can search by it and find nothing else.
-//
-// That is the same narrow guarantee the keychain's service name buys, and the
-// difference matters to anyone building a trust decision on it: it is a label,
-// not an authenticity check. Any process on the session bus can add an item
-// under it, and brig would then read, update and delete that item as if it
-// were its own. What the namespace buys is containment of brig, not provenance
-// of what it finds there.
-const service = "sh.brig.secret"
 
 // The Secret Service lives at a well-known name and path on the session bus.
 const (
@@ -96,7 +84,20 @@ type dbusSecret struct {
 
 // secretService is the Store backed by the freedesktop Secret Service.
 type secretService struct {
-	service    string
+	// service is the namespace in the keyring. Every item a store touches
+	// carries it as an attribute, so brig never reaches outside its own
+	// namespace and List can search by it and find nothing else.
+	//
+	// That is the same narrow guarantee the keychain's service name buys, and the
+	// difference matters to anyone building a trust decision on it: it is a label,
+	// not an authenticity check. Any process on the session bus can add an item
+	// under it, and brig would then read, update and delete that item as if it
+	// were its own. What the namespace buys is containment of brig, not provenance
+	// of what it finds there.
+	service string
+	// label, when set, is the label of every item. Empty builds one from the
+	// name.
+	label      string
 	conn       *dbus.Conn
 	session    dbus.ObjectPath
 	collection dbus.ObjectPath
@@ -152,7 +153,14 @@ var (
 	}
 )
 
-func open() (Store, error) { return openService(service) }
+func open(c Config) (Store, error) {
+	s, err := openService(c.Service)
+	if err != nil {
+		return nil, err
+	}
+	s.label = c.Label
+	return s, nil
+}
 
 // openService is open() with the namespace as an argument, so the integration
 // test can run under a service value of its own and never touch a real brig
@@ -312,10 +320,18 @@ func (s *secretService) write(name string, value []byte, p Provenance, update bo
 	return s.create(collPath, name, attrs, sec)
 }
 
+// itemLabel is Config.Label when set, else one built from the name.
+func (s *secretService) itemLabel(name string) string {
+	if s.label != "" {
+		return s.label
+	}
+	return "brig: " + name
+}
+
 func (s *secretService) create(collPath dbus.ObjectPath, name string, attrs map[string]string, sec dbusSecret) error {
 	props := map[string]dbus.Variant{
 		// The label is what a keyring UI shows, so say whose item it is.
-		itemIface + ".Label":      dbus.MakeVariant("brig: " + name),
+		itemIface + ".Label":      dbus.MakeVariant(s.itemLabel(name)),
 		itemIface + ".Attributes": dbus.MakeVariant(attrs),
 	}
 	var item, prompt dbus.ObjectPath

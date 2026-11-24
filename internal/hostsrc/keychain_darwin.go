@@ -11,7 +11,7 @@ import (
 )
 
 // codeNotFound is the exit code security(1) returns for errSecItemNotFound.
-// internal/secret/keychain_darwin.go measures and names the same constant;
+// internal/secret/internal/keyring/keychain_darwin.go measures and names the same constant;
 // it is duplicated here rather than imported because that package's status()
 // and securityError() are unexported and this is a different package -- the
 // pattern is reused, the code is not shared.
@@ -68,7 +68,7 @@ func status(err error) int {
 
 // securityError keeps security's own explanation, which is the only account
 // of anything not covered by an exit code -- a locked keychain, a denied
-// access dialog. See internal/secret/keychain_darwin.go's securityError,
+// access dialog. See internal/secret/internal/keyring/keychain_darwin.go's securityError,
 // which this mirrors: the last "security: " line is the one worth keeping,
 // because the prompt form shares a line with it rather than starting a new
 // one.

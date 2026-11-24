@@ -1,6 +1,6 @@
 //go:build darwin
 
-package secret
+package keyring
 
 import (
 	"encoding/base64"
