@@ -271,8 +271,9 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 			},
 		},
 		{
-			// OMP 19.0.1: local --help capture for the launch flags and
-			// ps, gc, plugin, usage, stats, worktree and grievances.
+			// OMP 19.0.1: local --help capture on 2026-11-21, for the
+			// launch flags and ps, gc, plugin, usage, stats, worktree and
+			// grievances.
 			name: "omp",
 			agentFlags: []string{
 				"--add-dir", "--advisor", "--agent-dir", "--alias", "--all", "--allow-home",
