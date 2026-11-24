@@ -60,7 +60,7 @@ func TestBuiltInKinds(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is missing", name)
 		}
-		// The effective kind, not the raw field: seven of the nine built-ins
+		// The effective kind, not the raw field: most of the built-ins
 		// say nothing and rely on the same default kind() applies everywhere
 		// else, so an agent literal's Kind is "" rather than KindAgent.
 		if got := p.kind(); got != want {

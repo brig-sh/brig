@@ -15,11 +15,11 @@ import "embed"
 // It is also expected to be revisited, which is why nothing outside registry.go
 // touches this variable -- see the source list in Load there.
 //
-// Wave 1 ships claude-code and codex as the proven core; gemini, grok and
+// Claude Code and Codex are the proven core; gemini, grok, omp and
 // opencode are example profiles that build and run but have had less mileage.
 // cursor is unpublished pending a terms check.
 //
-// The five published images default to :latest, which is a multi-arch index
+// The published stock images use multi-arch indexes,
 // covering linux/arm64 and linux/amd64 -- so one reference is right on both an
 // Apple Silicon Mac and an x86 Linux host, and the runtime picks the matching
 // manifest. community-images also publishes :arm64 and :amd64, and an

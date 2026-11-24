@@ -136,6 +136,7 @@ func TestPublishedImagesMatchProfileNames(t *testing.T) {
 		"codex":       "ghcr.io/brig-sh/codex-stock:root",
 		"gemini":      "ghcr.io/brig-sh/gemini-stock:root",
 		"grok":        "ghcr.io/brig-sh/grok-stock:root",
+		"omp":         "ghcr.io/brig-sh/omp-stock:root",
 		"opencode":    "ghcr.io/brig-sh/opencode-stock:root",
 		// herdr is built on root only, so its default stock image is the root
 		// one and there is no separate :root tag.
@@ -152,6 +153,23 @@ func TestPublishedImagesMatchProfileNames(t *testing.T) {
 		if tmpl.Unpublished {
 			t.Errorf("%s is marked unpublished but we publish it", name)
 		}
+	}
+}
+
+// A broad --skills projection could also seed the host's credential database.
+func TestOMPSkillsProjectionExcludesHostState(t *testing.T) {
+	reset(t)
+	p, ok := Lookup("omp")
+	if !ok {
+		t.Fatal("omp is missing")
+	}
+	if p.HostConfigDir != "~/.omp" || len(p.ProjectPaths) != 2 ||
+		p.ProjectPaths[0] != "agent/skills" || p.ProjectPaths[1] != "agent/extensions" {
+		t.Errorf("omp projects %q from %q; want only skills and extensions from ~/.omp", p.ProjectPaths, p.HostConfigDir)
+	}
+	if len(p.Env) != 2 || p.Env[0].Name != "OPENROUTER_API_KEY" || p.Env[0].Ref != "env.OPENROUTER_API_KEY" ||
+		p.Env[1].Name != "GH_TOKEN" || p.Env[1].Ref != "env.GH_TOKEN" || len(p.Secrets) != 0 || len(p.Files) != 0 {
+		t.Error("omp must bind only the two named environment variables, without stored secrets or credential files")
 	}
 }
 
