@@ -248,6 +248,14 @@ func validateSource(name string, s Source) error {
 		return fmt.Errorf("secret %q names source %q, which is not %s, %s, %s, %s or %s",
 			name, s.From, SourceKeychain, SourceFile, SourceEnv, SourceAWS, SourceGCloud)
 	}
+	// brig's own keychain services hold its stored secrets and the login
+	// token. A profile that named one would read them into a sandbox.
+	// Compared folded and trimmed because the keychain's service match is
+	// not a byte comparison that brig can rely on.
+	if svc := strings.ToLower(strings.TrimSpace(s.Service)); s.From == SourceKeychain &&
+		(svc == "sh.brig" || strings.HasPrefix(svc, "sh.brig.")) {
+		return fmt.Errorf("secret %q reads keychain service %q, which brig keeps for its own use. Name a service of your own", name, s.Service)
+	}
 	// The misplaced locator is reported before the missing one, because a
 	// source carrying the wrong key is missing the right one by construction
 	// and "no service:" would name the symptom while `path:` sits there
