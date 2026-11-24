@@ -1,0 +1,175 @@
+// Package keyring holds the keychain backends behind brig's secret stores.
+//
+// It is internal to internal/secret on purpose: a backend opens whatever
+// keychain service it is given, so the only code that can name one is code
+// under internal/secret. Run-path packages reach the store brig owns through
+// secret.Open and cannot open another service, such as the one that holds
+// the login token.
+package keyring
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// The errors callers distinguish. The backends translate their own failures
+// into these, so a message a user sees is brig's rather than the backend's.
+var (
+	ErrNotFound    = errors.New("no such secret")
+	ErrExists      = errors.New("secret already exists")
+	ErrUnsupported = errors.New("no secret store on this platform")
+	// ErrDamaged is a secret that is there and cannot be read as stored: a
+	// backend that keeps a secret in more than one piece found one of them
+	// missing or unopenable. Not ErrNotFound, because a write that took
+	// absence at face value would create beside the damage rather than
+	// replace it; an importer overwrites a damaged secret instead.
+	ErrDamaged = errors.New("secret is damaged")
+)
+
+// Secret is one entry, without its value. Listing never reads values: the
+// names are not sensitive and the values would each be a separate decrypt.
+type Secret struct {
+	Name string
+	// Modified is best-effort, and a backend that cannot supply it returns
+	// the zero time -- the keychain carries a modification date, and another
+	// backend may not. Callers render a zero value as absent rather than
+	// inventing a date: a made-up timestamp is worse than a visibly missing
+	// one, and is the "tidy-up" this comment exists to prevent.
+	Modified time.Time
+	// Provenance is what brig knows about where this secret came from, read
+	// from the backend's own metadata without decrypting the value. The zero
+	// value means absent -- a hand-created secret, or a backend that cannot
+	// carry it -- and callers render that as absent rather than guessing. Same
+	// contract as Modified above.
+	Provenance Provenance
+}
+
+// Store is the backend seam. A Vault, 1Password or cloud implementation is an
+// addition here rather than a change above it.
+type Store interface {
+	// Kind names the backend, for reporting.
+	Kind() string
+	// Create stores a new secret and returns ErrExists if the name is taken.
+	Create(name string, value []byte) error
+	// Read returns the value, or ErrNotFound.
+	Read(name string) ([]byte, error)
+	// Update replaces an existing value, or returns ErrNotFound. It never
+	// creates: an update naming a secret that is not there is a typo, and
+	// creating it silently would hide that.
+	Update(name string, value []byte) error
+	// Delete removes a secret, or returns ErrNotFound.
+	Delete(name string) error
+	// List returns every secret in brig's namespace, sorted by name. Values
+	// are never read: the names are not sensitive, and reading each value
+	// would be a separate decrypt of something the caller did not ask for.
+	List() ([]Secret, error)
+}
+
+// Annotator is a backend that can attach provenance to a value it stores.
+//
+// Optional rather than part of Store, and that is the point: a backend that
+// cannot carry metadata implements Store alone and callers fall back to
+// Create/Update, where provenance is simply absent. Same contract as
+// Secret.Modified -- the zero value means absent and is rendered as such --
+// so this follows a precedent rather than inventing one. A future backend
+// (libsecret items carry arbitrary string attributes; see #8) can implement
+// it without every other backend changing.
+type Annotator interface {
+	// Write stores a value with its provenance, creating or updating.
+	Write(name string, value []byte, p Provenance, update bool) error
+}
+
+// ContextStore is a Store whose calls can be bound to a context.
+//
+// Optional, like Annotator. A backend that waits on another process, or on a
+// keyring prompt, implements it so that a caller with a deadline is not held
+// past it.
+type ContextStore interface {
+	Store
+	// WithContext returns the store with every call bound to ctx.
+	WithContext(ctx context.Context) Store
+}
+
+// Config names the keychain service a store works in.
+type Config struct {
+	// Service is the namespace every item carries. It is a label, not an
+	// authenticity check: see the comment on the backends.
+	Service string
+	// Label is the label shown for every item in the keyring UI. Empty keeps
+	// the per-item label built from the secret's name.
+	Label string
+}
+
+// Open returns the store for this host. The platform files supply open(),
+// which is the whole of the backend auto-detection: a host has one system
+// keyring, and brig uses it.
+func Open(c Config) (Store, error) { return open(c) }
+
+// JournalSuffix ends the name of a renewal journal: `<name>.journal` holds
+// the refresh of name that is in flight, so a refresh the provider answered
+// survives a crash of the process that asked for it (internal/renew).
+//
+// The dot is outside the name grammar, like the macOS store's `.sealed`. No
+// secret can be named like a journal, and List, which skips names outside
+// the grammar, never shows one. Only the backends' own calls take the name,
+// through validStoreName.
+const JournalSuffix = ".journal"
+
+// JournalName is the store name of the renewal journal of name.
+func JournalName(name string) string { return name + JournalSuffix }
+
+// validStoreName reports whether a backend reads, writes or deletes name: a
+// name ValidName takes, or the journal of one. A journal's journal is not
+// one, and neither is anything else with a dot.
+func validStoreName(name string) error {
+	if base, ok := strings.CutSuffix(name, JournalSuffix); ok && ValidName(base) == nil {
+		return nil
+	}
+	return ValidName(name)
+}
+
+// maxName is generous for a label and short enough that the error arrives
+// before the keychain's own limits do.
+const maxName = 128
+
+// ValidName reports whether a name is one brig will store.
+//
+// The macOS store also leans on the dot being refused: it keeps a secret's
+// sealed value under `<name>.sealed`, which no secret can be named like and
+// which List, skipping names outside this grammar, never shows. See
+// sealed_darwin.go before loosening it.
+//
+// The grammar is deliberately narrow. A name is three things at once: the
+// keychain account, a word in brig's error messages, and -- once profiles can
+// reference secrets -- the tail of `ref: secrets.<name>`. A dot would make
+// that reference ambiguous, and a space or a slash would make the keychain
+// account awkward to address by hand.
+func ValidName(name string) error {
+	if name == "" {
+		return errors.New("a secret needs a name, for example `brig secret create gh-token`")
+	}
+	if len(name) > maxName {
+		return fmt.Errorf("secret names are at most %d characters, and %q is %d",
+			maxName, name, len(name))
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9', c == '_', c == '-':
+			// A leading digit reads as a number rather than a name, and a
+			// leading dash reads as a flag wherever the name is typed.
+			if i == 0 {
+				return fmt.Errorf("a secret name starts with a letter, and %q starts with %q",
+					name, string(c))
+			}
+		default:
+			return fmt.Errorf("a secret name holds letters, digits, - and _, and %q holds %q",
+				name, string(c))
+		}
+	}
+	return nil
+}

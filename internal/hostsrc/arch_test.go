@@ -205,6 +205,9 @@ func TestTheBrokerLinksGCloud(t *testing.T) {
 func TestTheRunPathReadsNoKeychain(t *testing.T) {
 	const module = "github.com/brig-sh/brig/"
 	const allowed = module + "internal/secret"
+	// The backends moved under internal/secret so that only code there can
+	// name a keychain service; they are the same one keychain.
+	const allowedBackends = allowed + "/internal/keyring"
 	seen := map[string]bool{}
 	for _, pkg := range runPathPackages {
 		out, err := goList("-deps", "-f", "{{.ImportPath}} {{.Dir}}", pkg)
@@ -213,7 +216,7 @@ func TestTheRunPathReadsNoKeychain(t *testing.T) {
 		}
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			path, dir, ok := strings.Cut(line, " ")
-			if !ok || !strings.HasPrefix(path, module) || path == allowed || seen[path] {
+			if !ok || !strings.HasPrefix(path, module) || path == allowed || path == allowedBackends || seen[path] {
 				continue
 			}
 			seen[path] = true

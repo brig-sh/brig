@@ -1,4 +1,4 @@
-package secret
+package keyring
 
 import (
 	"bytes"
@@ -603,5 +603,45 @@ func TestSecurityIsNotResolvedThroughPath(t *testing.T) {
 	if _, err := os.Stat(marker); err == nil {
 		captured, _ := os.ReadFile(marker)
 		t.Fatalf("brig ran a `security` planted on $PATH, which was handed: %s", captured)
+	}
+}
+
+// A fixed Config.Label is the label of every item, the sealed one included,
+// in place of one built from the name.
+func TestFixedLabelNamesEveryItem(t *testing.T) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(Config{Service: testService + "label." + hex.EncodeToString(b[:]), Label: "brig login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := &testKeychain{keychain: st.(keychain), t: t}
+	if err := k.Create("r0123", []byte("v")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, account := range []string{"r0123", sealedAccount("r0123")} {
+		out, err := exec.Command("security", "find-generic-password", "-s", k.service, "-a", account).Output()
+		if err != nil {
+			t.Fatalf("reading %s: %v", account, err)
+		}
+		// security prints the label under its attribute code, 0x00000007,
+		// rather than a name.
+		_, rest, _ := strings.Cut(string(out), "0x00000007 <blob>=")
+		got, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+		if got != `"brig login"` {
+			t.Errorf("label of %s = %s, want %q, not one built from the name", account, got, "brig login")
+		}
+		// The key item's kind follows the label too: it is not a brig
+		// secret. The sealed item keeps its own kind.
+		if account == "r0123" && !strings.Contains(string(out), `"desc"<blob>="brig login"`) {
+			t.Errorf("kind of %s is not %q:\n%s", account, "brig login", out)
+		}
+	}
+	// A store with no fixed label writes the line it always wrote.
+	prefix, err := keychain{service: "sh.brig.secret"}.writePrefix("n", false, Provenance{})
+	if err != nil || !strings.Contains(prefix, ` -l "brig: n" -D "brig secret" `) {
+		t.Errorf("writePrefix = %q, %v; want brig secret's label and kind", prefix, err)
 	}
 }

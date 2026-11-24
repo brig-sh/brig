@@ -44,17 +44,6 @@ func (b storeBroker) Resolve(ctx context.Context, name string, _ Workload) ([]by
 	return WithContext(ctx, b.s).Read(name)
 }
 
-// ContextStore is a Store whose calls can be bound to a context.
-//
-// Optional, like Annotator. A backend that waits on another process, or on a
-// keyring prompt, implements it so that a caller with a deadline is not held
-// past it.
-type ContextStore interface {
-	Store
-	// WithContext returns the store with every call bound to ctx.
-	WithContext(ctx context.Context) Store
-}
-
 // WithContext returns s with its calls bound to ctx where the backend
 // supports that, and s itself otherwise.
 func WithContext(ctx context.Context, s Store) Store {

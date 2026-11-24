@@ -1,6 +1,6 @@
 //go:build darwin
 
-package secret
+package keyring
 
 import (
 	"bytes"
@@ -15,17 +15,6 @@ import (
 	"strings"
 	"time"
 )
-
-// service is brig's own namespace in the keychain. Every item this package
-// touches carries it, so brig never reaches outside its own namespace.
-//
-// That is a narrower guarantee than it may look, and the difference matters to
-// anyone building a trust decision on it. The service name is a label, not an
-// authenticity check: any process running as this user can add an item under
-// it, and brig would then read, update and delete that item as if it were its
-// own. What the namespace buys is containment of brig, not provenance of what
-// it finds there.
-const service = "sh.brig.secret"
 
 // securityBin is the keychain tool, named by its absolute path.
 //
@@ -48,7 +37,19 @@ const (
 )
 
 type keychain struct {
+	// service is the namespace in the keychain. Every item a store touches
+	// carries it, so brig never reaches outside its own namespace.
+	//
+	// That is a narrower guarantee than it may look, and the difference matters to
+	// anyone building a trust decision on it. The service name is a label, not an
+	// authenticity check: any process running as this user can add an item under
+	// it, and brig would then read, update and delete that item as if it were its
+	// own. What the namespace buys is containment of brig, not provenance of what
+	// it finds there.
 	service string
+	// label, when set, is the label of every item. Empty builds one from the
+	// name.
+	label string
 	// ctx bounds every security(1) call. Nil means no bound.
 	ctx context.Context
 	// beforeSeal, when set, runs before every sealed write. Tests use it to
@@ -63,7 +64,9 @@ var _ Store = keychain{}
 var _ Annotator = keychain{}
 var _ ContextStore = keychain{}
 
-func open() (Store, error) { return keychain{service: service}, nil }
+func open(c Config) (Store, error) {
+	return keychain{service: c.Service, label: c.Label}, nil
+}
 
 func (k keychain) Kind() string { return "keychain" }
 
@@ -82,6 +85,26 @@ func (k keychain) WithContext(ctx context.Context) Store {
 // and TestKeyLineNeverNearsTheBuffer pins that the longest possible key line
 // stays well inside this.
 const maxLine = 4096
+
+// itemLabel is the quoted label argument. A fixed Config.Label is a constant
+// chosen in code, so it is quoted as the per-item one is; a name has been
+// through validStoreName.
+func (k keychain) itemLabel(name string) string {
+	if k.label != "" {
+		return `"` + k.label + `"`
+	}
+	return `"brig: ` + name + `"`
+}
+
+// itemKind is the quoted description argument, which Keychain Access shows
+// as the item's kind. A store with a fixed Config.Label is not brig secret's,
+// so its items say what they are with that label instead.
+func (k keychain) itemKind() string {
+	if k.label != "" {
+		return `"` + k.label + `"`
+	}
+	return `"brig secret"`
+}
 
 // writePrefix is the write command up to and including the "-w " that the
 // key line follows. It is a function of its own because putItem builds the
@@ -102,8 +125,8 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 		"-s", k.service,
 		"-a", name,
 		// The label is what Keychain Access shows, so say whose item it is.
-		"-l", `"brig: ` + name + `"`,
-		"-D", `"brig secret"`,
+		"-l", k.itemLabel(name),
+		"-D", k.itemKind(),
 	}
 	switch {
 	case !p.IsZero():
@@ -269,6 +292,15 @@ func (k keychain) putItem(name, line string, p Provenance, update bool) error {
 	return err
 }
 
+// sealedLabel is the label of the sealed item: Config.Label when set, so every
+// item a store holds carries the one label, else one built from the name.
+func (k keychain) sealedLabel(name string) string {
+	if k.label != "" {
+		return k.label
+	}
+	return "brig: " + name + " (sealed)"
+}
+
 // sealedArgs is the argv of the sealed write: security's own command, with
 // the base64 ciphertext as the last argument. Always -U, so a sealed item
 // an interrupted create left behind is replaced rather than refused.
@@ -278,7 +310,7 @@ func (k keychain) sealedArgs(name string, blob []byte) []string {
 		"add-generic-password",
 		"-s", k.service,
 		"-a", sealedAccount(name),
-		"-l", "brig: " + name + " (sealed)",
+		"-l", k.sealedLabel(name),
 		"-D", "brig sealed value",
 		"-U",
 		"-w", base64.StdEncoding.EncodeToString(blob),

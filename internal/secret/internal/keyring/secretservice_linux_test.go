@@ -1,6 +1,6 @@
 //go:build linux
 
-package secret
+package keyring
 
 import (
 	"bytes"
@@ -76,7 +76,7 @@ func TestNameValidationAgainstMaxName(t *testing.T) {
 	}
 	// And every verb refuses it at the boundary, before dereferencing a
 	// connection -- the store has none here on purpose.
-	s := &secretService{service: service}
+	s := &secretService{service: testService}
 	if err := s.Create(tooLong, []byte("v")); err == nil {
 		t.Error("Create accepted an over-long name")
 	}
@@ -99,7 +99,7 @@ func TestOpenReportsNoBus(t *testing.T) {
 	restore := swapSeams(func() (*dbus.Conn, error) { return nil, errors.New("dial refused") }, nil)
 	defer restore()
 
-	_, err := open()
+	_, err := open(Config{Service: testService})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("open() = %v, want it to wrap ErrUnsupported", err)
 	}
@@ -118,7 +118,7 @@ func TestOpenReportsNoService(t *testing.T) {
 	)
 	defer restore()
 
-	_, err := open()
+	_, err := open(Config{Service: testService})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("open() = %v, want it to wrap ErrUnsupported", err)
 	}
@@ -148,7 +148,7 @@ func TestResolveCollectionReportsNoDefaultCollection(t *testing.T) {
 	readDefaultAlias = func(*secretService) (dbus.ObjectPath, error) { return noObject, nil }
 	defer func() { readDefaultAlias = orig }()
 
-	s := &secretService{service: service}
+	s := &secretService{service: testService}
 	err := s.resolveCollection()
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("resolveCollection() = %v, want it to wrap ErrUnsupported", err)
@@ -338,4 +338,39 @@ func findSecret(t *testing.T, s *secretService, name string) Secret {
 	}
 	t.Fatalf("List did not include %q: %+v", name, list)
 	return Secret{}
+}
+
+// A fixed Config.Label is every item's label, in place of one built from the
+// name, so a login item never shows a name that is a hash of a URL.
+func TestFixedLabelNamesEveryItem(t *testing.T) {
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
+		t.Skip("no session bus: set DBUS_SESSION_BUS_ADDRESS and run a Secret Service keyring to exercise the backend")
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(Config{Service: testService + "label." + hex.EncodeToString(b[:]), Label: "brig login"})
+	if err != nil {
+		if errors.Is(err, ErrUnsupported) {
+			t.Skipf("no Secret Service on the session bus: %v", err)
+		}
+		t.Fatalf("Open: %v", err)
+	}
+	s := st.(*secretService)
+	cleanup(t, s, "r0123")
+	if err := s.Create("r0123", []byte("v")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	item, err := s.find("r0123")
+	if err != nil || item == noObject {
+		t.Fatalf("find = %v, %v; want the item", item, err)
+	}
+	v, err := s.property(item, "Label")
+	if err != nil {
+		t.Fatalf("reading the label: %v", err)
+	}
+	if got := v.Value(); got != "brig login" {
+		t.Errorf("label = %v, want %q, not one built from the name", got, "brig login")
+	}
 }

@@ -16,7 +16,7 @@ credential path, boot a real sandbox before you open it.
 
 On macOS, the tests of `internal/secret` use the real login keychain. They
 create and delete items under service names prefixed `sh.brig.secret.test.`
-(`internal/secret/keychain_darwin_test.go:21`).
+(`internal/secret/internal/keyring/keychain_darwin_test.go:21`).
 
 ## What CI checks
 
