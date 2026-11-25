@@ -88,7 +88,7 @@ func Bind(
 			switch {
 			case fromSecret && secretPresent:
 				// brig itself refuses to write a secret empty
-				// (cmd/brig/secret.go), so one reaching here means another
+				// (internal/cli/secret.go), so one reaching here means another
 				// keychain tool emptied it. Silence would leave the guest
 				// failing to authenticate with no explanation.
 				s.Warnings = append(s.Warnings, notice.Newf(

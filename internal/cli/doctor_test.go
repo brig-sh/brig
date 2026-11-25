@@ -1,0 +1,599 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/brig-sh/brig/internal/hullstub"
+	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/secret"
+)
+
+// doctorRuntime is the runtime doctor detects when a test forces a working host.
+// Its own name, as is doctorStore's: the package's fakeRuntime and fakeStore
+// belong to the telemetry and secret tests and carry state these do not need.
+// The interface is embedded rather than implemented, the repo's pattern: a
+// check that reached any method other than the two below is doing something a
+// check has no business doing, and the nil panic says that louder than a stub.
+type doctorRuntime struct {
+	runtime.Runtime
+	bin string
+}
+
+// Bin is whatever the test put there: healthyHost writes a script that answers
+// --version, because the runtime check now looks the binary up before it
+// vouches for it, and a name that is not on disk is the failure a separate
+// test asks for rather than the fixture every test starts from.
+func (doctorRuntime) Kind() string  { return "hull" }
+func (r doctorRuntime) Bin() string { return r.bin }
+
+// doctorStore is a secret store that opens. Kind is all the secrets check reads;
+// it never reaches for a value, and a store that answered one would be a bug.
+type doctorStore struct{ secret.Store }
+
+func (doctorStore) Kind() string { return "keychain" }
+
+// healthyHost forces every seam and environment variable doctor reads to the
+// answer a working macOS-or-Linux host would give, so a test can then break one
+// of them in isolation and watch that one line change. It returns the boot
+// asset directory so a case can empty it.
+func healthyHost(t *testing.T) string {
+	t.Helper()
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	t.Setenv("BRIG_VERIFY", "off")
+	// A brigd socket of no one's, so the daemon check is informational rather
+	// than reaching whatever socket the host running the test happens to have.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	assets := t.TempDir()
+	// Both kernel names, so the check finds the one this architecture wants.
+	for _, name := range []string{"Image", "bzImage", "container-initrd"} {
+		if err := os.WriteFile(filepath.Join(assets, name), []byte("stand-in\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("BRIG_BOOT_ASSETS", assets)
+
+	swap(t, &virtualization, func() (bool, string) { return true, "virtualization available" })
+	swap(t, &rootlessDeviceDenied, func(string) string { return "" })
+	swap(t, &linuxHostChecks, func(runtime.Runtime, string) []check { return nil })
+	bin := filepath.Join(t.TempDir(), "hull")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho hull version 0.0.0-test\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: bin}, nil })
+	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
+	swap(t, &overlayRootFor, func(runtime.Runtime) runtime.OverlayRoot { return runtime.OverlayRoot{Available: true} })
+	t.Setenv("BRIG_ROOTFS_MODE", "")
+	return assets
+}
+
+// swap sets a package-level seam for the duration of a test and restores it.
+func swap[T any](t *testing.T, p *T, v T) {
+	t.Helper()
+	orig := *p
+	*p = v
+	t.Cleanup(func() { *p = orig })
+}
+
+// findCheck returns the one line of a report with the given name.
+func findCheck(t *testing.T, checks []check, name string) check {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("the report has no %q check: %+v", name, checks)
+	return check{}
+}
+
+// Every prerequisite in place: the report is all ok (or informational for the
+// parts a healthy host still has nothing to say about), nothing is flagged, and
+// the command exits 0.
+func TestDoctorAllChecksPass(t *testing.T) {
+	healthyHost(t)
+	checks := runDoctor(nil, nil)
+
+	for _, c := range checks {
+		if c.State == stateFail {
+			t.Errorf("check %q failed on a healthy host: %s", c.Name, c.Finding)
+		}
+	}
+	for _, name := range []string{"host", "virtual", "runtime", "boot", "rootfs", "verify", "profiles", "secrets"} {
+		if got := findCheck(t, checks, name).State; got != statePass {
+			t.Errorf("check %q is %q on a healthy host, want ok", name, got)
+		}
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("a healthy host exits non-zero: %v (code %d)", err, exitCode(err))
+	}
+}
+
+// A missing runtime is exit 4, the runtime line carries its fix, and the two
+// checks that need a runtime say they were not reached rather than failing in
+// the words of the layer they never reached.
+func TestDoctorMissingRuntimeExits4(t *testing.T) {
+	healthyHost(t)
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return nil, runtime.ErrNoRuntime })
+
+	checks := runDoctor(&fakeProfile, nil)
+
+	rt := findCheck(t, checks, "runtime")
+	if rt.State != stateFail || rt.Fix == "" {
+		t.Errorf("a missing runtime is %q with fix %q, want !! with a fix", rt.State, rt.Fix)
+	}
+	for _, name := range []string{"boot", "rootfs", "image"} {
+		c := findCheck(t, checks, name)
+		if c.State != stateInfo || c.Finding != "not reached" {
+			t.Errorf("%q after a missing runtime is %q/%q, want -- / not reached", name, c.State, c.Finding)
+		}
+	}
+	if code := exitCode(doctorExit(checks)); code != exitRuntime {
+		t.Errorf("a missing runtime exits %d, want %d", code, exitRuntime)
+	}
+}
+
+// A runtime whose binary is not on disk is exit 4 as well. Detect takes
+// BRIG_RUNTIME_BIN on trust, so this is the case doctor has to catch itself
+// rather than inherit from the seam.
+func TestDoctorRuntimeBinaryMissingExits4(t *testing.T) {
+	healthyHost(t)
+	missing := filepath.Join(t.TempDir(), "hull-not-here")
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: missing}, nil })
+
+	checks := runDoctor(&fakeProfile, nil)
+
+	rt := findCheck(t, checks, "runtime")
+	if rt.State != stateFail || rt.Fix == "" || !strings.Contains(rt.Finding, missing) {
+		t.Errorf("a missing binary is %q/%q with fix %q, want !! naming %s with a fix", rt.State, rt.Finding, rt.Fix, missing)
+	}
+	for _, name := range []string{"boot", "image"} {
+		c := findCheck(t, checks, name)
+		if c.State != stateInfo || c.Finding != "not reached" {
+			t.Errorf("%q after a missing binary is %q/%q, want -- / not reached", name, c.State, c.Finding)
+		}
+	}
+	if code := exitCode(doctorExit(checks)); code != exitRuntime {
+		t.Errorf("a missing binary exits %d, want %d", code, exitRuntime)
+	}
+}
+
+// A secret store that is present but will not open is exit 6, with its fix on
+// the line. A store that is simply absent (ErrUnsupported) is not a failure --
+// brig runs without one -- so that case stays informational and exits 0.
+func TestDoctorClosedKeychainExits6(t *testing.T) {
+	healthyHost(t)
+	swap(t, &openStore, func() (secret.Store, error) { return nil, errors.New("keychain is locked") })
+
+	checks := runDoctor(nil, nil)
+	sec := findCheck(t, checks, "secrets")
+	if sec.State != stateFail || sec.Fix == "" {
+		t.Errorf("a locked keychain is %q with fix %q, want !! with a fix", sec.State, sec.Fix)
+	}
+	if code := exitCode(doctorExit(checks)); code != exitCredentials {
+		t.Errorf("a locked keychain exits %d, want %d", code, exitCredentials)
+	}
+
+	swap(t, &openStore, func() (secret.Store, error) { return nil, secret.ErrUnsupported })
+	checks = runDoctor(nil, nil)
+	if got := findCheck(t, checks, "secrets").State; got != stateInfo {
+		t.Errorf("no store on this platform is %q, want -- (informational)", got)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("a platform with no store exits non-zero: %v", err)
+	}
+}
+
+// The unknown-agent operand is the same not-found error every other verb
+// returns -- exit 3 -- rather than a check that fails partway down the report.
+func TestDoctorUnknownAgentExits3(t *testing.T) {
+	healthyHost(t)
+	_, err := captureStdout(t, func() error { return doctorCmd(os.Stdout, []string{"nosuchagent"}) })
+	if err == nil {
+		t.Fatal("an unknown agent was accepted")
+	}
+	if code := exitCode(err); code != exitNotFound {
+		t.Errorf("an unknown agent exits %d, want %d", code, exitNotFound)
+	}
+}
+
+// Each check prints its exact fix on the next line when it fails, indented
+// under the finding. Driven through the renderer so what is asserted is the
+// text a reader sees.
+func TestDoctorFailedCheckPrintsItsFix(t *testing.T) {
+	healthyHost(t)
+	// Break several at once: no virtualization, no runtime (so boot and image
+	// are not reached but the runtime line has a fix), and a require mode with
+	// no cosign so verify fails too.
+	swap(t, &virtualization, func() (bool, string) { return false, "no virtualization here" })
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return nil, runtime.ErrBadRuntime })
+	t.Setenv("BRIG_VERIFY", "require")
+	t.Setenv("BRIG_COSIGN_BIN", filepath.Join(t.TempDir(), "no-cosign"))
+
+	var buf bytes.Buffer
+	checks := runDoctor(nil, nil)
+	renderDoctor(&buf, checks)
+	out := buf.String()
+
+	for _, name := range []string{"virtual", "runtime", "verify"} {
+		c := findCheck(t, checks, name)
+		if c.State != stateFail {
+			t.Errorf("check %q did not fail as arranged: %q", name, c.State)
+			continue
+		}
+		if c.Fix == "" || !strings.Contains(out, c.Fix) {
+			t.Errorf("the rendered report does not print %q's fix %q:\n%s", name, c.Fix, out)
+		}
+	}
+}
+
+// --json carries the same facts as the text: it parses, it has the apiVersion
+// and kind of the shared envelope, one entry per check, and no credential value
+// anywhere in it.
+func TestDoctorJSONCarriesSameFacts(t *testing.T) {
+	healthyHost(t)
+	// A store whose name looks like a value would be, so the "no secret value"
+	// assertion has something real to miss if a check ever leaked one.
+	const planted = "super-secret-token-value"
+	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
+
+	out, err := captureStdout(t, func() error { return doctorCmd(os.Stdout, []string{"--json"}) })
+	if err != nil {
+		t.Fatalf("brig doctor --json failed: %v", err)
+	}
+	if strings.Contains(out, planted) {
+		t.Fatal("the test planted nothing, so this can only mean the assertion is wrong")
+	}
+
+	var doc struct {
+		APIVersion string  `json:"apiVersion"`
+		Kind       string  `json:"kind"`
+		Data       []check `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("--json did not parse: %v\n%s", err, out)
+	}
+	if doc.APIVersion != jsonAPIVersion {
+		t.Errorf("apiVersion is %q, want %q", doc.APIVersion, jsonAPIVersion)
+	}
+	if doc.Kind != "Doctor" {
+		t.Errorf("kind is %q, want %q", doc.Kind, "Doctor")
+	}
+	textChecks := runDoctor(nil, nil)
+	if len(doc.Data) != len(textChecks) {
+		t.Errorf("--json has %d checks, the text report has %d", len(doc.Data), len(textChecks))
+	}
+	for _, c := range doc.Data {
+		if c.Name == "" || c.State == "" {
+			t.Errorf("a --json check is missing its name or state: %+v", c)
+		}
+	}
+}
+
+// fakeProfile is an agent whose image is under brig's own registry, for the
+// cases that name an operand. It is never actually verified in a test -- the
+// runtime is missing in the one case that uses it, so the image check is not
+// reached -- so its image only has to be a plausible reference.
+var fakeProfile = func() profile.Profile {
+	p, err := profile.Parse([]byte("name: x\nimage: ghcr.io/brig-sh/claude-code-stock:latest\n" +
+		"guestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n"))
+	if err != nil {
+		panic(err)
+	}
+	return p
+}()
+
+// The runtime row shows the version word wherever the line puts it. hull
+// moved it off the end of its --version line when it started reporting its
+// build, and a reader of the last word showed the platform.
+func TestShortVersion(t *testing.T) {
+	cases := []struct{ out, want string }{
+		{"hull version 0.1.0-rc28", "0.1.0-rc28"},
+		{"hull v0.1.0-rc27.0.20260925084401-44b53facb020 (44b53fa, 2026-09-25, go1.26.5, darwin/arm64)",
+			"0.1.0-rc27.0.20260925084401-44b53facb020"},
+		{"nerdctl version 2.3.5", "2.3.5"},
+		{"hull dev (go1.26.5, darwin/arm64)", "dev (go1.26.5, darwin/arm64)"},
+	}
+	for _, tc := range cases {
+		if got := shortVersion(tc.out); got != tc.want {
+			t.Errorf("shortVersion(%q) = %q, want %q", tc.out, got, tc.want)
+		}
+	}
+}
+
+// The boot row checks the directory a run would boot from. A run of an agent
+// drives the hull its profile names, and asks that hull where its assets live,
+// so doctor has to ask the same one the same way: here the hull on PATH has
+// nothing, and the profile's hull keeps its assets under a store of its own
+// (#314).
+func TestDoctorBootAsksTheAgentsHull(t *testing.T) {
+	healthyHost(t)
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+
+	store := filepath.Join(t.TempDir(), "store", "assets")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Image", "bzImage", "container-initrd"} {
+		if err := os.WriteFile(filepath.Join(store, name), []byte("stand-in\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(t.TempDir(), "hull")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
+		"\"assets dir\") echo '" + store + "' ;;\n" +
+		"*) echo hull version 0.0.0-test ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent := fakeProfile
+	agent.RuntimeBin = bin
+
+	checks := runDoctor(&agent, nil)
+
+	if rt := findCheck(t, checks, "runtime"); !strings.Contains(rt.Finding, bin) {
+		t.Errorf("the runtime row reports %q, want the profile's hull at %s", rt.Finding, bin)
+	}
+	boot := findCheck(t, checks, "boot")
+	if boot.State != statePass || !strings.Contains(boot.Finding, store) {
+		t.Errorf("the boot row is %q %q, want ok at %s, where the agent's hull keeps its assets",
+			boot.State, boot.Finding, store)
+	}
+}
+
+// BRIG_BOOT_ASSETS pointing at a directory without the bundle is not fixed by
+// running an agent: a run refuses to download into a directory the user
+// chose. The boot row's fix says what does fix it.
+func TestDoctorBootFixForAnEmptyExplicitDir(t *testing.T) {
+	healthyHost(t)
+	dir := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", dir)
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: "/bin/sh"}, nil })
+
+	boot := findCheck(t, runDoctor(nil, nil), "boot")
+	if boot.State != stateFail {
+		t.Fatalf("the boot row is %q, want !!", boot.State)
+	}
+	if strings.Contains(boot.Fix, "run any agent") {
+		t.Errorf("the fix %q sends the user to a run, which will not download into %s", boot.Fix, dir)
+	}
+	if !strings.Contains(boot.Fix, "BRIG_BOOT_ASSETS") || !strings.Contains(boot.Fix, dir) {
+		t.Errorf("the fix %q does not name BRIG_BOOT_ASSETS and %s", boot.Fix, dir)
+	}
+}
+
+// When the profile names the runtime binary, a broken one is the profile's to
+// fix, not BRIG_RUNTIME_BIN's, which the user may never have set.
+func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
+	healthyHost(t)
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	agent := fakeProfile
+	agent.RuntimeBin = filepath.Join(t.TempDir(), "hull-not-here")
+
+	rt := findCheck(t, runDoctor(&agent, nil), "runtime")
+	if rt.State != stateFail {
+		t.Fatalf("the runtime row is %q, want !!", rt.State)
+	}
+	if strings.Contains(rt.Fix, "BRIG_RUNTIME_BIN") || !strings.Contains(rt.Fix, "runtimeBin") {
+		t.Errorf("the fix %q should name the profile's runtimeBin, not BRIG_RUNTIME_BIN", rt.Fix)
+	}
+}
+
+// The broker row says whether brig-broker has started, and fails a broker
+// directory anyone else can enter, which holds the keys that sign tokens.
+// It never gates the exit status.
+func TestDoctorBrokerCheck(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", state)
+	if c := brokerCheck(); c.State != stateInfo {
+		t.Errorf("before any route ran: %+v", c)
+	}
+	dir := filepath.Join(state, "host", "broker")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := brokerCheck()
+	if c.State != stateFail || !strings.Contains(c.Fix, "chmod 700") || c.err != nil {
+		t.Errorf("an open broker directory: %+v", c)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "port"), []byte("40123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := brokerCheck(); c.State != stateInfo || !strings.Contains(c.Finding, "port 40123") {
+		t.Errorf("a broker that is not running: %+v", c)
+	}
+	// Another process on the recorded port receives the tokens of every
+	// client of the port, so the row fails and names it.
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = squatter.Close() }()
+	port := squatter.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(filepath.Join(dir, "port"), []byte(fmt.Sprintf("%d\n", port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = brokerCheck()
+	if c.State != stateFail || !strings.Contains(c.Finding, fmt.Sprintf("its port %d", port)) || c.err != nil {
+		t.Errorf("a port held by another process: %+v", c)
+	}
+	if _, err := exec.LookPath("lsof"); err == nil && !strings.Contains(c.Finding, fmt.Sprintf("pid %d", os.Getpid())) {
+		t.Errorf("the row does not name the holder, this test's pid %d: %s", os.Getpid(), c.Finding)
+	}
+	t.Logf("doctor: %s", c.Finding)
+}
+
+// The report has a broker row on every host: nerdctl on Linux serves routes
+// through brig-broker as hull on macOS does. The row does not gate the exit
+// status.
+func TestDoctorHasABrokerRowOnEveryHost(t *testing.T) {
+	healthyHost(t)
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	checks := runDoctor(nil, nil)
+	if c := findCheck(t, checks, "broker"); c.State != stateInfo || c.err != nil {
+		t.Errorf("a broker that never started: %+v", c)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("the broker row gated the exit status: %v", err)
+	}
+}
+
+// A broker settling a refresh journal says so on the broker row, by name,
+// without failing it. A refresh that failed still fails the row.
+func TestDoctorBrokerRowNamesARecovery(t *testing.T) {
+	c := brokerStatusCheck(injector.Status{PID: 7, Port: 40123, Recovering: []string{"claude-credentials"}})
+	if c.State != statePass || !strings.Contains(c.Finding, "refresh recovering: claude-credentials") {
+		t.Errorf("a broker recovering a refresh: %+v", c)
+	}
+	c = brokerStatusCheck(injector.Status{PID: 7, Port: 40123})
+	if strings.Contains(c.Finding, "recovering") {
+		t.Errorf("a broker with nothing to recover: %+v", c)
+	}
+	c = brokerStatusCheck(injector.Status{PID: 7, Port: 40123,
+		Recovering: []string{"claude-credentials"}, Failing: []string{"claude-credentials"}})
+	if c.State != stateFail {
+		t.Errorf("a broker whose recovery found the pair spent: %+v", c)
+	}
+}
+
+// A route mode registered in this build adds its row, after the host's own
+// rows and ahead of the boot. Its row informs and never fails the report.
+func TestDoctorCarriesTheRowOfARegisteredMode(t *testing.T) {
+	healthyHost(t)
+	saved := modeChecks
+	t.Cleanup(func() { modeChecks = saved })
+	var asked []runtime.Runtime
+	modeChecks = append(modeChecks, func(_ *profile.Profile, rt runtime.Runtime) check {
+		asked = append(asked, rt)
+		return check{Name: "relay", State: stateInfo, Finding: "relay is served"}
+	})
+	checks := runDoctor(nil, nil)
+	if c := findCheck(t, checks, "relay"); c.State != stateInfo || c.Finding != "relay is served" {
+		t.Errorf("the relay row is %+v", c)
+	}
+	if len(asked) != 1 || asked[0] == nil {
+		t.Errorf("the row was asked with %v", asked)
+	}
+	relay, boot := -1, -1
+	for i, c := range checks {
+		switch c.Name {
+		case "relay":
+			relay = i
+		case "boot":
+			boot = i
+		}
+	}
+	if relay < 0 || boot < 0 || relay > boot {
+		t.Errorf("the relay row is at %d and the boot row at %d", relay, boot)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("an informational row changed the exit: %v", err)
+	}
+}
+
+// A host without the overlay root keeps the runtime's own, so the row is
+// informational and names what to install. It fails only where a run would
+// refuse: BRIG_ROOTFS_MODE=overlay-block on that host, or a mode brig does not
+// know. Neither changes the exit status.
+func TestDoctorRootfsRow(t *testing.T) {
+	healthyHost(t)
+	row := func() check {
+		t.Helper()
+		checks := runDoctor(nil, nil)
+		if err := doctorExit(checks); err != nil {
+			t.Errorf("the rootfs row changed the exit status: %v", err)
+		}
+		return findCheck(t, checks, "rootfs")
+	}
+
+	if c := row(); c.State != statePass || c.Finding != "overlay root available" {
+		t.Errorf("available: %q %q", c.State, c.Finding)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "virtiofs")
+	if c := row(); c.State != stateInfo || !strings.Contains(c.Finding, "BRIG_ROOTFS_MODE=virtiofs") {
+		t.Errorf("opted out: %q %q", c.State, c.Finding)
+	}
+
+	t.Setenv("BRIG_ROOTFS_MODE", "")
+	why := "install e2fsprogs (brew install e2fsprogs): hull formats the disks with /x/mke2fs"
+	swap(t, &overlayRootFor, func(runtime.Runtime) runtime.OverlayRoot { return runtime.OverlayRoot{Why: why} })
+	if c := row(); c.State != stateInfo || c.Finding != "overlay root not available: "+why {
+		t.Errorf("not available: %q %q", c.State, c.Finding)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay-block")
+	if c := row(); c.State != stateFail || !strings.Contains(c.Finding, why) || c.Fix == "" {
+		t.Errorf("asked and not available: %q %q fix %q", c.State, c.Finding, c.Fix)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay")
+	if c := row(); c.State != stateFail || !strings.Contains(c.Finding, "not a rootfs mode") {
+		t.Errorf("no such mode: %q %q", c.State, c.Finding)
+	}
+}
+
+// The row follows the profile as the run does. A profile that is not a
+// genericBoot, or one booting with a rootfs type other than virtiofs, never
+// takes the overlay, so overlay-block fails there even on a host that can
+// build it.
+func TestDoctorRootfsRowFollowsTheProfile(t *testing.T) {
+	healthyHost(t)
+	rt := doctorRuntime{}
+	block := &profile.Profile{Name: "pkgs", GenericBoot: true, RootfsType: "block"}
+	plain := &profile.Profile{Name: "own", GenericBoot: false}
+	generic := &profile.Profile{Name: "gen", GenericBoot: true}
+
+	if c := rootfsCheck(generic, rt); c.State != statePass {
+		t.Errorf("generic boot on an overlay host: %q %q", c.State, c.Finding)
+	}
+	for _, p := range []*profile.Profile{block, plain} {
+		if c := rootfsCheck(p, rt); c.State != stateInfo || !strings.Contains(c.Finding, p.Name) {
+			t.Errorf("%s, mode unset: %q %q", p.Name, c.State, c.Finding)
+		}
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay-block")
+	for _, p := range []*profile.Profile{block, plain} {
+		if c := rootfsCheck(p, rt); c.State != stateFail || c.Fix == "" {
+			t.Errorf("%s, overlay-block asked: %q %q", p.Name, c.State, c.Finding)
+		}
+	}
+	// BRIG_ROOTFS_TYPE wins over the profile's field, as in a run.
+	t.Setenv("BRIG_ROOTFS_TYPE", "virtiofs")
+	if c := rootfsCheck(block, rt); c.State != statePass {
+		t.Errorf("block profile with BRIG_ROOTFS_TYPE=virtiofs: %q %q", c.State, c.Finding)
+	}
+}
+
+// The row follows the monitor as the run does: qemu under hull, firecracker
+// under urunc, or a HULL_* variable that chooses the root, keeps the default
+// overlay off.
+func TestDoctorRootfsRowFollowsTheMonitor(t *testing.T) {
+	healthyHost(t)
+	why := "hull's qemu backend takes no overlay root"
+	swap(t, &overlayMonitorFor, func(runtime.Runtime, string) (bool, string) { return false, why })
+	generic := &profile.Profile{Name: "gen", GenericBoot: true, Hypervisor: "qemu"}
+	if c := rootfsCheck(generic, doctorRuntime{}); c.State != stateInfo || !strings.Contains(c.Finding, why) {
+		t.Errorf("a monitor without the overlay: %q %q", c.State, c.Finding)
+	}
+}

@@ -12,7 +12,7 @@ import (
 
 // One error of each class maps to its own number, and anything unclassified
 // falls to Failure. The point is the table and the behaviour cannot drift: this
-// is the only producer of these codes for brigd, and cmd/brig/exit.go is the
+// is the only producer of these codes for brigd, and internal/cli/exit.go is the
 // other for the CLI.
 func TestOfClassifiesEachErrorClass(t *testing.T) {
 	// A cause wrapped one layer down, to prove Of reads the class through a wrap

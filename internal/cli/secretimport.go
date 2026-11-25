@@ -1,0 +1,974 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/brig-sh/brig/internal/awscred"
+	"github.com/brig-sh/brig/internal/gcpcred"
+	"github.com/brig-sh/brig/internal/hostsrc"
+	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/secret"
+)
+
+// newHostReader is the seam the tests replace. Everything else goes through
+// hostsrc, which reads the host itself -- and which nothing on the run path
+// may import (see internal/hostsrc/arch_test.go).
+var newHostReader = func() hostReader { return hostsrc.NewReader() }
+
+// newAWSCLI is the seam the tests replace. The environment is awscred.Environ's,
+// the rule the broker applies, so the check an import makes sees the identity
+// the broker will resolve at run time and not whatever the user's shell
+// exports.
+var newAWSCLI = func() awscred.CLI { return awscred.CLI{Env: awscred.Environ(os.Environ())} }
+
+// newGCloudCLI is the seam the tests replace. The environment is
+// gcpcred.Environ's for newAWSCLI's reason: the import's check must see the
+// login the broker will use, not one the user's shell chose.
+var newGCloudCLI = func() gcpcred.CLI { return gcpcred.CLI{Env: gcpcred.Environ(os.Environ())} }
+
+// importStderr is where an import says what a pointer will do, apart from the
+// report on stdout. It is a variable so a test can read it.
+var importStderr io.Writer = os.Stderr
+
+// awsCheckSession is the session name of the one assume-role an import makes
+// to prove the role can be assumed. Its keys are discarded.
+const awsCheckSession = "brig-import-check"
+
+// hostReader is the slice of hostsrc the importer uses, named here so a test
+// double does not have to embed the concrete type.
+type hostReader interface {
+	Read(s profile.Source) (hostsrc.Value, bool, error)
+}
+
+// commandLocator is the provenance recorded for a --from-command value, and it
+// is the word rather than the command line.
+//
+// Two reasons, and either alone would decide it. The command is the user's own
+// text: it can hold a quote, a pipe, or an actual credential, and provenance is
+// printed back by `brig secret ls` and by the expiry warning -- which is why
+// secret.DecodeProvenance drops a From that does not validate. Recording the
+// line would therefore either fail that validation and come back empty, making
+// the secret look hand-created on the next import, or print somebody's `op
+// read ...` invocation into a terminal. The word says where the value came
+// from, which is what provenance is for.
+const commandLocator = "command"
+
+// importOptions is one parsed `brig secret import` command line.
+type importOptions struct {
+	profile string
+	names   []string
+	dryRun  bool
+	// command is whether --from-command was given at all, which is not the
+	// same question as whether it is empty: `--from-command "$CMD"` with the
+	// variable unset is a line people type, and falling through to the
+	// declared sources there would import something the user did not ask for.
+	command     bool
+	fromCommand string
+	yes         bool
+
+	// The aws source stores a pointer, never keys: it names the local AWS
+	// profile and how the sandbox gets credentials from it. identity is
+	// "self" or empty, and the gcloud source takes it too.
+	awsProfile, roleARN, identity, sourceIdentity string
+	// The gcloud source stores a pointer, never a token: the local gcloud
+	// configuration and the service account the sandbox acts as.
+	gcloudConfiguration, serviceAccount string
+	// session is --session-duration, and sessionSet whether it was given:
+	// `--session-duration 0` is a mistake to refuse, not the default.
+	session    time.Duration
+	sessionSet bool
+	// policyARNs is each --policy-arns as typed, and policyARNsSet whether
+	// it was given: an empty value is a mistake to refuse, not "no policies".
+	// The flag is a set, not a setting: a second occurrence adds to the
+	// list, where replacing it would store fewer policies than were typed
+	// and so a wider session.
+	policyARNs    []string
+	policyARNsSet bool
+}
+
+// awsOnlyFlag is whether the line carried a flag that only an aws source
+// takes: --identity is the gcloud source's too.
+func (o importOptions) awsOnlyFlag() bool {
+	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet || o.policyARNsSet
+}
+
+// anyGCloudFlag is whether the line carried a flag only a gcloud source
+// takes.
+func (o importOptions) anyGCloudFlag() bool {
+	return o.gcloudConfiguration != "" || o.serviceAccount != ""
+}
+
+// gcloudFlagName is the first gcloud flag given, for the refusal that names
+// it.
+func (o importOptions) gcloudFlagName() string {
+	switch {
+	case o.gcloudConfiguration != "":
+		return "--gcloud-configuration"
+	case o.serviceAccount != "":
+		return "--impersonate-service-account"
+	}
+	return "--identity"
+}
+
+// awsFlagName is the first aws flag given, for the refusal that names it.
+func (o importOptions) awsFlagName() string {
+	switch {
+	case o.awsProfile != "":
+		return "--aws-profile"
+	case o.roleARN != "":
+		return "--role-arn"
+	case o.identity != "":
+		return "--identity"
+	case o.sourceIdentity != "":
+		return "--source-identity"
+	case o.policyARNsSet:
+		return "--policy-arns"
+	}
+	return "--session-duration"
+}
+
+func hasAWSSource(d profile.SecretDecl) bool {
+	for _, s := range d.SourceList() {
+		if s.From == profile.SourceAWS {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGCloudSource(d profile.SecretDecl) bool {
+	for _, s := range d.SourceList() {
+		if s.From == profile.SourceGCloud {
+			return true
+		}
+	}
+	return false
+}
+
+// importSecrets fills a profile's secrets from where the host already keeps
+// them, so that every run afterwards reads only brig's own store.
+//
+// The whole verb is one pass over the profile's requirement list: what the
+// host holds, what the store holds, and what it takes to make the second match
+// the first. It never prints a value in any mode -- names, locators and dates
+// are the whole of the output, which is the same rule `brig secret ls` follows
+// and for the same reason.
+func importSecrets(out io.Writer, args []string) error {
+	o, err := parseImport(args)
+	if err != nil {
+		return err
+	}
+	// Canonical, not as typed: `claude` is an alias and a user's own file can
+	// shadow a built-in, so the word on the command line is the wrong one to
+	// report back -- and the report is what tells the user which profile they
+	// actually filled.
+	p, ok := profile.Lookup(o.profile)
+	if !ok {
+		return unknownImportTarget(o.profile)
+	}
+	if o.command {
+		if o.fromCommand == "" {
+			return errors.New("--from-command was given an empty command. Leave it out to read " +
+				"the sources the profile declares")
+		}
+		// A command supplies ONE secret's value, and nothing in the string says
+		// which. Guessing would store a credential under the wrong name, which
+		// is the one mistake here that is silent afterwards.
+		if len(o.names) != 1 {
+			return fmt.Errorf("--from-command fills one secret, so it needs one name: "+
+				"`brig secret import %s <name> --from-command '...'`", p.Name)
+		}
+	}
+	selected, err := selectForImport(p, o.names, o.command)
+	if err != nil {
+		return err
+	}
+	// Nothing to fill means nothing to read and nothing to store, so say so
+	// and stop before the store is opened: on a host with no keyring, opening
+	// it is what would turn a guaranteed no-op into a failure. A count of zero
+	// reads like an import that found nothing, which is a different thing
+	// from a profile with nothing to find. selectForImport has already made
+	// the named form an error, so this is the unnamed form only.
+	if len(selected) == 0 {
+		if len(p.Secrets) == 0 {
+			fmt.Fprintf(out, "%s declares no secrets, so there is nothing to import\n", p.Name)
+			return nil
+		}
+		fmt.Fprintf(out, "%s declares no secret brig can read from your host\n", p.Name)
+		reportHandCreated(out, p)
+		return nil
+	}
+
+	// An aws flag on a secret with no aws source would be dropped without a
+	// word, and the user would believe the import had used it. One set of
+	// flags names one profile and one role: applied to two aws secrets, it
+	// would store the same identity under both names, where the user meant
+	// a different one for each.
+	// The gcloud flags follow the same rules. The two sets never share a
+	// line: each names one secret, so a line with both names two.
+	if o.awsOnlyFlag() && o.anyGCloudFlag() {
+		return errors.New("the aws and gcloud flags fill different secrets; import each on its own line")
+	}
+	if err := checkCloudFlags(p, selected, o); err != nil {
+		return err
+	}
+
+	store, err := openStore()
+	if err != nil {
+		return err
+	}
+	// Listed once, for provenance: it is the only thing that tells a secret
+	// brig wrote from one the user created by hand, and List reads it without
+	// decrypting anything.
+	stored, err := storedByName(store)
+	if err != nil {
+		return err
+	}
+	// One reader for the whole run, so two secrets naming the same keychain
+	// item raise one approval dialog rather than two.
+	reader := newHostReader()
+
+	if o.dryRun {
+		fmt.Fprintf(out, "%s: --dry-run, reading your host and writing nothing\n", p.Name)
+	} else {
+		fmt.Fprintf(out, "%s: importing %s\n", p.Name, count(len(selected), "secret"))
+	}
+	var failures []error
+	for _, d := range selected {
+		if err := importOne(out, store, stored, reader, p, d, o); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	// A name with no importer is informational: a wholly successful import of a
+	// profile that mixes imported and hand-created secrets must not report
+	// failure, or `brig secret import x && brig run x` breaks. Only listed
+	// without [name...], because a named one is an error rather than a note.
+	if len(o.names) == 0 {
+		reportHandCreated(out, p)
+	}
+	reportOtherProfiles(out, p, selected)
+
+	return importFailure(failures, len(selected))
+}
+
+// checkCloudFlags refuses aws and gcloud flags that would not reach the
+// secret the user meant them for.
+//
+// --identity is both sources' flag, so on its own it belongs to the kind of
+// source the selected secrets have. With neither, it falls to the aws rule
+// and is refused in its words, as before the gcloud source existed; with
+// both, one --identity would answer for two secrets.
+func checkCloudFlags(p profile.Profile, selected []profile.SecretDecl, o importOptions) error {
+	aws, gcloud := 0, 0
+	for _, d := range selected {
+		if hasAWSSource(d) {
+			aws++
+		}
+		if hasGCloudSource(d) {
+			gcloud++
+		}
+	}
+	switch {
+	case o.awsOnlyFlag():
+		return checkSourceFlags(p, selected, o.awsFlagName(), "AWS", profile.SourceAWS, aws, hasAWSSource)
+	case o.anyGCloudFlag():
+		return checkSourceFlags(p, selected, o.gcloudFlagName(), "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+	case o.identity == "":
+		return nil
+	case aws > 0 && gcloud > 0:
+		return fmt.Errorf("--identity answers for one secret; name it: "+
+			"brig secret import %s <secret> --identity ...", p.Name)
+	case gcloud > 0:
+		return checkSourceFlags(p, selected, "--identity", "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+	}
+	return checkSourceFlags(p, selected, "--identity", "AWS", profile.SourceAWS, aws, hasAWSSource)
+}
+
+// checkSourceFlags is the rule for one source's flags: they answer for
+// exactly one secret, and it has that source.
+func checkSourceFlags(p profile.Profile, selected []profile.SecretDecl, flagName, kind, source string,
+	n int, has func(profile.SecretDecl) bool) error {
+	if n > 1 {
+		return fmt.Errorf("the %s flags answer for one secret; name it: "+
+			"brig secret import %s <secret> %s ...", kind, p.Name, flagName)
+	}
+	for _, d := range selected {
+		if !has(d) {
+			return fmt.Errorf("%s is for a secret whose source is %s, and %q has none",
+				flagName, source, d.Name)
+		}
+	}
+	return nil
+}
+
+// reportHandCreated lists the secrets no importer covers, each with the
+// command that supplies it.
+func reportHandCreated(out io.Writer, p profile.Profile) {
+	for _, d := range p.Secrets {
+		if !d.Importable() {
+			fmt.Fprintf(out, "  %s: no source on your host, so it is one you supply: "+
+				"brig secret create %s\n", d.Name, d.Name)
+		}
+	}
+}
+
+// importOne fills one secret, in the order the rules require: read, extract,
+// size, compare, then -- and only then -- write.
+func importOne(
+	out io.Writer,
+	store secret.Store,
+	stored map[string]secret.Secret,
+	reader hostReader,
+	p profile.Profile,
+	d profile.SecretDecl,
+	o importOptions,
+) error {
+	v, ok, err := readFor(reader, d, o)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("nothing to import for %q: %s held no value%s",
+			d.Name, sourceNames(d, o), advice(d))
+	}
+	value, expiry, err := hostsrc.Extract(v, d)
+	if err != nil {
+		return err
+	}
+
+	current, exists, err := currentValue(store, d.Name)
+	if err != nil {
+		return err
+	}
+	// A byte-identical value is skipped rather than rewritten: otherwise
+	// Modified comes to mean "an import last ran" rather than "the value last
+	// changed", and it is the freshness signal users read in `brig secret ls`.
+	if exists && bytes.Equal(current, value) {
+		fmt.Fprintf(out, "  %s: unchanged, %s holds what is already stored\n",
+			d.Name, describe(v.From))
+		return nil
+	}
+	// No provenance means brig did not write it, so replacing it would discard
+	// something the user supplied themselves. That is not a thing to do quietly.
+	if exists && stored[d.Name].Provenance.From == "" && !o.yes {
+		return fmt.Errorf("%q is already stored and brig did not put it there, so importing "+
+			"would replace a value you supplied. To replace it: brig secret import %s %s -y",
+			d.Name, p.Name, d.Name)
+	}
+
+	verb, would := "stored", "would be stored"
+	if exists {
+		verb, would = "replaced", "would be replaced"
+	}
+	if o.dryRun {
+		fmt.Fprintf(out, "  %s: %s from %s%s\n", d.Name, would, describe(v.From), expires(expiry))
+		return nil
+	}
+	// One Update, never delete-then-create. That window lets a concurrent run
+	// fail with "missing secret" while the very command that fills it is
+	// running, and lets one of two concurrent imports read back the other's
+	// value in verify and delete it.
+	// SafeFrom, not v.From: the locator comes from profile data and the
+	// decoder drops anything outside its charset, which would make brig's own
+	// import read back as hand-created and refuse the next one without -y.
+	prov := secret.Provenance{V: secret.ProvenanceVersion, From: secret.SafeFrom(v.From), ExpiresAt: expiry}
+	if err := secret.WriteWithProvenance(store, d.Name, value, prov, exists); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "  %s: %s from %s%s\n", d.Name, verb, describe(v.From), expires(expiry))
+	return nil
+}
+
+// readFor reads one secret's value, from the command if one was given and from
+// the declared sources otherwise.
+//
+// --from-command SUPPLIES a source rather than selecting one, which is why it
+// works on a secret that declares none at all: that is how a credential kept
+// in an external secret manager is imported without putting `sh -c` into
+// profile data, where it would be a shareable artifact that runs a host
+// command.
+func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.Value, bool, error) {
+	if o.command {
+		blob, err := runImportCommand(o.fromCommand)
+		if err != nil {
+			return hostsrc.Value{}, false, err
+		}
+		if len(blob) == 0 {
+			return hostsrc.Value{}, false, nil
+		}
+		return hostsrc.Value{Bytes: blob, From: commandLocator}, true, nil
+	}
+	for _, s := range d.SourceList() {
+		// The aws source reads no file or keychain item, so it does not go
+		// through the host reader and its one-read-per-locator memo.
+		if s.From == profile.SourceAWS {
+			v, err := readAWS(o)
+			if err != nil {
+				return hostsrc.Value{}, false, err
+			}
+			return v, true, nil
+		}
+		// Nor does the gcloud source.
+		if s.From == profile.SourceGCloud {
+			v, err := readGCloud(o)
+			if err != nil {
+				return hostsrc.Value{}, false, err
+			}
+			return v, true, nil
+		}
+		v, ok, err := reader.Read(s)
+		// A refusal is not absence: falling through to the next source after a
+		// denied dialog ends with "run the agent on the host once to log in"
+		// shown to somebody who has already done exactly that.
+		if err != nil {
+			return hostsrc.Value{}, false, err
+		}
+		if ok {
+			return v, true, nil
+		}
+	}
+	return hostsrc.Value{}, false, nil
+}
+
+// readAWS checks the user's AWS profile and returns the pointer to store.
+//
+// The pointer is the whole value: the profile name, the mode, the role and the
+// source identity. The checks run here, at import, so a lapsed SSO login, a
+// role the profile cannot assume or a missing region is refused now rather
+// than at the guest's first AWS call. The one assume-role in role mode proves
+// the role; its keys are dropped on the floor and never reach the store, the
+// output or an error.
+func readAWS(o importOptions) (hostsrc.Value, error) {
+	switch {
+	case o.roleARN != "" && o.identity != "":
+		return hostsrc.Value{}, errors.New("--role-arn and --identity self are two answers; pass one")
+	case o.roleARN == "" && o.identity == "":
+		// Self mode exports the user's own keys, so it is never what a
+		// forgotten flag falls back to.
+		return hostsrc.Value{}, errors.New("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self")
+	case o.awsProfile == "":
+		return hostsrc.Value{}, errors.New("--aws-profile is required: name the local AWS profile the sandbox's credentials come from")
+	case o.identity != "" && o.sourceIdentity != "":
+		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; self mode keeps no source identity")
+	case o.identity != "" && o.sessionSet:
+		return hostsrc.Value{}, errors.New("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
+	case o.identity != "" && o.policyARNsSet:
+		return hostsrc.Value{}, errors.New("--policy-arns requires --role-arn. Self mode exports your own keys, which cannot be narrowed")
+	}
+	sessionSeconds, err := sessionSeconds(o)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	policies, err := policyARNs(o)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	cli := newAWSCLI()
+	ctx := context.Background()
+	fail := func(err error) (hostsrc.Value, error) {
+		// aws reports a failed start in words, not as exec.ErrNotFound, so the
+		// binary is looked up again, and only after a failure.
+		bin := cli.Bin
+		if bin == "" {
+			bin = "aws"
+		}
+		if _, lerr := exec.LookPath(bin); lerr != nil {
+			return hostsrc.Value{}, errors.New(awscred.InstallHint)
+		}
+		return hostsrc.Value{}, err
+	}
+	caller, err := cli.CallerARN(ctx, o.awsProfile)
+	if err != nil {
+		return fail(err)
+	}
+	ptr := awscred.Pointer{Kind: "aws", AWSProfile: o.awsProfile, Mode: awscred.ModeSelf}
+	if o.roleARN != "" {
+		ptr.Mode, ptr.RoleARN = awscred.ModeRole, o.roleARN
+		ptr.SessionSeconds = sessionSeconds
+		ptr.PolicyARNs = policies
+		ptr.SourceIdentity = o.sourceIdentity
+		if ptr.SourceIdentity == "" {
+			if ptr.SourceIdentity, err = awscred.SourceIdentityFrom(caller); err != nil {
+				return hostsrc.Value{}, err
+			}
+		}
+	}
+	if err := ptr.Validate(); err != nil {
+		return hostsrc.Value{}, err
+	}
+	if _, err := cli.Region(ctx, o.awsProfile); err != nil {
+		return fail(err)
+	}
+	if ptr.Mode == awscred.ModeRole {
+		if _, err := cli.Fetch(ctx, ptr, awsCheckSession); err != nil {
+			return fail(err)
+		}
+	} else {
+		fmt.Fprintf(importStderr, "aws: the sandbox will get your own identity %s\n", caller)
+	}
+	doc, err := json.Marshal(ptr)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	return hostsrc.Value{Bytes: doc, From: "aws:" + o.awsProfile}, nil
+}
+
+// readGCloud checks the user's gcloud login and returns the pointer to store.
+//
+// The pointer is the whole value: the configuration, the mode, and the
+// service account or, in self mode, the account. The check is one mint, here
+// at import, so a lapsed login or a missing serviceAccountTokenCreator grant
+// is refused now rather than at the guest's first Google call. The token it
+// mints is dropped on the floor and never reaches the store, the output or an
+// error.
+func readGCloud(o importOptions) (hostsrc.Value, error) {
+	switch {
+	case o.serviceAccount != "" && o.identity != "":
+		return hostsrc.Value{}, errors.New("--impersonate-service-account and --identity self are two answers; pass one")
+	case o.serviceAccount == "" && o.identity == "":
+		// Self mode hands the sandbox the user's own token, so it is never
+		// what a forgotten flag falls back to.
+		return hostsrc.Value{}, errors.New("say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self")
+	case o.gcloudConfiguration == "":
+		return hostsrc.Value{}, errors.New("--gcloud-configuration is required: name the local gcloud configuration the sandbox's tokens come from")
+	case os.Getenv("CLOUDSDK_CONFIG") != "":
+		// gcpcred.Environ drops it, so the check below would not fail; it
+		// would pass or fail on $HOME/.config/gcloud while the user believes
+		// it read the other directory. Refusing says which one counts.
+		return hostsrc.Value{}, errors.New("CLOUDSDK_CONFIG is set; brig-broker reads gcloud logins from $HOME/.config/gcloud, so the import would check a different login than the sandbox gets. Unset it, or log in there with gcloud auth login --configuration <c>")
+	}
+	cli := newGCloudCLI()
+	ctx := context.Background()
+	fail := func(err error) (hostsrc.Value, error) {
+		// gcpcred reports a failed start in words, so the binary is looked
+		// up again, and only after a failure.
+		bin := cli.Bin
+		if bin == "" {
+			bin = "gcloud"
+		}
+		if _, lerr := exec.LookPath(bin); lerr != nil {
+			return hostsrc.Value{}, errors.New(gcpcred.InstallHint)
+		}
+		return hostsrc.Value{}, err
+	}
+	ptr := gcpcred.Pointer{Kind: "gcloud", Configuration: o.gcloudConfiguration, Mode: gcpcred.ModeSelf}
+	if o.serviceAccount != "" {
+		ptr.Mode, ptr.ServiceAccount = gcpcred.ModeImpersonate, o.serviceAccount
+	} else {
+		// Self mode records the account, so a later change of the
+		// configuration's login makes mints fail instead of handing the
+		// sandbox another identity. Account checks the configuration name
+		// before it reaches argv.
+		account, err := cli.Account(ctx, ptr.Configuration)
+		if err != nil {
+			return fail(err)
+		}
+		if account == "" {
+			return hostsrc.Value{}, fmt.Errorf("the gcloud configuration %s has no account; run gcloud auth login --configuration %s",
+				ptr.Configuration, ptr.Configuration)
+		}
+		ptr.Account = account
+	}
+	// Before the mint: the configuration and the accounts go on its argv.
+	if err := ptr.Validate(); err != nil {
+		return hostsrc.Value{}, err
+	}
+	// The token is dropped here; the mint has proved the login and, in self
+	// mode, that it is ptr.Account.
+	if _, err := cli.Mint(ctx, ptr); err != nil {
+		return fail(err)
+	}
+	if ptr.Mode == gcpcred.ModeImpersonate {
+		// The account is a courtesy in the message: the mint has already
+		// proved the login, so failing to read it does not fail the import.
+		by := ""
+		if account, err := cli.Account(ctx, ptr.Configuration); err == nil && account != "" {
+			by = " (impersonated by " + account + ")"
+		}
+		fmt.Fprintf(importStderr, "gcp: the sandbox will act as %s%s\n", ptr.ServiceAccount, by)
+	} else {
+		fmt.Fprintf(importStderr, "gcp: the sandbox will get your own identity %s\n", ptr.Account)
+	}
+	doc, err := json.Marshal(ptr)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	return hostsrc.Value{Bytes: doc, From: "gcloud:" + o.gcloudConfiguration}, nil
+}
+
+// policyARNs is the list every --policy-arns names, in order, or nil when
+// none was given.
+// An empty entry is refused rather than skipped: a list that came out empty
+// would store no policies, and the sandbox would get the whole role.
+// Each entry must be a policy ARN. IAM allows a comma in a policy name, and
+// the split cuts such a name in two; the check refuses the piece here, where
+// the error can name the flag, instead of sending STS a value never typed.
+func policyARNs(o importOptions) ([]string, error) {
+	if !o.policyARNsSet {
+		return nil, nil
+	}
+	var list []string
+	for _, v := range o.policyARNs {
+		if strings.TrimSpace(v) == "" {
+			return nil, errors.New("--policy-arns is empty. Give one or more policy ARNs, separated by commas")
+		}
+		for _, a := range strings.Split(v, ",") {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				return nil, fmt.Errorf("--policy-arns %q has an empty entry. Separate policy ARNs with single commas", v)
+			}
+			if !awscred.ValidPolicyARN(a) {
+				return nil, fmt.Errorf("--policy-arns entry %q is not a managed policy ARN. "+
+					"Use arn:aws:iam::<account>:policy/<name>, with no comma in the name", a)
+			}
+			list = append(list, a)
+		}
+	}
+	return list, nil
+}
+
+// sessionSeconds is the session --session-duration asks for, or 0 for the
+// default. The default is stored as 0, so a later change to it reaches every
+// pointer that never named one.
+func sessionSeconds(o importOptions) (int, error) {
+	if !o.sessionSet {
+		return 0, nil
+	}
+	lo := time.Duration(awscred.MinSessionSeconds) * time.Second
+	hi := time.Duration(awscred.MaxSessionSeconds) * time.Second
+	if o.session%time.Second != 0 {
+		return 0, fmt.Errorf("--session-duration %s is not whole seconds", o.session)
+	}
+	if o.session < lo || o.session > hi {
+		return 0, fmt.Errorf("--session-duration must be %s to %s, got %s", lo, hi, o.session)
+	}
+	return int(o.session / time.Second), nil
+}
+
+// capped is an io.Writer that stops at a limit and says so, which is what
+// makes it safe to hand to exec: os/exec propagates a write error out of
+// Wait, so the command is torn down instead of being read to the end.
+type capped struct {
+	buf   bytes.Buffer
+	limit int
+	what  string
+	// err is kept because the caller cannot get it from Run: closing the pipe
+	// on the writing process kills it with SIGPIPE, and an *ExitError takes
+	// precedence over a copy error in Wait's return. Reporting "exit status
+	// 141" for a value that was too long would name the signal instead of the
+	// reason.
+	err error
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if c.buf.Len()+len(p) > c.limit {
+		if room := c.limit - c.buf.Len(); room > 0 {
+			c.buf.Write(p[:room])
+		}
+		c.err = fmt.Errorf("the value on %s is over %d bytes, which is larger than any "+
+			"secret brig can store. If that is a file or a stream rather than a "+
+			"credential, this is the wrong one", c.what, c.limit)
+		return 0, c.err
+	}
+	return c.buf.Write(p)
+}
+
+// runImportCommand runs the string the user typed and takes its stdout.
+//
+// /bin/sh rather than a bare `sh` for the reason internal/secret pins
+// securityBin: this call decides what byte string becomes a stored
+// credential, so a shell earlier in $PATH would choose it.
+//
+// `sh -c` at all is safe here in the way `from: command` in profile data
+// would not be: the string always came from this user's own command line,
+// never from an imported profile that carried it onto their host.
+//
+// stdout is capped. Reading first and refusing afterwards is what `brig
+// secret create` already stopped doing -- pointed at /dev/zero it read until
+// it had 12.5 GB in memory -- and a command is the easier way to reach that,
+// because nobody has to redirect anything.
+//
+// stderr is passed straight through rather than captured and quoted into the
+// error. What a failing command says there is what makes it fixable -- an
+// expired vault session says so -- but it is not brig's to repeat: a wrapper
+// that logs the credential it fetched before exiting non-zero would put the
+// value into a brig error message, and no output of brig's own ever holds a
+// value. Passing it through shows the user exactly what their command wrote,
+// as their command wrote it, and leaves brig holding none of it.
+func runImportCommand(script string) ([]byte, error) {
+	cmd := exec.Command("/bin/sh", "-c", script)
+	out := &capped{limit: maxValueBytes, what: "--from-command stdout"}
+	cmd.Stdout, cmd.Stderr = out, os.Stderr
+	err := cmd.Run()
+	// The cap first: it is the reason the command died, and the signal it
+	// died of is not what the reader needs to know.
+	if out.err != nil {
+		return nil, out.err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("--from-command failed: %w (anything it reported is above)", err)
+	}
+	// One trailing line ending, the same rule `brig secret create` applies to
+	// stdin: `--from-command 'gh auth token'` is the line people type, and a
+	// stored newline breaks an auth header in a way that reads like a bad
+	// token.
+	value := out.buf.Bytes()
+	if v, ok := bytes.CutSuffix(value, []byte("\n")); ok {
+		return bytes.TrimSuffix(v, []byte("\r")), nil
+	}
+	return value, nil
+}
+
+// selectForImport decides which declarations this run fills.
+//
+// Without [name...] that is every one an importer covers. With names it is
+// exactly those, and a named secret with no source is an ERROR rather than a
+// note: the user asked for something that cannot be imported, and skipping it
+// silently would report success for work that did not happen.
+func selectForImport(p profile.Profile, names []string, viaCommand bool) ([]profile.SecretDecl, error) {
+	if len(names) == 0 {
+		var out []profile.SecretDecl
+		for _, d := range p.Secrets {
+			if d.Importable() {
+				out = append(out, d)
+			}
+		}
+		return out, nil
+	}
+	var out []profile.SecretDecl
+	for _, name := range names {
+		d, ok := p.Secret(name)
+		if !ok {
+			if len(p.Secrets) == 0 {
+				return nil, fmt.Errorf("%s declares no secrets, so there is nothing to import "+
+					"for %q", p.Name, name)
+			}
+			return nil, fmt.Errorf("%s declares no secret %q. It declares: %s",
+				p.Name, name, strings.Join(profile.SecretNames(p.Secrets), " "))
+		}
+		// --from-command supplies the source, so a secret that declares none is
+		// exactly the case it exists for.
+		if !d.Importable() && !viaCommand {
+			return nil, fmt.Errorf("%q has no source brig can read on your host, so it is one "+
+				"you supply: brig secret create %s", name, name)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// storedByName is the store's own listing, keyed for lookup. Names only and no
+// values: List reads attributes, so this costs no decrypt and raises no
+// dialog.
+func storedByName(store secret.Store) (map[string]secret.Secret, error) {
+	list, err := store.List()
+	if err != nil {
+		return nil, fmt.Errorf("could not list brig's secret store: %w", err)
+	}
+	byName := make(map[string]secret.Secret, len(list))
+	for _, s := range list {
+		byName[s.Name] = s
+	}
+	return byName, nil
+}
+
+// currentValue reads what is stored under a name now, which is what the
+// byte-identical skip compares against. Absence is ordinary; anything else is
+// a store that cannot answer, and importing on top of an unreadable value
+// would be a write whose outcome nobody could check.
+func currentValue(store secret.Store, name string) (value []byte, exists bool, err error) {
+	value, err = store.Read(name)
+	switch {
+	case err == nil:
+		return value, true, nil
+	case errors.Is(err, secret.ErrNotFound):
+		return nil, false, nil
+	case errors.Is(err, secret.ErrDamaged):
+		// There, and not readable as stored. The import is the repair the
+		// read error asks for, so it goes ahead as an update and writes
+		// over both halves. No current value to compare against, so an
+		// unchanged source is written rather than skipped.
+		return nil, true, nil
+	}
+	return nil, false, fmt.Errorf("could not read the stored %q: %w", name, err)
+}
+
+// reportOtherProfiles names the other profiles a fill reaches.
+//
+// Secret names are flat and global, so importing `mytool-token` for one
+// profile fills it for every profile that declares that name. That is the
+// point of a flat namespace and it is also its blast radius, so the output
+// says it rather than leaving it to be discovered.
+func reportOtherProfiles(out io.Writer, p profile.Profile, selected []profile.SecretDecl) {
+	for _, d := range selected {
+		var others []string
+		for _, q := range profile.All() {
+			if q.Name == p.Name {
+				continue
+			}
+			if _, ok := q.Secret(d.Name); ok {
+				others = append(others, q.Name)
+			}
+		}
+		if len(others) > 0 {
+			fmt.Fprintf(out, "note: %s also declares %s, so this fills it there too\n",
+				strings.Join(others, ", "), d.Name)
+		}
+	}
+}
+
+// importFailure is the exit status rule: non-zero only when a name an importer
+// covers could not be filled.
+func importFailure(failures []error, selected int) error {
+	switch len(failures) {
+	case 0:
+		return nil
+	case 1:
+		return failures[0]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d of %s could not be imported:", len(failures), count(selected, "secret"))
+	for _, err := range failures {
+		fmt.Fprintf(&b, "\n  %v", err)
+	}
+	return errors.New(b.String())
+}
+
+// unknownImportTarget answers the mistake this verb invites. import is the
+// only secret verb whose first argument is not a secret name, so
+// `brig secret import claude-credentials` -- typed by someone who has just
+// read a message naming that secret -- is the line people actually type.
+func unknownImportTarget(name string) error {
+	for _, p := range profile.All() {
+		if _, ok := p.Secret(name); ok {
+			return fmt.Errorf("%q is a secret, not a profile, and import takes the profile that "+
+				"declares it: brig secret import %s %s", name, p.Name, name)
+		}
+	}
+	return fmt.Errorf("unknown profile %q. `brig agent ls` lists them", name)
+}
+
+// describe renders a locator for a person. A command's provenance is the bare
+// word `command`, which on its own reads like a locator with its value missing.
+func describe(from string) string {
+	if from == commandLocator {
+		return "the command you gave"
+	}
+	return from
+}
+
+// sourceNames lists what was actually read, so "nothing to import" says where
+// brig looked rather than leaving the user to guess.
+func sourceNames(d profile.SecretDecl, o importOptions) string {
+	if o.command {
+		return "the command you gave"
+	}
+	locators := make([]string, 0, len(d.SourceList()))
+	for _, s := range d.SourceList() {
+		locators = append(locators, s.Locator())
+	}
+	return strings.Join(locators, ", ")
+}
+
+// advice is the profile's own hint for a source that held nothing -- "run
+// `claude` on the host once to log in". The same text the run path's warning
+// carries, through the same accessor, because a user who reads both must not
+// be told two different things about one secret.
+func advice(d profile.SecretDecl) string {
+	if hint := d.HintText(); hint != "" {
+		return ". " + hint
+	}
+	return ""
+}
+
+// expires renders the expiry a source carried, or nothing when it carried
+// none. Absence is not evidence of expiry, so an absent one says nothing at
+// all rather than "expires never".
+func expires(millis int64) string {
+	if millis == 0 {
+		return ""
+	}
+	at := time.UnixMilli(millis).Local().Format("2006-01-02 15:04")
+	if millis < time.Now().UnixMilli() {
+		return ", expired " + at
+	}
+	return ", expires " + at
+}
+
+// count writes "1 secret" and "2 secrets", because a report that says
+// "1 secrets" reads as a bug in the thing that just touched your credentials.
+func count(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// parseImport parses `import <profile> [name...]` and its flags.
+//
+// Same shape as nameAndFile and nameAndYes, and for the same reason: Parse
+// stops at the first bare word, and `import mytool -y` and `import -y mytool`
+// are both lines people type.
+func parseImport(args []string) (importOptions, error) {
+	var o importOptions
+	fs := flag.NewFlagSet("import", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	fs.BoolVar(&o.dryRun, "dry-run", false, "")
+	fs.StringVar(&o.fromCommand, "from-command", "", "")
+	fs.BoolVar(&o.yes, "y", false, "")
+	fs.BoolVar(&o.yes, "yes", false, "")
+	fs.StringVar(&o.awsProfile, "aws-profile", "", "")
+	fs.StringVar(&o.roleARN, "role-arn", "", "")
+	fs.StringVar(&o.identity, "identity", "", "")
+	fs.StringVar(&o.sourceIdentity, "source-identity", "", "")
+	fs.DurationVar(&o.session, "session-duration", 0, "")
+	fs.StringVar(&o.gcloudConfiguration, "gcloud-configuration", "", "")
+	fs.StringVar(&o.serviceAccount, "impersonate-service-account", "", "")
+	fs.Var(repeated{&o.policyARNs}, "policy-arns", "")
+
+	var words []string
+	for rest := args; ; {
+		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return o, err
+			}
+			msg := err.Error()
+			if flagName, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
+				msg = "unknown flag " + spell(flagName)
+			} else {
+				msg = rewriteFlagError(err).Error()
+			}
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity, --session-duration and --policy-arns, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		words = append(words, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+	o.command = seen(fs, "from-command")
+	o.sessionSet = seen(fs, "session-duration")
+	o.policyARNsSet = seen(fs, "policy-arns")
+	// Only "self" is an identity: it is the one non-role answer, and a
+	// misspelling must not fall through to the role path.
+	if o.identity != "" && o.identity != "self" {
+		return o, fmt.Errorf("--identity accepts only self, got %q; for a role use --role-arn, for a service account --impersonate-service-account", o.identity)
+	}
+	if len(words) == 0 {
+		return o, errors.New("import needs a profile, for example " +
+			"`brig secret import claude-code`")
+	}
+	o.profile, o.names = words[0], words[1:]
+	return o, nil
+}
