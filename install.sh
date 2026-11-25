@@ -24,6 +24,10 @@
 #
 # Settings:
 #
+#   BRIG_EDITION          community (default) or enterprise. enterprise
+#                         installs Brig Enterprise, the brig that adds brig
+#                         login, from its own archive in the same release,
+#                         checked against the same checksums.txt
 #   BRIG_INSTALL_DIR      where to install (default /usr/local/bin)
 #   BRIG_VERSION          a brig tag instead of the newest release
 #   HULL_VERSION          a hull tag instead of the newest release
@@ -91,6 +95,14 @@ COSIGN_SHA_LINUX_ARM64=c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5
 
 say() { printf 'brig-install: %s\n' "$1" >&2; }
 die() { say "$1"; exit 1; }
+
+# Checked first, so a typo stops the install before anything is downloaded,
+# rather than installing the edition it did not ask for.
+case "${BRIG_EDITION:-community}" in
+  community)  brig_archive_prefix=brig ;;
+  enterprise) brig_archive_prefix=brig-enterprise ;;
+  *) die "BRIG_EDITION is \"$BRIG_EDITION\", which is not an edition. Set it to community or enterprise, or leave it unset for community" ;;
+esac
 
 command -v curl > /dev/null 2>&1 || die "curl is required"
 command -v tar  > /dev/null 2>&1 || die "tar is required"
@@ -191,7 +203,7 @@ fetch_brig() {
   fi
 
   bare="${brig_version#v}"
-  archive="brig-${bare}-${os}-${arch}.tar.gz"
+  archive="${brig_archive_prefix}-${bare}-${os}-${arch}.tar.gz"
   base="https://github.com/$BRIG_REPO/releases/download/$brig_version"
 
   say "downloading $archive"
