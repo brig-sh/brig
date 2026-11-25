@@ -7,7 +7,14 @@ package main
 
 import (
 	"github.com/brig-sh/brig/enterprise/internal/login"
+	"github.com/brig-sh/brig/enterprise/internal/recordings"
 	"github.com/brig-sh/brig/internal/cli"
 )
 
-func main() { cli.Main(cli.Options{Edition: "enterprise", Commands: login.Commands()}) }
+func main() {
+	cli.Main(cli.Options{
+		Edition:  "enterprise",
+		Commands: append(login.Commands(), recordings.Commands()...),
+		Attach:   recordings.Attach,
+	})
+}

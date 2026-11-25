@@ -2,7 +2,8 @@
 // Use of this file is governed by the NOFire AI Enterprise License in enterprise/LICENSE.
 
 // Package login is brig login and brig logout, the commands Brig Enterprise
-// adds to the command line of internal/cli.
+// adds to the command line of internal/cli, and AccessToken, the one way the
+// session recorder reads the token they store.
 package login
 
 import (
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -43,6 +45,125 @@ func Commands() []cli.Command {
 		Usage: logoutUsage,
 		Run:   logoutCmd,
 	}}
+}
+
+// TrustStoreVars are the environment variables that give Brig a trust store.
+var TrustStoreVars = []string{"SSL_CERT_FILE", "SSL_CERT_DIR"}
+
+// getwd is the working directory; tests replace it.
+var getwd = os.Getwd
+
+// errParentElement and errWorkingDir say why a trust-store value has no
+// canonical form.
+var (
+	errParentElement = errors.New("the path has a .. element")
+	errWorkingDir    = errors.New("the working directory cannot be read")
+)
+
+// hasParentElement reports whether any element of the path p, split at "/", is
+// "..". It looks at the raw text, so a..b is fine and a/../b is not. A parent
+// step is not cleaned away by text: the kernel resolves it through symlinks, so
+// a/../b can open a file that the cleaned path does not name.
+func hasParentElement(p string) bool {
+	for _, e := range strings.Split(p, "/") {
+		if e == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// trustEntries are the paths a trust-store variable names, as Go reads them
+// (crypto/x509 root_unix.go): SSL_CERT_FILE is one path, and SSL_CERT_DIR is a
+// list split at every ":". An empty entry of the list names nothing, because
+// Go cannot read a directory called "", and it stays empty.
+func trustEntries(name, val string) []string {
+	if name == "SSL_CERT_DIR" {
+		return strings.Split(val, ":")
+	}
+	return []string{val}
+}
+
+// canonicalTrust is the value of the trust-store variable name as absolute,
+// clean paths, made absolute against the working directory now, and joined as
+// they were. A relative value names a different file in every directory, so the
+// value stored at login and the value compared at run time are both made
+// absolute first. "." elements and doubled separators are cleaned. A value with
+// a ".." element is refused, before any cleaning, and so is a relative value
+// when the working directory cannot be read. Symlinks are not resolved and the
+// file is not read.
+func canonicalTrust(name, val string) (string, error) {
+	parts := trustEntries(name, val)
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		if hasParentElement(p) {
+			return "", errParentElement
+		}
+		if !filepath.IsAbs(p) {
+			wd, err := getwd()
+			if err != nil {
+				return "", errWorkingDir
+			}
+			p = filepath.Join(wd, p)
+		}
+		parts[i] = filepath.Clean(p)
+	}
+	return strings.Join(parts, ":"), nil
+}
+
+// UnacceptedTrust returns the first of TrustStoreVars that getenv sets to
+// something other than what accepted holds for it, or "" when every one that is
+// set was accepted with the same value. Values are compared as absolute, clean
+// paths (see canonicalTrust), so a relative value from another working
+// directory is not what was accepted. A value with a ".." element is never
+// accepted, whatever is stored. The file is not read, and symlinks are not
+// resolved.
+func UnacceptedTrust(accepted map[string]string, getenv func(string) string) string {
+	for _, v := range TrustStoreVars {
+		if val := getenv(v); val != "" {
+			canon, err := canonicalTrust(v, val)
+			if got, ok := accepted[v]; err != nil || !ok || got == "" || got != canon {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// AccessToken returns the access token stored for exactly d, and "" for it when
+// there is none, when it has expired, or when the host has no keychain. It asks
+// the keychain and nothing else: no prompt, no network call, no file written,
+// and no detail about why there is no token.
+//
+// When a login is stored and a trust store from the environment was not
+// accepted at that login (see UnacceptedTrust), it returns no token and the
+// name of the variable, so the caller can say why it sends nothing. It never
+// returns a variable's value, and it never names one for a person who has no
+// unexpired login.
+//
+// It is the one use of the login store outside brig login and brig logout,
+// and the session recorder is its one caller (see the architecture tests of
+// internal/secret/login and of enterprise/internal/recordings). The recorder
+// sends the token to d and nowhere else. The token is never handed to a
+// sandbox.
+func AccessToken(d nofireauth.Deployment) (token, unaccepted string) {
+	if d.String() == "" {
+		return "", ""
+	}
+	store, err := openLoginStore()
+	if err != nil {
+		return "", ""
+	}
+	t, err := store.Load(d.String())
+	if err != nil || t.AccessToken == "" || !t.ExpiresAt.After(time.Now()) {
+		return "", ""
+	}
+	if v := UnacceptedTrust(t.Trust, os.Getenv); v != "" {
+		return "", v
+	}
+	return t.AccessToken, ""
 }
 
 // completeLogin offers brig login's flags. --ttl takes a lifetime, typed
@@ -154,7 +275,8 @@ func loginCmd(out io.Writer, args []string) (err error) {
 	// environment is confirmed. Without a terminal nobody can confirm it, so
 	// the login is refused: a script names the deployment on its own line.
 	envURL := src == nofireauth.FromEnv && d.String() != nofireauth.DefaultURL
-	if err := confirmEnvironment(out, "login", d, envURL); err != nil {
+	trust, err := confirmEnvironment(out, "login", d, envURL)
+	if err != nil {
 		return err
 	}
 	store, err := openLoginStore()
@@ -210,7 +332,7 @@ func loginCmd(out io.Writer, args []string) (err error) {
 	// The token this login replaces. Once the new one is saved nothing here
 	// can log the old one out, so it is revoked below.
 	prev, _ := store.Load(d.String())
-	t := login.Token{URL: d.String(), AccessToken: g.AccessToken, ExpiresAt: time.Now().Add(g.ExpiresIn)}
+	t := login.Token{URL: d.String(), AccessToken: g.AccessToken, ExpiresAt: time.Now().Add(g.ExpiresIn), Trust: trust}
 	if err := store.Save(t); err != nil {
 		// A token that is not stored cannot be used or logged out of, so it
 		// must not stay valid on the server. Not under ctx: an interrupt
@@ -325,7 +447,7 @@ func logoutCmd(out io.Writer, args []string) (err error) {
 	// Logout sends the token, so a trust store from the environment is
 	// confirmed as for login: with its own CA, whoever set it can answer the
 	// revocation, keep the token live and let Brig print "Logged out".
-	if err := confirmEnvironment(out, "logout", d, false); err != nil {
+	if _, err := confirmEnvironment(out, "logout", d, false); err != nil {
 		return err
 	}
 	store, err := openLoginStore()
@@ -423,24 +545,41 @@ func printProxy(out io.Writer, d nofireauth.Deployment) {
 // Go reads SSL_CERT_FILE and SSL_CERT_DIR on Linux and not on macOS, but they
 // are confirmed on every OS: the question costs little, and one rule is
 // easier to state than two.
-func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, envURL bool) error {
+//
+// It returns the trust stores it named, each as an absolute path, when the
+// answer is yes. brig login stores them with the token, so a later recorded run
+// can tell a trust store the person accepted from one that was set since. A
+// yes accepts every variable that was named.
+func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, envURL bool) (map[string]string, error) {
 	var caVar string
-	for _, v := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR"} {
+	trust := map[string]string{}
+	for _, v := range TrustStoreVars {
 		if val := os.Getenv(v); val != "" {
+			// The absolute path is what the question names and what is stored. A
+			// value that has none is not asked about.
+			canon, err := canonicalTrust(v, val)
+			if errors.Is(err, errParentElement) {
+				return nil, fmt.Errorf("Brig does not trust a certificate path with .. in it, and %s has one. Set an absolute path", v)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("%s is a relative path, and Brig cannot read the working directory to make it absolute. Set an absolute path", v)
+			}
+			val = canon
 			fmt.Fprintf(out, "Trusting certificates from %s (from %s)\n", nofireauth.CleanLine(val), v)
+			trust[v] = val
 			if caVar == "" {
 				caVar = v
 			}
 		}
 	}
 	if !envURL && caVar == "" {
-		return nil
+		return nil, nil
 	}
 	if !isTerminal() {
 		if envURL {
-			return fmt.Errorf("%s names %s, and brig needs a terminal to confirm it. Pass the URL as an argument to log in without one", nofireauth.EnvURL, d)
+			return nil, fmt.Errorf("%s names %s, and brig needs a terminal to confirm it. Pass the URL as an argument to log in without one", nofireauth.EnvURL, d)
 		}
-		return fmt.Errorf("%s is set, and brig %s needs a terminal to confirm it. Unset %s, or run brig %s from a terminal", caVar, verb, caVar, verb)
+		return nil, fmt.Errorf("%s is set, and brig %s needs a terminal to confirm it. Unset %s, or run brig %s from a terminal", caVar, verb, caVar, verb)
 	}
 	question, cancelled := "Continue logging in to %s? [y/N] ", "login cancelled. Brig sent nothing to %s"
 	if verb == "logout" {
@@ -450,7 +589,10 @@ func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, env
 	line, _ := cli.ReadAnswer(os.Stdin)
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return nil
+		if len(trust) == 0 {
+			return nil, nil
+		}
+		return trust, nil
 	}
-	return fmt.Errorf(cancelled, d)
+	return nil, fmt.Errorf(cancelled, d)
 }

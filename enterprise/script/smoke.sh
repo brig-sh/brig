@@ -53,6 +53,29 @@ out="$("$WORK/brig" __complete -- login - 2>/dev/null | tr '\n' ' ')"
 [ "$out" = ":names --browser --device --ttl " ] && ok "completion offers brig login's flags" \
   || bad "completion offers brig login's flags -- got: $out"
 
+# --- brig recordings ---
+out="$("$WORK/brig" help 2>&1)"
+case "$out" in
+  *"brig logout [URL]"*"brig recordings flush"*"brig telemetry status|on|off"*) ok "brig help lists recordings" ;;
+  *) bad "brig help lists recordings -- got: $out" ;;
+esac
+out="$("$WORK/brig" __complete -- rec 2>/dev/null | tr '\n' ' ')"
+[ "$out" = ":names recordings " ] && ok "completion offers recordings" \
+  || bad "completion offers recordings -- got: $out"
+out="$("$WORK/brig" __complete -- recordings "" 2>/dev/null | tr '\n' ' ')"
+[ "$out" = ":names flush " ] && ok "completion offers recordings flush" \
+  || bad "completion offers recordings flush -- got: $out"
+# With nothing waiting, flush sends nothing and creates nothing in the home.
+home="$WORK/recordings-home"; mkdir "$home"
+out="$(HOME="$home" "$WORK/brig" recordings flush 2>&1)"; rc=$?
+case "$out" in
+  "recordings: 0 sent and closed, 0 waiting for a login or a live run, 0 not sent yet") [ "$rc" = 0 ] \
+    && ok "brig recordings flush with nothing waiting" || bad "brig recordings flush exited $rc" ;;
+  *) bad "brig recordings flush with nothing waiting -- got (exit $rc): $out" ;;
+esac
+[ -z "$(ls -A "$home")" ] && ok "brig recordings flush leaves the home empty" \
+  || bad "brig recordings flush wrote into the home: $(ls -A "$home")"
+
 # --- brig login against the fake authorization server ---
 # fakenofire grants a token to whoever asks (-approve auto). brig-stored is a
 # test binary of internal/login that is Brig Enterprise itself, with the

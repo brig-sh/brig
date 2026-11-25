@@ -31,13 +31,16 @@ type Client struct {
 // endpoint that redirects is answering for someone else, and a redirect would
 // carry the request, and in the device flow the device code, along with it.
 func NewClient(d Deployment, version string) *Client {
-	return &Client{
-		http: &http.Client{
-			Timeout:       requestTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		d:  d,
-		ua: "brig/" + version,
+	return &Client{http: NewHTTPClient(requestTimeout), d: d, ua: "brig/" + version}
+}
+
+// NewHTTPClient returns the HTTP client every call to a deployment uses: it
+// never follows a redirect, so a bearer token or a device code is never sent
+// to a host the deployment did not name. timeout is the whole request's.
+func NewHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 

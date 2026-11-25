@@ -674,7 +674,8 @@ func TestCATrustStoreAsksOnATerminal(t *testing.T) {
 	if err == nil || exitCode(err) != exitFailure {
 		t.Errorf("err = %v (exit %d), want exit 1", err, exitCode(err))
 	}
-	if !strings.Contains(out.String(), "Trusting certificates from ./ca[2K.pem (from SSL_CERT_FILE)\n") {
+	wd, _ := os.Getwd()
+	if !strings.Contains(out.String(), "Trusting certificates from "+filepath.Join(wd, "ca[2K.pem")+" (from SSL_CERT_FILE)\n") {
 		t.Errorf("out = %q, want the trust store named, cleaned", out.String())
 	}
 	if !strings.Contains(stderr, "Continue logging in to "+s.URL+"? [y/N]") {
