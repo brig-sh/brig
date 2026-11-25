@@ -194,6 +194,14 @@ type Options struct {
 	Edition string
 	// Commands are the verbs this build adds.
 	Commands []Command
+	// Attach, when set, is asked before each attached run on a runtime that
+	// can hand the attached exec to a relay. It returns the function that
+	// runs that exec, or nil for a run that goes the way it always has. It
+	// must touch neither the network nor the disk: the runtime calls the
+	// function it returns only once the exec's command is built, and that
+	// function may return ErrRelayDeclined before it runs anything.
+	// Brig Community sets none.
+	Attach func(AttachedRun) func(argv, env []string) (int, error)
 }
 
 // Command is a verb that a build adds to the command line.
@@ -211,6 +219,10 @@ type Command struct {
 	// Run runs the command with the words after the verb, and prints its
 	// output to out.
 	Run func(out io.Writer, args []string) error
+	// Uncounted keeps telemetry from counting the command, as it does not
+	// count brig telemetry or brig completion. Leave it false for a command
+	// that a person runs and the event should name.
+	Uncounted bool
 }
 
 // The build's additions, which Main records before it reads the line.
@@ -232,6 +244,7 @@ func register(o Options) {
 	if o.Edition != "" {
 		edition = o.Edition
 	}
+	attachHook = o.Attach
 	for _, c := range o.Commands {
 		commands[c.Verb] = c
 		verbs = append(verbs, c.Verb)
@@ -864,6 +877,13 @@ func dispatch(args []string) error {
 			}
 			return emitAgentRun(code)
 		}
+		if relayRun(cfg, t) {
+			code, err := cfg.ShellAttached(set, tail)
+			if err != nil {
+				return err
+			}
+			return &agentExit{code: code}
+		}
 		return cfg.Shell(set, tail)
 	case "exec":
 		if len(tail) == 0 {
@@ -953,6 +973,13 @@ func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 			}
 			return emitAgentRun(code)
 		}
+		if relayRun(cfg, t) {
+			code, err := cfg.ShellAttached(set, tail)
+			if err != nil {
+				return err
+			}
+			return &agentExit{code: code}
+		}
 		return cfg.Shell(set, tail)
 	}
 	argv := append([]string{t.Binary}, agentArgs(cfg, t, tail)...)
@@ -962,6 +989,13 @@ func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 			return err
 		}
 		return emitAgentRun(code)
+	}
+	if relayRun(cfg, t) {
+		code, err := cfg.ExecAttached(set, argv, isTerminal())
+		if err != nil {
+			return err
+		}
+		return &agentExit{code: code}
 	}
 	return cfg.Exec(set, argv, isTerminal())
 }

@@ -56,6 +56,11 @@ type Config struct {
 	Profile profile.Profile
 	Runtime runtime.Runtime
 
+	// Relay, when set, runs the attached exec (ExecAttached, ShellAttached)
+	// itself, in place of a child on brig's own terminal. wrap only passes it
+	// on to the runtime and knows nothing about what it does.
+	Relay func(argv, env []string) (int, error)
+
 	// RawName is the session name as typed; Slug is its path-safe form. The
 	// raw name reaches the agent as its display name, so what you typed is
 	// what you see; only the paths use the slug.

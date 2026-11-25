@@ -175,3 +175,20 @@ func TestTheProjectVariableIsDroppedFromBindingsAndRoutes(t *testing.T) {
 		t.Errorf("warning %q does not name the route", warnings[1])
 	}
 }
+
+// The relay of a Config reaches the runtime in the exec's spec, and a Config
+// with none leaves it nil: wrap passes it on and decides nothing about it.
+func TestAnExecCarriesTheConfigsRelay(t *testing.T) {
+	c := livenessConfig(t, &livenessRuntime{})
+	if spec := c.execSpec(creds.Set{}, []string{"true"}, false); spec.Relay != nil {
+		t.Error("a Config with no relay gave the exec one")
+	}
+	c.Relay = func(argv, env []string) (int, error) { return 7, nil }
+	spec := c.execSpec(creds.Set{}, []string{"true"}, false)
+	if spec.Relay == nil {
+		t.Fatal("the Config's relay did not reach the exec's spec")
+	}
+	if code, _ := spec.Relay(nil, nil); code != 7 {
+		t.Errorf("the spec's relay returned %d, want the Config's 7", code)
+	}
+}

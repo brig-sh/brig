@@ -27,6 +27,15 @@ func IsTerminal(f *os.File) bool {
 	return isatty(f.Fd())
 }
 
+// TerminalSize returns the columns and rows of the terminal f is, or 0 and 0
+// when f is not a terminal or the driver reports no size.
+func TerminalSize(f *os.File) (cols, rows int) {
+	if f == nil {
+		return 0, 0
+	}
+	return termSize(f.Fd())
+}
+
 // readable returns whether f is a terminal whose TERM names one that
 // understands escape codes and a layout drawn for a person: a TERM of dumb, or
 // none, may print the codes as text. The spinner and the warnings' layout

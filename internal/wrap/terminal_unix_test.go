@@ -34,6 +34,27 @@ func TestTermWidthReadsTheTerminal(t *testing.T) {
 	}
 }
 
+func TestTerminalSizeReadsColumnsAndRows(t *testing.T) {
+	_, tty := ttytest.Pair(t)
+	if err := unix.IoctlSetWinsize(int(tty.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 31, Col: 97}); err != nil {
+		t.Fatalf("set the pseudo-terminal's size: %v", err)
+	}
+	if cols, rows := TerminalSize(tty); cols != 97 || rows != 31 {
+		t.Errorf("TerminalSize = %dx%d on a 97x31 terminal", cols, rows)
+	}
+	file, err := os.Create(filepath.Join(t.TempDir(), "log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if cols, rows := TerminalSize(file); cols != 0 || rows != 0 {
+		t.Errorf("TerminalSize = %dx%d on a file, want 0x0", cols, rows)
+	}
+	if cols, rows := TerminalSize(nil); cols != 0 || rows != 0 {
+		t.Errorf("TerminalSize = %dx%d on nil, want 0x0", cols, rows)
+	}
+}
+
 // The driver answers for the controlling terminal alone. The test binary's
 // pseudo-terminal is not one, and neither is a file.
 func TestForegroundAnswersOnlyForTheControllingTerminal(t *testing.T) {

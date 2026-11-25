@@ -222,6 +222,9 @@ func telemetryCommand(verb string) (command string, asks bool) {
 	case "telemetry", "completion", "target", "config", "init":
 		return "", false
 	}
+	if c, ok := commands[verb]; ok && c.Uncounted {
+		return "", false
+	}
 	if v, ok := countedVerbs[verb]; ok {
 		return v.command, v.asks
 	}

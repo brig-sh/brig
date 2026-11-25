@@ -15,6 +15,9 @@ func isatty(uintptr) bool { return false }
 // spinner frame whole.
 func termWidth(uintptr) int { return 0 }
 
+// termSize on a platform brig does not ship for answers 0 and 0.
+func termSize(uintptr) (cols, rows int) { return 0, 0 }
+
 // foreground on a platform brig does not ship for answers false, which keeps a
 // spinner off the terminal.
 func foreground(uintptr) bool { return false }
