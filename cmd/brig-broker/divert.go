@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -92,7 +95,10 @@ type divertHandler interface {
 	// serve serves one connection to dst after its preamble. It owns
 	// client, and fills in a.
 	serve(ctx context.Context, client net.Conn, dst netip.AddrPort, a *divertAudit)
-	// close stops serving, and closes what open opened.
+	// close stops serving, and closes what open opened. It does not wait
+	// for a serve in flight: the client of every serve is closed when the
+	// routes that opened the handler are replaced or removed, or the socket
+	// closes, and ctx is done then too.
 	close()
 }
 
@@ -112,6 +118,12 @@ func ownedByMe(info os.FileInfo) bool {
 }
 
 // divertSandbox is the divert socket of one sandbox and what serves it.
+//
+// One socket serves a sandbox's routes and its guest services. The routes
+// hold it when they reach brig.internal or have a route mode besides
+// endpoint; a service holds it while it serves the guest at brig.internal.
+// It opens with the first holder and closes with the last, so a change of
+// routes keeps the guest's open connections to a service.
 type divertSandbox struct {
 	srv  *server
 	id   string
@@ -120,19 +132,36 @@ type divertSandbox struct {
 	// internal is the address the sandbox's guest resolves brig.internal
 	// to, or the zero Addr for a sandbox that does not reach it.
 	internal netip.Addr
+	// mu guards routes, services, handlers and routesCtx. A registration of routes or
+	// of a service changes them while the socket serves connections. When
+	// s.mu is needed as well, it is taken first.
+	mu sync.Mutex
+	// routes reports that the sandbox's routes hold the socket. Only then is
+	// the link-local address served.
+	routes bool
+	// services are the kinds of the guest services that hold the socket.
+	services map[string]struct{}
 	// handlers serve the sandbox's route modes besides endpoint, in mode
 	// order.
 	handlers []divertHandler
-	sem      chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
+	// routesCtx is done when the routes it was made for are replaced or
+	// removed, and closes the connections they serve: the link-local ones
+	// and those of a route mode. It also ends the route requests on
+	// brig.internal (see routesRequest), whose connection a service shares.
+	// A service can keep the socket open past the routes, so l.ctx alone
+	// would leave them served.
+	routesCtx    context.Context
+	routesCancel context.CancelFunc
+	sem          chan struct{}
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 // openDivert listens on the divert socket of sandbox id, and opens the
 // divert handler of each of modes with its settings. internal is the
-// sandbox's brig.internal address, or the zero Addr. The socket is 0600 in a
-// 0700 directory.
-func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.RouteMode,
+// sandbox's brig.internal address, or the zero Addr. routes reports that the
+// sandbox's routes hold the socket. The socket is 0600 in a 0700 directory.
+func (s *server) openDivert(id string, internal netip.Addr, routes bool, modes []v1alpha1.RouteMode,
 	settings map[v1alpha1.RouteMode]json.RawMessage) (*divertSandbox, error) {
 	sock, err := injector.DivertSocket(s.cfg.dir, id)
 	if err != nil {
@@ -153,20 +182,11 @@ func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.Rou
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	var handlers []divertHandler
-	closeHandlers := func() {
-		for _, h := range handlers {
-			h.close()
-		}
+	handlers, err := s.openHandlers(id, modes, settings)
+	if err != nil {
+		return nil, err
 	}
-	for _, m := range modes {
-		h, err := divertModes[m].open(s, id, settings[m])
-		if err != nil {
-			closeHandlers()
-			return nil, err
-		}
-		handlers = append(handlers, h)
-	}
+	closeHandlers := func() { closeAll(handlers) }
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		closeHandlers()
@@ -178,10 +198,89 @@ func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.Rou
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal, handlers: handlers,
+	routesCtx, routesCancel := context.WithCancel(ctx)
+	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal, routes: routes,
+		services: map[string]struct{}{}, handlers: handlers, routesCtx: routesCtx, routesCancel: routesCancel,
 		sem: make(chan struct{}, maxDivertConns), ctx: ctx, cancel: cancel}
 	go l.serve()
 	return l, nil
+}
+
+// openHandlers opens the divert handler of each of modes with its settings,
+// and closes those it opened when one fails.
+func (s *server) openHandlers(id string, modes []v1alpha1.RouteMode,
+	settings map[v1alpha1.RouteMode]json.RawMessage) ([]divertHandler, error) {
+	var handlers []divertHandler
+	for _, m := range modes {
+		h, err := divertModes[m].open(s, id, settings[m])
+		if err != nil {
+			closeAll(handlers)
+			return nil, err
+		}
+		handlers = append(handlers, h)
+	}
+	return handlers, nil
+}
+
+func closeAll(handlers []divertHandler) {
+	for _, h := range handlers {
+		h.close()
+	}
+}
+
+// setRoutes replaces what the sandbox's routes serve on the socket, closes
+// the connections the old routes serve, and closes the handlers it replaces.
+// The listener and the connections of the guest services stay.
+func (l *divertSandbox) setRoutes(routes bool, handlers []divertHandler) {
+	l.mu.Lock()
+	old, oldCancel := l.handlers, l.routesCancel
+	l.routes, l.handlers = routes, handlers
+	l.routesCtx, l.routesCancel = context.WithCancel(l.ctx)
+	l.mu.Unlock()
+	oldCancel()
+	closeAll(old)
+}
+
+// hold records that a guest service of kind holds the socket.
+func (l *divertSandbox) hold(kind string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.services[kind] = struct{}{}
+}
+
+// release records that the guest service of kind no longer holds the
+// socket. Closing a socket nothing holds is the caller's.
+func (l *divertSandbox) release(kind string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.services, kind)
+}
+
+// held reports whether the routes or any guest service hold the socket.
+func (l *divertSandbox) held() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.routes || len(l.services) > 0
+}
+
+// serviceKinds names the kinds of the guest services that hold the socket,
+// sorted.
+func (l *divertSandbox) serviceKinds() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Sorted(maps.Keys(l.services))
+}
+
+// holders names what holds the socket: "routes" first if the routes do,
+// then the kinds of the guest services, sorted.
+func (l *divertSandbox) holders() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var names []string
+	if l.routes {
+		names = append(names, "routes")
+	}
+	return append(names, slices.Sorted(maps.Keys(l.services))...)
 }
 
 // close stops the listener, closes every connection of the sandbox, removes
@@ -190,9 +289,7 @@ func (l *divertSandbox) close() {
 	l.cancel()
 	_ = l.ln.Close()
 	_ = os.Remove(l.path)
-	for _, h := range l.handlers {
-		h.close()
-	}
+	l.setRoutes(false, nil)
 }
 
 func (l *divertSandbox) serve() {
@@ -252,15 +349,28 @@ func (l *divertSandbox) handle(client net.Conn) {
 		l.serveInternal(client, pre, a)
 		return
 	}
+	l.mu.Lock()
+	routes, handlers, routesCtx := l.routes, l.handlers, l.routesCtx
+	l.mu.Unlock()
+	// What follows is the routes', and ends with them.
+	stopRoutes := context.AfterFunc(routesCtx, func() { _ = client.Close() })
+	defer stopRoutes()
 	// The link-local address is the broker's own for the routes that vend,
-	// never an upstream, on every port: a divert handler never claims it.
+	// never an upstream, on every port: a divert handler never claims it. A
+	// socket that guest services alone hold serves no route there, and
+	// closes it.
 	if pre.dst.Addr().Unmap() == linkLocal.Addr() {
+		if !routes {
+			a.check = "port"
+			_ = client.Close()
+			return
+		}
 		l.serveLinkLocal(client, pre, a)
 		return
 	}
-	for _, h := range l.handlers {
+	for _, h := range handlers {
 		if h.claims(pre.dst) {
-			h.serve(l.ctx, client, pre.dst, a)
+			h.serve(routesCtx, client, pre.dst, a)
 			return
 		}
 	}

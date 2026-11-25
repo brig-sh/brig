@@ -67,7 +67,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// credential past every later request, and it sets Upgrade again after
 	// Rewrite. CONNECT asks for the same pipe. So both are refused before
 	// anything else.
-	if r.Method == http.MethodConnect || upgrade(r.Header) {
+	if r.Method == http.MethodConnect || Upgrade(r.Header) {
 		a.check = "upgrade"
 		http.Error(rec, "brig broker: a route does not take a protocol upgrade or CONNECT", http.StatusBadRequest)
 		return
@@ -562,8 +562,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 	rp.ServeHTTP(w, r)
 }
 
-// upgrade reports whether h asks for a protocol upgrade.
-func upgrade(h http.Header) bool {
+// Upgrade reports whether h asks for a protocol upgrade.
+func Upgrade(h http.Header) bool {
 	if len(h.Values("Upgrade")) > 0 {
 		return true
 	}

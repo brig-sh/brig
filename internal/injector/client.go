@@ -156,6 +156,17 @@ func (e *RefusedError) Error() string { return "the credential broker refused: "
 // caller waits for it to exit and starts another.
 const StoppingMessage = "the credential broker is stopping"
 
+// NoServiceMessage and NotRegisteredMessage are the broker's 404 refusals of
+// the removal of one service kind of a sandbox. They are what ForgetService
+// takes as nothing to revoke: any other 404 is a path the broker does not
+// serve, which revokes nothing.
+func NoServiceMessage(kind string) string { return "this broker serves no " + kind }
+
+// NotRegisteredMessage: see NoServiceMessage.
+func NotRegisteredMessage(kind, id string) string {
+	return "sandbox " + id + " is not registered for " + kind
+}
+
 func stopping(err error) bool {
 	var r *RefusedError
 	return errors.As(err, &r) && r.Status == http.StatusServiceUnavailable
@@ -182,6 +193,44 @@ func (c Client) RemoveSandbox(id string) (RemoveResponse, error) {
 	var out RemoveResponse
 	err := c.call(http.MethodDelete, "/sandboxes/"+id, nil, &out)
 	return out, err
+}
+
+// RemoveServices stops serving the sandbox id on every guest service. Its
+// service tokens are refused from the next request on. Remaining counts
+// routes and services together. A broker without services answers 404.
+func (c Client) RemoveServices(id string) (RemoveResponse, error) {
+	var out RemoveResponse
+	err := c.call(http.MethodDelete, "/services/sandboxes/"+id, nil, &out)
+	return out, err
+}
+
+// RemoveService stops serving the sandbox id on the guest service of kind.
+// Its tokens for kind are refused from the next request on, and its other
+// kinds stay. Remaining counts routes and services together. A kind that is
+// not one path segment, or an id the broker would refuse, is refused here,
+// so the request names no other path.
+func (c Client) RemoveService(kind, id string) (RemoveResponse, error) {
+	if kind == "" || strings.ContainsAny(kind, "/?#%") {
+		return RemoveResponse{}, fmt.Errorf("guest service kind %q is not one path segment", kind)
+	}
+	if err := validID(id); err != nil {
+		return RemoveResponse{}, err
+	}
+	var out RemoveResponse
+	err := c.call(http.MethodDelete, "/services/"+kind+"/sandboxes/"+id, nil, &out)
+	return out, err
+}
+
+// validID is broker.ValidID, which this package does not import: the broker
+// package would bring its credential stores into brig.
+func validID(id string) error {
+	if id == "" || id == "." || id == ".." || len(id) > 255 || strings.ContainsFunc(id, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '-' || r == '_' || r == '.')
+	}) {
+		return fmt.Errorf("sandbox id %q is not 1 to 255 letters, digits, dots, dashes and underscores", id)
+	}
+	return nil
 }
 
 // Mint returns a session token for one route of a registered sandbox.

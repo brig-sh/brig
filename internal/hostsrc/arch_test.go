@@ -129,19 +129,25 @@ func TestTheRunPathCannotReachGCloud(t *testing.T) {
 const brokerBinary = "github.com/brig-sh/brig/cmd/brig-broker"
 
 // The host key that signs session tokens lives in brig-broker alone, and
-// internal/broker is the package that signs with it. A run asks brig-broker
-// for a token over its socket, so no run-path package, and not the CLI,
-// links the signer: a run that could mint its own tokens would not need the
-// broker to agree.
+// internal/broker and internal/sessiontoken are the packages that sign with
+// it. A run asks brig-broker for a token over its socket, so no run-path
+// package, and not the CLI, links a signer: a run that could mint its own
+// tokens would not need the broker to agree.
 func TestTheRunPathCannotMintTokens(t *testing.T) {
-	const signer = "github.com/brig-sh/brig/internal/broker"
+	signers := []string{
+		"github.com/brig-sh/brig/internal/broker",
+		"github.com/brig-sh/brig/internal/sessiontoken",
+	}
 	for _, pkg := range append(slices.Clone(runPathPackages), "github.com/brig-sh/brig/cmd/brig") {
 		out, err := goList("-deps", pkg)
 		if err != nil {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
-		if slices.Contains(strings.Split(string(out), "\n"), signer) {
-			t.Errorf("%s depends on %s: a run can now mint a session token", pkg, signer)
+		deps := strings.Split(string(out), "\n")
+		for _, signer := range signers {
+			if slices.Contains(deps, signer) {
+				t.Errorf("%s depends on %s: a run can now mint a session token", pkg, signer)
+			}
 		}
 	}
 }

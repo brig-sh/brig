@@ -50,12 +50,21 @@ func loopbackContext(ctx context.Context, _ net.Conn) context.Context {
 	return context.WithValue(ctx, arrivalKey{}, arrivalLoopback)
 }
 
+// divertSocketKey keys the divert socket a connection of the brig.internal
+// route server arrived on.
+type divertSocketKey struct{}
+
 // divertContext marks a connection a divert socket handed over: in clear
-// text on the link-local address, under TLS on brig.internal.
+// text on the link-local address, under TLS on brig.internal. It also carries
+// the socket, whose routes' context ends the route requests on it.
 func divertContext(ctx context.Context, c net.Conn) context.Context {
 	a := arrivalBrigInternal
-	if ac, ok := c.(*arrivedConn); !ok || ac.remote.prefix != divertArrival {
+	ac, ok := c.(*arrivedConn)
+	if !ok || ac.remote.prefix != divertArrival {
 		a = arrivalLinkLocal
+	}
+	if ok && ac.from != nil {
+		ctx = context.WithValue(ctx, divertSocketKey{}, ac.from)
 	}
 	return context.WithValue(ctx, arrivalKey{}, a)
 }
@@ -81,7 +90,7 @@ func (l *divertSandbox) serveLinkLocal(client net.Conn, pre preamble, a *divertA
 		return
 	}
 	conn := &arrivedConn{Conn: client, remote: arrivalAddr{prefix: linkLocalArrival, sandbox: l.id, src: pre.src},
-		done: make(chan struct{})}
+		from: l, done: make(chan struct{})}
 	if !l.srv.internal.hand(conn) {
 		a.check = "stopping"
 		_ = conn.Close()

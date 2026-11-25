@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -495,5 +496,39 @@ func TestSandboxListingSizesItsColumnsToTheirContents(t *testing.T) {
 					c.what, i, state, got, c.ref+1+c.name+1, buf.String())
 			}
 		}
+	}
+}
+
+// claude-code is pointed at the guest's MCP configuration when a service
+// added an entry to it, with flag and path one argument and before --name.
+// Another agent never gets the flag, and a run without an entry is what it
+// was before.
+func TestAgentArgsAddsTheMCPConfigForClaudeCodeOnly(t *testing.T) {
+	path := ""
+	mcpConfigOf = func(*wrap.Config) string { return path }
+	t.Cleanup(func() { mcpConfigOf = (*wrap.Config).MCPConfig })
+	claude, _ := profile.Lookup("claude-code")
+	ubuntu, _ := profile.Lookup("ubuntu")
+	tail := []string{"-p", "hi"}
+	for _, c := range []struct {
+		name, path, raw string
+		p               profile.Profile
+		want            []string
+	}{
+		{"claude-code with a name", wrap.GuestMCPConfigPath, "work", claude,
+			[]string{"--mcp-config=" + wrap.GuestMCPConfigPath, "--name", "work", "-p", "hi"}},
+		{"claude-code without a name", wrap.GuestMCPConfigPath, "", claude,
+			[]string{"--mcp-config=" + wrap.GuestMCPConfigPath, "-p", "hi"}},
+		{"another agent", wrap.GuestMCPConfigPath, "work", ubuntu, tail},
+		{"no entry", "", "work", claude, []string{"--name", "work", "-p", "hi"}},
+		{"no entry, no name", "", "", claude, tail},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path = c.path
+			got := agentArgs(&wrap.Config{RawName: c.raw}, c.p, tail)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("agentArgs = %q, want %q", got, c.want)
+			}
+		})
 	}
 }

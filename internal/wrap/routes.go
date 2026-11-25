@@ -28,6 +28,13 @@ type routeServer interface {
 	// Forget removes a sandbox, which refuses its tokens from then on, and
 	// stops the broker when no sandbox is left. It starts nothing.
 	Forget(id string) error
+	// ForgetRoutes removes a sandbox's routes and leaves its services, and
+	// stops the broker when nothing is left. It starts nothing.
+	ForgetRoutes(id string) error
+	// ForgetService removes one service of a sandbox, and stops the broker
+	// when nothing is left. A broker that does not hold it is nothing to
+	// remove. It starts nothing.
+	ForgetService(kind, id string) error
 	// Status is what a running broker reports, and false when none answers.
 	// A broker whose process is alive and does not answer reports its PID
 	// alone, with false. It starts nothing.
@@ -66,6 +73,22 @@ func (b *brokerProcess) Forget(id string) error {
 		return err
 	}
 	return injector.Forget(dir, id)
+}
+
+func (b *brokerProcess) ForgetRoutes(id string) error {
+	dir, err := injector.Dir()
+	if err != nil {
+		return err
+	}
+	return injector.ForgetRoutes(dir, id)
+}
+
+func (b *brokerProcess) ForgetService(kind, id string) error {
+	dir, err := injector.Dir()
+	if err != nil {
+		return err
+	}
+	return injector.ForgetService(dir, kind, id)
 }
 
 func (b *brokerProcess) Status() (injector.Status, bool) {
@@ -123,7 +146,10 @@ func (c *Config) routeRefusal() error {
 	if len(c.routes) == 0 || c.Runtime == nil {
 		return nil
 	}
-	if c.brigInternal() {
+	// A run with a service reaches brig.internal too, and its routes are
+	// registered there, but brigInternalRefusal refuses it in the service's
+	// words: this refusal names the endpoint routes, and needs one.
+	if len(c.endpointRoutes()) > 0 {
 		if err := c.endpointCheck(); err != nil {
 			return fmt.Errorf("policy %s declares a route in mode endpoint or host, which the guest reaches at %s: %w",
 				c.endpointList(), injector.BrigInternal, err)
@@ -159,9 +185,12 @@ func (c *Config) routeRefusal() error {
 }
 
 // brigInternal reports whether this run's guest reaches the broker at
-// brig.internal: a run with a route in mode endpoint.
+// brig.internal: a run with a route in mode endpoint, or with a service. A
+// run with a service registers its routes at the brig.internal address
+// whatever their modes, because the broker refuses routes at no address
+// beside a service that holds the divert socket at one.
 func (c *Config) brigInternal() bool {
-	return c.Runtime != nil && len(c.endpointRoutes()) > 0
+	return c.Runtime != nil && (len(c.endpointRoutes()) > 0 || len(c.services) > 0)
 }
 
 // awsShadowVars are the variables an AWS SDK reads before the container

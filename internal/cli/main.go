@@ -1008,18 +1008,34 @@ func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 // word: a profile it calls claude-code may run anything, and --name means
 // what that program says. So a target gets the flag only when the Brigfile
 // runs the claude-code brig ships, and only for a session with a name.
+//
+// The same claude-code is pointed at the guest's MCP configuration when a
+// service added a server to it. Flag and path are one argument, so a tail
+// that starts with a word of its own cannot be read as the path.
 func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
+	claude, name := t.Name == "claude-code", cfg.RawName
 	if target, ok := cfg.TargetOf(); ok {
-		if target.Session != "" && target.ProfileSource == "builtin:claude-code" {
-			return append([]string{"--name", target.Session}, tail...)
-		}
+		claude, name = target.ProfileSource == "builtin:claude-code", target.Session
+	}
+	if !claude {
 		return tail
 	}
-	if cfg.RawName != "" && t.Name == "claude-code" {
-		return append([]string{"--name", cfg.RawName}, tail...)
+	var head []string
+	if path := mcpConfigOf(cfg); path != "" {
+		head = append(head, "--mcp-config="+path)
 	}
-	return tail
+	if name != "" {
+		head = append(head, "--name", name)
+	}
+	if len(head) == 0 {
+		return tail
+	}
+	return append(head, tail...)
 }
+
+// mcpConfigOf is the seam a test replaces to give a run an MCP
+// configuration, which no service adds to yet.
+var mcpConfigOf = (*wrap.Config).MCPConfig
 
 // options are brig's own flags for one invocation.
 type options struct {
