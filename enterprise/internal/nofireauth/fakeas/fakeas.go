@@ -64,6 +64,10 @@ type Options struct {
 	CallbackIss string
 	// VerificationURI is the device verification page; "" is <server>/device.
 	VerificationURI string
+	// VerificationURIComplete is sent as verification_uri_complete; "" omits
+	// it. A value that starts with "/" is taken relative to the server URL,
+	// which a test does not know before Start.
+	VerificationURIComplete string
 	// RedirectAll makes every endpoint answer 302 elsewhere.
 	RedirectAll bool
 	// Polls are RFC 8628 errors returned to a device poll before it
@@ -480,13 +484,20 @@ func (s *Server) deviceAuthorization(w http.ResponseWriter, r *http.Request) {
 	if uri == "" {
 		uri = s.URL + "/device"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"device_code":      code,
 		"user_code":        string(userCode),
 		"verification_uri": uri,
 		"expires_in":       900,
 		"interval":         int((s.o.Interval + time.Second - 1) / time.Second),
-	})
+	}
+	if c := s.o.VerificationURIComplete; c != "" {
+		if strings.HasPrefix(c, "/") {
+			c = s.URL + c
+		}
+		resp["verification_uri_complete"] = c
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) devicePage(w http.ResponseWriter, r *http.Request) {
