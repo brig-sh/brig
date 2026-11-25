@@ -51,8 +51,9 @@ run the `channel` workflow with that ref.
 > notice. File a bug report against one only when that bug is the reason you
 > were asked to install it.
 
-You can install only one of the three casks at a time. To go back to the
-supported build, remove the channel cask and the `hull` that came with it:
+You can install only one Brig cask at a time, of either edition. To go back
+to the supported build, remove the channel cask and the `hull` that came
+with it:
 
 ```bash
 brew uninstall --cask brig@main hull@main
@@ -61,6 +62,43 @@ brew install --cask brig
 
 If you remove only `brig@main`, the `hull@main` that stays conflicts with
 the `hull` that the stable `brig` cask asks for.
+
+## Brig Enterprise
+
+Brig Enterprise is Brig with `brig login` and `brig logout`, which sign you
+in to NOFire AI. [Brig Enterprise command line
+reference](cli-enterprise.md) documents them. Each release publishes both
+editions, and one `checksums.txt` covers both.
+
+With Homebrew:
+
+```bash
+brew install --cask brig-sh/brig/brig-enterprise
+```
+
+`brig-enterprise@main` and `brig-enterprise@experimental` carry the same
+builds as `brig@main` and `brig@experimental`.
+
+With `install.sh`, set `BRIG_EDITION=enterprise`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | BRIG_EDITION=enterprise sh
+```
+
+`install.sh` refuses any value other than `community` or `enterprise` before
+it downloads anything.
+
+### Switch editions
+
+Every Brig cask installs a binary named `brig`, so Homebrew refuses a second
+one. Uninstall the cask you have first. If you signed in, run `brig logout`
+before you switch to Brig Community, which has no `brig logout`:
+
+```bash
+brig logout
+brew uninstall --cask brig-enterprise
+brew install --cask brig
+```
 
 ## install.sh
 
@@ -118,6 +156,7 @@ BRIG_INSTALL_DIR=~/bin BRIG_VERSION=v0.2.0 sh install.sh
 
 | Setting | What it does |
 | --- | --- |
+| `BRIG_EDITION` | Selects the edition: `community`, the default, or `enterprise`. See [Brig Enterprise](#brig-enterprise). |
 | `BRIG_INSTALL_DIR` | Sets the destination. The default is `/usr/local/bin`. |
 | `BRIG_VERSION` | Pins a Brig release. The default is the newest one. |
 | `HULL_VERSION` | Pins a hull release. Brig and hull are versioned independently. |
