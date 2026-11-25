@@ -338,6 +338,10 @@ func (e *usageError) Error() string { return e.msg }
 // usagef builds a usageError the way fmt.Errorf builds an ordinary one.
 func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
 
+// Usagef is usagef, for a command a build adds: its error exits 2 as every
+// usage error does.
+func Usagef(format string, a ...any) error { return usagef(format, a...) }
+
 // notFoundError is a name that resolves to nothing: a profile brig does not
 // have, or a sandbox that is not there. It carries its own exit code so a
 // script can tell "no such thing" apart from a run that started and failed.

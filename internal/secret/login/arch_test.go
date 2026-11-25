@@ -86,6 +86,45 @@ func TestOnlyTheLoginStoreNamesItsService(t *testing.T) {
 	}
 }
 
+// Brig Enterprise must link this package for brig login, and the dependency
+// test above sees only the core module. The file is the unit instead: in the
+// whole tree, only the login verb's file may import the store, so no other
+// verb, and none of the code that starts a run, can read the token.
+func TestOnlyTheLoginVerbReachesTheLoginStore(t *testing.T) {
+	allowed := filepath.Join("enterprise", "internal", "login", "login.go")
+	root := filepath.Join("..", "..", "..")
+	err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.IsDir() {
+			if n := e.Name(); path != root && (strings.HasPrefix(n, ".") || n == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || rel == allowed ||
+			filepath.Dir(rel) == filepath.Join("internal", "secret", "login") {
+			return nil
+		}
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(blob), `"github.com/brig-sh/brig/internal/secret/login"`) {
+			t.Errorf("%s reaches the login store; only %s may", rel, allowed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // goList runs go list with args for each GOOS brig ships for, and returns the
 // outputs joined: a file built for one OS can add an import the other lacks.
 func goList(args ...string) ([]byte, error) {

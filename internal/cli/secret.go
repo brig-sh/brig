@@ -465,6 +465,9 @@ func readAnswer(r io.Reader) (string, error) {
 	return bufio.NewReader(io.LimitReader(r, maxAnswerBytes)).ReadString('\n')
 }
 
+// ReadAnswer is readAnswer, for a command a build adds.
+func ReadAnswer(r io.Reader) (string, error) { return readAnswer(r) }
+
 // nameAndYes parses the arguments of a verb that takes one name and the -y
 // that says its question has already been answered.
 //
@@ -511,6 +514,34 @@ func nameAndYes(verb, example string, args []string) (name string, yes bool, err
 		return "", false, fmt.Errorf("%s takes one name, not %q", verb, words[1])
 	}
 	return name, yes, nil
+}
+
+// ParseInterleaved parses fs over args and returns the bare words, letting
+// flags stand before or after them. An unknown flag is a usage error that
+// names the flags the verb takes. takes lists them, as in "--browser and
+// --device", and is empty for a verb that takes none.
+func ParseInterleaved(fs *flag.FlagSet, args []string, takes string) ([]string, error) {
+	var words []string
+	for rest := args; ; {
+		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, err
+			}
+			msg := rewriteFlagError(err).Error()
+			if name, ok := strings.CutPrefix(err.Error(), "flag provided but not defined: "); ok {
+				msg = "unknown flag " + spell(name)
+			}
+			if takes == "" {
+				return nil, usagef("%s (brig %s takes no flag)", msg, fs.Name())
+			}
+			return nil, usagef("%s (brig %s takes %s)", msg, fs.Name(), takes)
+		}
+		if fs.NArg() == 0 {
+			return words, nil
+		}
+		words = append(words, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
 }
 
 // onlyName takes the single bare word a read gets. It takes no flag, so

@@ -5,6 +5,9 @@
 // with the commands only this edition has.
 package main
 
-import "github.com/brig-sh/brig/internal/cli"
+import (
+	"github.com/brig-sh/brig/enterprise/internal/login"
+	"github.com/brig-sh/brig/internal/cli"
+)
 
-func main() { cli.Main(cli.Options{Edition: "enterprise"}) }
+func main() { cli.Main(cli.Options{Edition: "enterprise", Commands: login.Commands()}) }
