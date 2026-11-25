@@ -102,11 +102,13 @@ printf '#!/bin/sh\necho old brig\n' > "$T/usrlocal/bin/brig"
 chmod 0755 "$T/usrlocal/bin/brig"
 
 # run_install <PATH>: install.sh with the given PATH, output in $T/out.log.
+# BRIG_EDITION is unset unless $edition names one.
 run_install() {
   rm -rf "${T:?}/home"
   mkdir -p "$T/home"
   set +e
-  env -u XDG_DATA_HOME -u BRIG_VERSION -u BRIG_RUNTIME_VERSION \
+  env -u XDG_DATA_HOME -u BRIG_VERSION -u BRIG_RUNTIME_VERSION -u BRIG_EDITION \
+    ${edition:+"BRIG_EDITION=$edition"} \
     HOME="$T/home" PATH="$1" \
     BRIG_VERSION=v9.9.9 BRIG_RUNTIME_VERSION=v0.0.0-test \
     BRIG_INSTALL_COSIGN=0 BRIG_INSTALL_DIR="$T/usrlocal/bin" \
@@ -180,3 +182,48 @@ run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
 grep -qx 'BRIG_BROKER_INSTALLED=false' "$T/home/.local/share/brig/data/pins.env" \
   || { cat "$T/home/.local/share/brig/data/pins.env" >&2; fail "pins.env still names a broker"; }
 ok "a release without brig-broker still installs, and leaves no broker"
+
+# 6. BRIG_EDITION=enterprise installs the Brig Enterprise archive, and never
+#    falls back to the Community one. First a release without it: the install
+#    stops before the runtime installer writes anything.
+release brig brigd brig-broker
+ent_bin="$T/home/.local/share/brig/data/bin/brig"
+edition=enterprise run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
+[ "$rc" != 0 ] || { cat "$T/out.log" >&2; fail "an enterprise install without its archive succeeded"; }
+[ ! -e "$ent_bin" ] || fail "an enterprise install without its archive installed a brig"
+ok "an enterprise install stops when the release has no Enterprise archive"
+
+# The Enterprise archive, listed in the same checksums.txt.
+mkdir -p "$T/pkg-ent"
+printf '#!/bin/sh\necho brig 9.9.9 enterprise\n' > "$T/pkg-ent/brig"
+cp "$T/pkg/brigd" "$T/pkg/brig-broker" "$T/pkg-ent/"
+chmod 0755 "$T/pkg-ent/brig"
+ent_archive=brig-enterprise-9.9.9-linux-amd64.tar.gz
+tar -C "$T/pkg-ent" -czf "$rel/$ent_archive" brig brigd brig-broker
+echo "$(sha "$rel/$ent_archive")  $ent_archive" >> "$rel/checksums.txt"
+edition=enterprise run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
+[ "$rc" = 0 ] || { cat "$T/out.log" >&2; fail "the enterprise install failed"; }
+grep -qF "checksum ok: $ent_archive" "$T/out.log" \
+  || { cat "$T/out.log" >&2; fail "the Enterprise archive was not checked"; }
+grep -q enterprise "$ent_bin" || fail "the brig installed is not the Enterprise one"
+ok "BRIG_EDITION=enterprise installs the Enterprise archive, checked"
+
+# An Enterprise archive that does not match checksums.txt is refused.
+printf 'tampered\n' >> "$rel/$ent_archive"
+edition=enterprise run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
+[ "$rc" != 0 ] || { cat "$T/out.log" >&2; fail "a tampered Enterprise archive installed"; }
+grep -qF "checksum mismatch for $ent_archive" "$T/out.log" \
+  || { cat "$T/out.log" >&2; fail "a tampered Enterprise archive was not named"; }
+[ ! -e "$ent_bin" ] || fail "a tampered Enterprise archive installed a brig"
+ok "a tampered Enterprise archive is refused"
+
+# 7. Any other edition stops before anything is downloaded or written.
+edition=enterprize run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
+[ "$rc" != 0 ] || { cat "$T/out.log" >&2; fail "BRIG_EDITION=enterprize installed"; }
+grep -qF 'BRIG_EDITION is "enterprize", which is not an edition. Set it to community or enterprise' "$T/out.log" \
+  || { cat "$T/out.log" >&2; fail "BRIG_EDITION=enterprize was not refused by name"; }
+if grep -q "downloading" "$T/out.log" || [ -n "$(ls -A "$T/home")" ]; then
+  cat "$T/out.log" >&2
+  fail "BRIG_EDITION=enterprize downloaded or wrote something"
+fi
+ok "an unknown BRIG_EDITION is refused before any download"
