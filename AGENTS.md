@@ -65,6 +65,7 @@ it. For a change to it, or to a core package it imports, also run in
 gofmt -l .
 go vet ./...
 go test -race ./...
+script/smoke.sh
 ```
 
 For a documentation change, also run:

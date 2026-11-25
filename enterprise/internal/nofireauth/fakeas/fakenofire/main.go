@@ -20,6 +20,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "address to listen on")
 	approve := flag.String("approve", "page", "how to answer a sign-in: auto, deny or page")
 	maxTTL := flag.Duration("max-ttl", 720*time.Hour, "longest token lifetime the server grants")
+	urlFile := flag.String("url-file", "", "write the server URL to this file once it listens, so a script can use -addr with port 0")
 	flag.Parse()
 
 	o := fakeas.Options{MaxTTL: *maxTTL, Log: func(line string) { log.Print(line) }}
@@ -41,6 +42,12 @@ func main() {
 	}
 	defer s.Close()
 	fmt.Printf("export BRIG_NOFIRE_URL=%s\n", s.URL)
+	if *urlFile != "" {
+		if err := os.WriteFile(*urlFile, []byte(s.URL+"\n"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "fakenofire:", err)
+			os.Exit(1)
+		}
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)

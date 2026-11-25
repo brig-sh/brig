@@ -47,8 +47,8 @@ CI does not call `make`. It runs these steps
   the only label that CI reads.
 - `goreleaser check` and a full snapshot build. They run the release config
   before a tag depends on it.
-- In `enterprise/`, a separate job: `gofmt -l .`, `go vet ./...` and
-  `go test -race ./...`.
+- In `enterprise/`, a separate job: `gofmt -l .`, `go vet ./...`,
+  `go test -race ./...` and `script/smoke.sh`.
 
 `gofmt` and `go vet` are the only static checks. The repository has no
 `golangci-lint` configuration and no lint target in the Makefile.
