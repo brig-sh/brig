@@ -143,9 +143,9 @@ archives:
 
   # Brig Enterprise, with the same brigd and brig-broker. It carries both
   # licenses: LICENSE for the core and enterprise/LICENSE for the Enterprise
-  # code. It is built, signed and checksummed with every release, but not
-  # uploaded: where it is published is decided with its release channel. See
-  # release.ids below.
+  # code. It goes on the same release as Brig Community, under the same
+  # checksums.txt and signature. Sign-in to NOFire AI checks the license, so
+  # the download itself is public.
   - id: brig-enterprise
     ids: [brig-enterprise, brigd, brig-broker]
     name_template: "{{ .ProjectName }}-enterprise-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
@@ -225,9 +225,9 @@ release:
   # now, which makes the review the only thing standing between a tag and
   # something the world can download.
   draft: true
-  # Community only. The Brig Enterprise archive stays in dist/ until its
-  # release channel decides where it is published.
-  ids: [brig]
+  # Both editions. checksums.txt covers both, so one signature vouches for
+  # every archive.
+  ids: [brig, brig-enterprise]
   # Re-run the workflow for a tag that already has a draft -- a
   # workflow_dispatch retry, or a second push -- and target that draft
   # instead of opening a second release beside it. Without this, tag
@@ -280,14 +280,18 @@ homebrew_casks:
       bash: completions/brig.bash
       zsh: completions/brig.zsh
       fish: completions/brig.fish
-    # The channel casks declare a conflict with this one, and Homebrew reads
-    # only the conflicts of the cask being installed. So without this half,
-    # `brew install --cask brig` over an installed brig@main is not stopped:
-    # it fails later, while linking the binaries, with a message about a link
-    # rather than about the two casks.
+    # Every brig cask, of either edition, installs a binary named brig, and
+    # Homebrew reads only the conflicts of the cask being installed. So each
+    # cask names all five others. Without that, `brew install --cask brig`
+    # over an installed brig@main is not stopped: it fails later, while
+    # linking the binaries, with a message about a link rather than about the
+    # two casks.
     conflicts:
       - cask: brig@main
       - cask: brig@experimental
+      - cask: brig-enterprise
+      - cask: brig-enterprise@main
+      - cask: brig-enterprise@experimental
     dependencies:
       # Guest-image signature verification degrades to a warning without it,
       # so ship it rather than let the check quietly do nothing.
@@ -313,4 +317,48 @@ homebrew_casks:
       verification stops and asks.
 
       Start with:
+        brig run claude
+
+  # Brig Enterprise: the same cask around the Enterprise archive, which adds
+  # brig login and brig logout. It opens its own pull request against the
+  # tap, from a branch of its own.
+  - name: brig-enterprise
+    ids: [brig-enterprise]
+    binaries: [brig, brigd, brig-broker]
+    repository:
+      owner: brig-sh
+      name: homebrew-brig
+      branch: brig-enterprise-{{ .Version }}
+      pull_request:
+        enabled: true
+        base:
+          branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/brig-sh/brig
+    # Under 80 characters, as for the cask above.
+    description: Brig with NOFire AI sign-in, to run coding agents in a microVM sandbox
+    completions:
+      bash: completions/brig.bash
+      zsh: completions/brig.zsh
+      fish: completions/brig.fish
+    conflicts:
+      - cask: brig
+      - cask: brig@main
+      - cask: brig@experimental
+      - cask: brig-enterprise@main
+      - cask: brig-enterprise@experimental
+    dependencies:
+      - formula: cosign
+      - cask: brig-sh/brig/hull
+    skip_upload: auto
+    caveats: |
+      This is Brig Enterprise: brig with brig login and brig logout, which
+      sign you in to NOFire AI. enterprise/LICENSE in the archive covers the
+      Enterprise code, and LICENSE covers the rest.
+
+      On macOS, brig drives hull, which brew installed alongside this cask. On
+      Linux, it drives hull when a hull is on PATH, and nerdctl otherwise.
+
+      Start with:
+        brig login
         brig run claude

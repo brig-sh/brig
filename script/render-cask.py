@@ -145,9 +145,13 @@ def render(args):
     # Every channel cask installs the same binaries at the same paths as the
     # stable one, so brew has to be told they cannot coexist. Without this the
     # second install fails on a link brew did not expect to find already
-    # there, and the message says nothing about the cause.
+    # there, and the message says nothing about the cause. A cask of another
+    # project that installs the same binaries, such as brig-enterprise beside
+    # brig, is named in full with --conflicts-with-cask. Sorted, because brew
+    # style wants the array in order (Cask/ArrayAlphabetization).
     lines.append("  conflicts_with cask: [")
-    for other in [args.project] + [f"{args.project}@{c}" for c in args.conflicts_with]:
+    others = [args.project] + [f"{args.project}@{c}" for c in args.conflicts_with]
+    for other in sorted(others + args.conflicts_with_cask):
         lines.append(f'    "{other}",')
     lines.append("  ]")
 
@@ -164,9 +168,10 @@ def render(args):
     for binary in args.binary:
         lines.append(f'  binary "{binary}"')
     # brew style enforces bash, zsh, fish, whatever the flag order.
+    command = args.completion_name or args.project
     for shell in ("bash", "zsh", "fish"):
         if shell in args.completion:
-            lines.append(f'  {shell}_completion "completions/{args.project}.{shell}"')
+            lines.append(f'  {shell}_completion "completions/{command}.{shell}"')
     if args.binary or args.completion:
         lines.append("")
 
@@ -199,9 +204,14 @@ def main():
     p.add_argument("--source", required=True, help="what this build came from, for the caveat")
     p.add_argument("--binary", action="append", default=[])
     p.add_argument("--completion", action="append", default=[])
+    p.add_argument("--completion-name", default="",
+                   help="the command the completion files are named after, default --project")
     p.add_argument("--depends-cask", action="append", default=[])
     p.add_argument("--depends-formula", action="append", default=[])
-    p.add_argument("--conflicts-with", action="append", default=[])
+    p.add_argument("--conflicts-with", action="append", default=[],
+                   help="another channel of --project, repeatable")
+    p.add_argument("--conflicts-with-cask", action="append", default=[],
+                   help="a full cask name of another project, repeatable")
     p.add_argument("--out", required=True)
     args = p.parse_args()
     pathlib.Path(args.out).write_text(render(args))

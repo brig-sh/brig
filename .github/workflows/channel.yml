@@ -222,8 +222,7 @@ jobs:
           # The checkout persisted no credentials, so the push is given one.
           git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "$SIDE:refs/tags/$TAG"
-          # Community archives only: the Brig Enterprise ones wait for their
-          # own channel (.goreleaser.yaml, release.ids).
+          # Both editions, from this one build, as on a stable release.
           # checksums.txt as well as the archives: the tap's CI asks each
           # release whether it really published the sha256 its cask claims,
           # and a channel cask has to answer that the same way a stable one
@@ -231,11 +230,15 @@ jobs:
           gh release create "$TAG" --draft --prerelease --verify-tag \
             --title "brig $V ($CHANNEL channel)" \
             --notes "Built from $SOURCE at $BUILT. Not a release." \
-            dist/brig-"$V"-*.tar.gz dist/checksums.txt
+            dist/brig-"$V"-*.tar.gz dist/brig-enterprise-"$V"-*.tar.gz \
+            dist/checksums.txt
           gh release edit "$TAG" --draft=false
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Render the cask
+      # One cask per edition. All six brig casks, two editions on three
+      # channels, install a binary named brig, and Homebrew reads only the
+      # conflicts of the cask being installed, so each names the other five.
+      - name: Render the casks
         env:
           V: ${{ steps.version.outputs.value }}
           CHANNEL: ${{ steps.channel.outputs.name }}
@@ -245,20 +248,31 @@ jobs:
           set -euo pipefail
           OTHER=experimental
           [ "$CHANNEL" = "experimental" ] && OTHER=main
-          python3 .workflow/script/render-cask.py \
-            --project brig --channel "$CHANNEL" --version "$V" \
-            --repo brig-sh/brig --tag "$TAG" --dist dist \
-            --archive "on_macos:on_arm:brig-$V-darwin-arm64.tar.gz" \
-            --archive "on_macos:on_intel:brig-$V-darwin-amd64.tar.gz" \
-            --archive "on_linux:on_arm:brig-$V-linux-arm64.tar.gz" \
-            --archive "on_linux:on_intel:brig-$V-linux-amd64.tar.gz" \
-            --desc "Run a coding agent in a microVM sandbox with only the credentials it needs" \
-            --source "$SOURCE" \
-            --binary brig --binary brigd --binary brig-broker \
-            --completion bash --completion zsh --completion fish \
-            --depends-cask "brig-sh/brig/hull@$CHANNEL" --depends-formula cosign \
-            --conflicts-with "$OTHER" \
-            --out "brig@$CHANNEL.rb"
+          # render <project> <the other edition's project> <desc>
+          render() {
+            python3 .workflow/script/render-cask.py \
+              --project "$1" --channel "$CHANNEL" --version "$V" \
+              --repo brig-sh/brig --tag "$TAG" --dist dist \
+              --archive "on_macos:on_arm:$1-$V-darwin-arm64.tar.gz" \
+              --archive "on_macos:on_intel:$1-$V-darwin-amd64.tar.gz" \
+              --archive "on_linux:on_arm:$1-$V-linux-arm64.tar.gz" \
+              --archive "on_linux:on_intel:$1-$V-linux-amd64.tar.gz" \
+              --desc "$3" \
+              --source "$SOURCE" \
+              --binary brig --binary brigd --binary brig-broker \
+              --completion bash --completion zsh --completion fish \
+              --completion-name brig \
+              --depends-cask "brig-sh/brig/hull@$CHANNEL" --depends-formula cosign \
+              --conflicts-with "$OTHER" \
+              --conflicts-with-cask "$2" \
+              --conflicts-with-cask "$2@main" \
+              --conflicts-with-cask "$2@experimental" \
+              --out "$1@$CHANNEL.rb"
+          }
+          render brig brig-enterprise \
+            "Run a coding agent in a microVM sandbox with only the credentials it needs"
+          render brig-enterprise brig \
+            "Brig with NOFire AI sign-in, to run coding agents in a microVM sandbox"
 
       # The same bot App token release.yml uses for the tap, with the same PAT
       # fallback. The push below relies on this App being a bypass actor on
@@ -287,14 +301,18 @@ jobs:
           rm -rf "$RUNNER_TEMP/tap"
           git clone --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/brig-sh/homebrew-brig.git" "$RUNNER_TEMP/tap"
-          cp "brig@$CHANNEL.rb" "$RUNNER_TEMP/tap/Casks/brig@$CHANNEL.rb"
+          # Both editions in one commit, so the tap never names a build for
+          # one edition and the previous build for the other.
+          for cask in "brig@$CHANNEL" "brig-enterprise@$CHANNEL"; do
+            cp "$cask.rb" "$RUNNER_TEMP/tap/Casks/$cask.rb"
+          done
           cd "$RUNNER_TEMP/tap"
           git config user.name "brig-sh-bot"
           git config user.email "bot@brig.sh"
-          git add "Casks/brig@$CHANNEL.rb"
-          git diff --cached --quiet && { echo "the cask is unchanged"; exit 0; }
+          git add "Casks/brig@$CHANNEL.rb" "Casks/brig-enterprise@$CHANNEL.rb"
+          git diff --cached --quiet && { echo "the casks are unchanged"; exit 0; }
           # -s: the tap's DCO check reads the trailer.
-          git commit -s -m "chore(cask): brig@$CHANNEL $V"
+          git commit -s -m "chore(cask): brig@$CHANNEL and brig-enterprise@$CHANNEL $V"
           # Rebased and retried rather than pushed once. brig and hull each
           # publish two channels into this one repository, and nothing
           # serializes across the four. They touch different files, so a
