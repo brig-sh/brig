@@ -49,6 +49,10 @@ func parse(blob []byte) (Policy, bool, error) {
 	if _, err := Routes([]Policy{p}); err != nil {
 		return Policy{}, flat, err
 	}
+	// A server is checked after its preset expands for the same reason.
+	if _, err := MCPServers([]Policy{p}); err != nil {
+		return Policy{}, flat, err
+	}
 	return p, flat, nil
 }
 
