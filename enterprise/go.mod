@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/brig-sh/brig v0.0.0
+	github.com/klauspost/compress v1.20.2
 	golang.org/x/sys v0.50.0
 )
 
