@@ -839,6 +839,8 @@ a workstation.
 | `--secret-dir <path>` | Reads every credential from the files of this directory, one file per secret, instead of from Brig's secret store |
 | `--listen-fd <n>` | Serves the routes with TLS on file descriptor `n`, a bound and listening TCP socket the parent opened, as `--listen` serves them on its address. It excludes `--listen` |
 | `--sandbox <id>` | Serves the sandbox `id` alone. See [One broker per sandbox](#one-broker-per-sandbox) |
+| `--audit-fd <n>` | Appends the [audit lines](#audit-line) to file descriptor `n`, a regular file the parent opened, in place of `audit.log`. The broker never rotates it |
+| `--audit-max <bytes>` | With `--audit-fd`, the size at which the broker serves no route. 64 MiB by default |
 
 The flags combine. A node broker is usually started with `--listen` and
 `--secret-dir`.
@@ -1085,6 +1087,23 @@ The broker then needs no privilege to bind the port and no access to that
 namespace. Its upstream connections leave from the network namespace it
 runs in. The arrival rule of [The address listener](#the-address-listener)
 still applies to each connection.
+
+On Linux, `--sandbox` also confines the broker once its flags are read. It
+sets `no_new_privs`, so no later exec gains privileges, and installs a seccomp
+filter on every thread. The filter refuses with `EPERM` the system calls a
+broker never makes, which would lead a process that took it over out of its
+uid: `ptrace` and the other processes' memory, namespaces (`unshare`,
+`setns`, and `clone` with a namespace flag), mounts, BPF, perf events,
+`userfaultfd`, keyrings, kernel modules, `kexec`, and io_uring, whose
+operations a filter does not see. `clone3`, whose flags a filter cannot read,
+fails with `ENOSYS`. A call of another architecture kills the process. The
+filter is built for amd64 and arm64.
+
+The platform can own the audit file too. With `--audit-fd` it opens the file,
+where the broker cannot rename it or put a link in its place, and the broker
+appends to it. The broker never rotates it. Once the file holds
+`--audit-max` bytes, every route answers 503 with "the broker's audit log is
+full", so no request is served that the audit does not record.
 
 ## Routes that vend
 
