@@ -30,10 +30,11 @@ usage:
   brig telemetry on       start sending it
   brig telemetry off      stop sending it, on this machine, for good
 
-brig has no account. The answer is kept on this machine, and it also covers
-the sandbox runtime underneath, so an opt-out holds whether brig is the caller
-or not. DO_NOT_TRACK=1 in your environment turns it off without recording
-anything, and beats both.
+Telemetry uses no account, also when you are logged in to NOFire AI. The
+answer is kept on this machine, and it also covers the sandbox runtime
+underneath, so an opt-out holds whether brig is the caller or not.
+DO_NOT_TRACK=1 in your environment turns it off without recording anything,
+and beats both.
 
 docs/telemetry.md lists every field an event carries, who receives it, and
 what is never collected.
@@ -43,7 +44,7 @@ what is never collected.
 //
 // The whole point of the command is that you do not have to know what brig
 // drives underneath to opt out, so neither the report nor the help names the
-// runtime: a user who reads "local-first, no account" and then wants the
+// runtime: a user who reads "local-first" and then wants the
 // network call to stop should find the switch under brig's own name. The
 // answer is the one the runtime reads too, not a second store of brig's: see
 // internal/telemetry.

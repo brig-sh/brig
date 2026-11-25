@@ -1,7 +1,7 @@
 # What Brig will not do
 
 Brig delegates every mechanical operation to a runtime it does not own. It
-keeps its dependencies to four and needs no account. It adds only the
+keeps its dependencies to four and needs no account to run. It adds only the
 things that the runtime has no concept of. The limits below are written
 decisions, so a proposal to cross one has a place to start.
 
@@ -68,9 +68,15 @@ pointed at it, and nothing else.
 - A runtime offers a credential broker with a per-request hook, so the
   plaintext lives somewhere other than a Brig process.
 
-## A hosted control plane or account
+## A required account
 
-There is nothing to sign in to. Every piece of state is on your disk:
+Brig Enterprise has an optional NOFire AI account. This replaces the earlier
+non-goal of no hosted control plane or account.
+[`brig login`](cli-enterprise.md#brig-login) signs you in, and nothing else in Brig
+needs it. Brig Community has no account. `brig run`, `brig sh` and every other
+verb work without an account.
+
+Every piece of state a run needs is still on your disk:
 
 | State | Location |
 | --- | --- |
@@ -79,18 +85,19 @@ There is nothing to sign in to. Every piece of state is on your disk:
 | Guest homes | `~/.brig/homes` |
 | Sessions | The inventory of `brigd` |
 
-Brig registers nowhere. [Telemetry](telemetry.md) lists the anonymous usage
-events it sends, and how to turn them off.
+The login token is stored in your keychain under its own service, and a
+sandbox never receives it. [The NOFire AI login
+token](security.md#the-nofire-ai-login-token) lists the limits.
+[Telemetry](telemetry.md) stays anonymous when you are logged in.
 
-Nothing we run can be down while you try to boot a sandbox. An account also
-widens the security page. The threat model of Brig then has to include our
-servers, our operators and our outages. Today it has to mention none of
-them.
+A run never contacts the account service, so an outage on our side cannot
+stop a sandbox from booting. The account adds our servers to the threat
+model only for `brig login` and `brig logout`, the two verbs that contact a
+deployment.
 
-**Reopens when** a feature that people want is impossible without a shared
-service. Even then, it ships as a separate opt-in service and not as a
-requirement. Brig without an account keeps doing everything it does today,
-permanently.
+**Reopens when** a feature requires the account for a run, and not only for a
+service beside it. A required account is still a non-goal. Brig without an
+account keeps doing everything it does today, permanently.
 
 ## SDKs in several languages
 
