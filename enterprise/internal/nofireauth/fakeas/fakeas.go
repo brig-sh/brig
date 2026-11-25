@@ -71,8 +71,16 @@ type Options struct {
 	// RedirectAll makes every endpoint answer 302 elsewhere.
 	RedirectAll bool
 	// Polls are RFC 8628 errors returned to a device poll before it
-	// succeeds, in order.
+	// succeeds, in order. Two entries are not error codes: "http500" is a
+	// 500 with an empty body, and "badjson" is a 200 that is not JSON.
 	Polls []string
+	// DeviceExpiresIn is the expires_in of the device authorization
+	// response; 0 is 900. It only reports: the fake's own code lifetime
+	// stays 15 minutes.
+	DeviceExpiresIn int
+	// DeviceOmit lists fields left out of the device authorization
+	// response, such as "user_code".
+	DeviceOmit []string
 	// DefaultTTL and MaxTTL bound the granted lifetime: 7 and 30 days when
 	// zero. The grant is min(ttl, MaxTTL), or DefaultTTL without a ttl.
 	DefaultTTL, MaxTTL time.Duration
@@ -422,7 +430,15 @@ func (s *Server) pollDevice(w http.ResponseWriter, code string) {
 	if len(d.polls) > 0 {
 		e := d.polls[0]
 		d.polls = d.polls[1:]
-		oauthError(w, e)
+		switch e {
+		case "http500":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "badjson":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not json"))
+		default:
+			oauthError(w, e)
+		}
 		return
 	}
 	switch d.state {
@@ -491,11 +507,17 @@ func (s *Server) deviceAuthorization(w http.ResponseWriter, r *http.Request) {
 		"expires_in":       900,
 		"interval":         int((s.o.Interval + time.Second - 1) / time.Second),
 	}
+	if s.o.DeviceExpiresIn != 0 {
+		resp["expires_in"] = s.o.DeviceExpiresIn
+	}
 	if c := s.o.VerificationURIComplete; c != "" {
 		if strings.HasPrefix(c, "/") {
 			c = s.URL + c
 		}
 		resp["verification_uri_complete"] = c
+	}
+	for _, k := range s.o.DeviceOmit {
+		delete(resp, k)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -178,7 +178,9 @@ func (f DeviceFlow) authorize(ctx context.Context) (deviceResponse, error) {
 	if status != http.StatusOK {
 		var e tokenResponse
 		if json.Unmarshal(body, &e) == nil && e.Error != "" {
-			return deviceResponse{}, &oauthError{server: d, code: e.Error, description: e.ErrorDescription}
+			// Not an oauthError: its text says the token request was
+			// refused, and this was the device authorization request.
+			return deviceResponse{}, fmt.Errorf("the device code request was refused: %s", Clean(d, oauthMessage(e.Error, e.ErrorDescription)))
 		}
 		return deviceResponse{}, fmt.Errorf("%s answered the device code request with status %d. Run brig login --device again later", d, status)
 	}
