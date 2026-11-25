@@ -4,8 +4,10 @@
 // The token lives in the OS keychain under its own service, sh.brig.login,
 // apart from the secrets brig hands to a sandbox. This is the only package
 // besides internal/secret that can open a keychain backend, and no run-path
-// package imports it (see arch_test.go), so a run cannot read the token and
-// a profile's `from: keychain` cannot name its service.
+// package of this module imports it (see arch_test.go), so the core's run
+// cannot read the token and a profile's `from: keychain` cannot name its
+// service. Brig Enterprise reads it through one accessor, and never hands it
+// to a sandbox.
 package login
 
 import (
@@ -38,6 +40,11 @@ type Token struct {
 	URL         string    `json:"url"`
 	AccessToken string    `json:"access_token"`
 	ExpiresAt   time.Time `json:"expires_at"`
+	// Trust is the trust store the person accepted at brig login: each
+	// environment variable that gave Brig one, with its value as an absolute,
+	// cleaned path, never one with a .. element. It lives and dies with this
+	// item. A record written without it accepts nothing.
+	Trust map[string]string `json:"trust,omitempty"`
 }
 
 // Store keeps tokens by deployment URL.
