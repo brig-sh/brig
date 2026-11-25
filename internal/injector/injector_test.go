@@ -1438,3 +1438,90 @@ func TestBrokerEnvCarriesTheStateDir(t *testing.T) {
 		}
 	}
 }
+
+// The MCP calls go to their own endpoints, apart from the routes', so a
+// route endpoint never takes an MCP registration.
+func TestClientMCPPaths(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		switch method + " " + path {
+		case "POST /mcp/sandboxes":
+			return 200, `{"divertSocket":"/x/sock","ca":"PEM"}`
+		case "POST /mcp/tokens":
+			return 200, `{"token":"fake-mcp-token"}`
+		}
+		return 404, "no such endpoint"
+	})
+	c := Client{Socket: filepath.Join(dir, SocketName)}
+	srv := v1alpha1.MCPServer{Name: "nofire", Preset: v1alpha1.MCPPresetNofire,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "nofire-token"}},
+		Tools:      &v1alpha1.MCPTools{Allow: []string{"*"}}}
+	added, err := c.AddMCP(MCPSandbox{ID: "brig-a", Profile: "claude-code", Session: "s1",
+		Servers: []MCPServer{{Policy: "nofire", Server: srv}}, BrigInternal: "192.168.64.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.DivertSocket != "/x/sock" || added.CA != "PEM" {
+		t.Errorf("add mcp = %+v", added)
+	}
+	tok, err := c.MintMCP(MCPMintRequest{Sandbox: "brig-a", Session: "s1", TTLSeconds: 60})
+	if err != nil || tok != "fake-mcp-token" {
+		t.Fatalf("mint mcp = %q, %v", tok, err)
+	}
+	if got, want := strings.Join(calls(), "|"), "POST /mcp/sandboxes|POST /mcp/tokens"; got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+// An empty MCP token is an error, not a token.
+func TestMintMCPRefusesAnEmptyToken(t *testing.T) {
+	dir, _ := controlServer(t, func(string, string) (int, string) { return 200, `{"token":""}` })
+	if _, err := (Client{Socket: filepath.Join(dir, SocketName)}).MintMCP(MCPMintRequest{Sandbox: "brig-a"}); err == nil {
+		t.Error("an empty mcp token was taken")
+	}
+}
+
+// RegisterMCP starts the broker as Register does, and the broker hands back
+// the divert socket and the CA a sandbox reaches brig.internal by. The
+// registry's removal of kind mcp revokes it, and stops the idle broker.
+func TestRegisterMCPStartsTheBroker(t *testing.T) {
+	setBroker(t)
+	// The divert socket is a unix socket under the state directory, and the
+	// temporary directory of macOS is too long for its path.
+	short, err := os.MkdirTemp("/tmp", "bm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(short) })
+	t.Setenv("BRIG_STATE_DIR", short)
+	dir, err := Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stopBroker(dir) })
+	srv := v1alpha1.MCPServer{Name: "nofire", Preset: v1alpha1.MCPPresetNofire,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "nofire-token"}},
+		Tools:      &v1alpha1.MCPTools{Allow: []string{"*"}}}
+	b, resp, err := RegisterMCP(dir, MCPSandbox{ID: "brig-a", Profile: "claude-code",
+		Servers: []MCPServer{{Policy: "nofire", Server: srv}}, BrigInternal: "198.18.1.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.DivertSocket == "" || resp.CA == "" {
+		t.Errorf("RegisterMCP answer = %+v, want a divert socket and the CA", resp)
+	}
+	if _, err := b.Client.MintMCP(MCPMintRequest{Sandbox: "brig-a"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := b.Client.Status()
+	if err != nil || !slices.Equal(st.Services["mcp"], []string{"brig-a"}) {
+		t.Fatalf("status = %+v, %v", st, err)
+	}
+	if err := ForgetService(dir, "mcp", "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing else was registered, so the broker is stopping or gone, and
+	// mints nothing either way.
+	if _, err := b.Client.MintMCP(MCPMintRequest{Sandbox: "brig-a"}); !errors.Is(err, ErrNotRunning) && !stopping(err) {
+		t.Errorf("an mcp token after ForgetService = %v, want the broker stopped", err)
+	}
+}

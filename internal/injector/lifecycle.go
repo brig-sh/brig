@@ -77,6 +77,12 @@ func Register(dir string, s Sandbox) (*Broker, error) {
 	return b, nil
 }
 
+// RegisterMCP registers the MCP servers of s with the broker serving dir,
+// and starts that broker when none is running, as Register does for routes.
+func RegisterMCP(dir string, s MCPSandbox) (*Broker, AddResponse, error) {
+	return register(dir, func(c Client) (AddResponse, error) { return c.AddMCP(s) })
+}
+
 // register runs add against the broker serving dir, starting one when none
 // is running, and replacing one that was stopping or gone by then.
 func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddResponse, error) {
