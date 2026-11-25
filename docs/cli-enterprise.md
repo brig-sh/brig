@@ -4,7 +4,8 @@ Brig has two editions, built from the same source. Brig Community is the
 Apache 2.0 edition that [Command line reference](cli.md) documents. Brig
 Enterprise adds the commands on this page, which sign you in to NOFire AI and
 send the recordings your organization asks for. Its source is in
-[enterprise/](../enterprise/), under its own license.
+[enterprise/](../enterprise/), under its own license. To install it, see
+[Brig Enterprise](install.md#brig-enterprise).
 
 `brig version` names the edition you have:
 
