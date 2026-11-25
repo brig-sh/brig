@@ -1,5 +1,7 @@
 # Logging an agent in
 
+This page is about the agent's login. [`brig login`](cli-enterprise.md#brig-login) signs you in to NOFire AI. It does not log an agent in.
+
 An agent in a sandbox starts with no login. This page covers three separate
 needs:
 

@@ -60,6 +60,7 @@ version, and brigd refuses a version it does not know.
 | Policies | The `policies` directory inside it |
 | A guest home you name with `--home` or `BRIG_WORKSPACE` | Where you put it. It is yours, and Brig never deletes it. |
 | Secrets | Under the service name `sh.brig.secret`: in the login keychain on macOS, and in the default collection of your Secret Service keyring on Linux |
+| The NOFire AI login token | Under the service name `sh.brig.login`, in the same keychain or keyring, one item for each deployment |
 
 How one secret is laid out in that store is Brig's own. See
 [Where a value lives](secrets.md#where-a-value-lives).

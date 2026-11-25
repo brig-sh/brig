@@ -672,11 +672,13 @@ keychain**. `security list-keychains` shows yours. Nothing is decrypted and
 nothing leaves the process. Names and dates of other applications and of
 the system do pass through Brig before it discards them.
 
-**Brig writes only under its own service.** Brig creates, changes and
-removes items only under `sh.brig.secret`. The service name is a label, not
-an authenticity check. Another process that runs as you can add an item
-under that service, and Brig then reads, updates and deletes that item as
-its own. Two checks limit this. `read` reports a value that is not in Brig's
+**Brig writes only under its own service.** `brig secret` creates, changes
+and removes items only under `sh.brig.secret`. `brig login` uses its own
+service, `sh.brig.login`; see [The NOFire AI login
+token](#the-nofire-ai-login-token). The service name is a label, not an
+authenticity check. Another process that runs as you can add an item under
+that service, and Brig then reads, updates and deletes that item as its own.
+Two checks limit this. `read` reports a value that is not in Brig's
 encoding, and `ls` skips a name outside Brig's grammar. So an item Brig did
 not write is reported or skipped, and is not presented as yours.
 
@@ -1329,6 +1331,109 @@ xattr -l "$(which brig)"                 # com.apple.quarantine, still there
 
 A from-source build is neither signed nor notarized. You trust it because you
 built it.
+
+## The NOFire AI login token
+
+`brig login` adds one host credential: a token for a NOFire AI deployment. A
+run never reads it. Only Brig Enterprise has `brig login`; Brig Community
+does not link the login store.
+
+- **Where it is stored.** The token is stored in the OS keychain under the
+  service `sh.brig.login`, one item for each deployment, with the fixed
+  label `brig login`. Brig has no plaintext fallback. With no keychain,
+  `brig login` fails before it contacts the server. If Brig cannot store a
+  token it was issued, or you press Ctrl-C after the server issued it, it
+  revokes the token. If that revocation fails, the token stays valid until it
+  expires, and Brig says so.
+- **A guest never receives it.** Brig does not forward the token to a guest,
+  and does not write it into the guest home. A profile cannot name a
+  keychain service named `sh.brig` or `sh.brig.*` as a source. The run-path
+  packages that the architecture test lists (`internal/wrap`,
+  `internal/creds`, `internal/injector`, `cmd/brigd` and `cmd/brig-broker`)
+  cannot import the login store, and `internal/secret/login/arch_test.go`
+  fails if one does. The same test fails if a file other than the login
+  verb's, `enterprise/internal/login/login.go`, imports the store.
+- **Logging in again** replaces the stored token and revokes the previous
+  one. If that revocation fails, the login still succeeds, and Brig prints a
+  note to revoke the earlier token from the dashboard.
+  `brig logout` revokes the token on the server first, then deletes it from
+  the keychain. If the server does not confirm the revocation, Brig still
+  deletes the token, exits `1`, and says to revoke it from the dashboard.
+
+Brig refuses a deployment URL that can look like another host or hide where a
+request goes:
+
+- a URL with user information, a query or a fragment
+- a host that is not ASCII, or that has an `xn--` (punycode) label
+- a host label that starts or ends with `-`
+- a host whose last label is a number, such as `2130706433` or `0x7f.1`. A
+  resolver reads such a host as an IP address. Write an IP address in
+  dotted-decimal form.
+- a path segment with a character other than a letter, a digit, `.`, `_`, `~`
+  or `-`, or with any percent-encoding
+- `http`, except to a loopback IP address
+
+Brig also refuses a server that answers for another deployment. Before it
+opens a browser or prints a code, it checks that:
+
+- the issuer in the server's metadata equals the deployment URL
+- every endpoint and verification URI is on the origin of the deployment
+- the authorization response names the same issuer in its `iss` parameter
+  (RFC 9207), so a response from another server is refused
+- a verification URI holds only printable ASCII with no space, and a user
+  code only 4 to 16 capital letters, digits and hyphens, so neither can
+  carry extra text or a lookalike character
+
+Brig does not put the sign-in URL on a command line. The URL carries the
+state and the PKCE challenge, and on Linux any user of the host can read a
+command line. With both, another user could finish the sign-in with an
+account of their own, and Brig would store a token for that account. Brig
+writes a page that redirects to the URL into a new directory that only you
+can read, opens that page, and removes the directory when the login ends.
+The terminal still shows the URL, so that you can open it yourself when no
+browser opens. Anyone who can read your terminal, or a log of it, can still
+use the URL in the same way.
+
+The device flow has no such protection. Brig checks the
+verification URI it prints, but it cannot see where that page sends your
+browser. A hostile deployment can redirect its page to the real NOFire AI
+page, with a code it requested there for itself. If you approve, the hostile
+deployment gets a token for your account. So Brig prints
+`Approve only on a page at <origin>. If the page is anywhere else, stop.`,
+where the origin is the deployment's. A relayed page is at another address,
+such as `https://my.nofire.ai` when you logged in to another deployment.
+Brig cannot detect this; only you can see which page you approve on.
+
+A deployment from `BRIG_NOFIRE_URL` is the one a repository's `.envrc` can
+set. Unless it is the default, `brig login` asks
+`Continue logging in to <URL>? [y/N]` before it sends anything. Without a
+terminal it refuses, and a script passes the URL as an argument.
+
+Brig talks to the deployment over TLS and trusts the system trust store. A
+deployment behind an internal CA works only when that CA is installed in the
+store. On Linux, Go also reads `SSL_CERT_FILE` and `SSL_CERT_DIR`. A
+repository's `.envrc` can set them as easily as `BRIG_NOFIRE_URL`. With a CA
+of its own, whoever sets them can read the sign-in and the token, and, with a
+proxy, answer a logout's revocation and keep the token valid. So when either
+is set, `brig login` and `brig logout` name it and ask before they contact
+any deployment, and refuse without a terminal. They also ask on macOS, where
+Go ignores the variables, so the rule is the same on both.
+
+A proxy from `HTTPS_PROXY` or `HTTP_PROXY` gets a notice and no question:
+`brig login` and `brig logout` print `Using the proxy <URL> (from <variable>)`,
+without the proxy's credentials. TLS runs end to end through the proxy, so
+the proxy sees which host Brig connects to and when, but not what Brig sends,
+unless the trust store was also replaced, which Brig confirms. Brig
+never follows a redirect, limits each response body, and shows server text
+only after it removes control characters and cuts it to one line of at most
+200 characters. The same cleaning applies to every error `brig login` and
+`brig logout` print, including network and TLS errors, which can quote a
+response header or the names in a certificate. Such an error is printed as
+one line.
+
+Limits: a process that runs as you can read the token, as it can read your
+other keychain items. The token authenticates you to NOFire AI only, and no
+sandbox or `brig run` uses it.
 
 ## Telemetry
 

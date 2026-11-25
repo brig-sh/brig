@@ -1,5 +1,9 @@
 # Command line reference
 
+This page documents Brig Community, the Apache 2.0 edition. Brig Enterprise
+has every command here and the ones in [Brig Enterprise command line
+reference](cli-enterprise.md).
+
 For a walkthrough of a first run, see [Quickstart](quickstart.md).
 
 v0.5.0 removed the retired spellings, with two exceptions.
@@ -1051,6 +1055,16 @@ brig secret import claude-code gh-token
 The value is never a command-line argument, so it never appears in `ps` or
 in your shell history. See [Secrets](secrets.md) for the store, provenance
 and the sources a profile can declare.
+
+### Brig Enterprise verbs
+
+`brig login` and `brig logout` are Brig Enterprise commands. [Brig
+Enterprise command line reference](cli-enterprise.md) documents them. Brig
+Community does not list them in help or completion. In Brig Community, each
+prints
+`brig login is part of Brig Enterprise, and this is Brig Community. Install Brig Enterprise to log in to NOFire AI`,
+or the same for `brig logout`, and exits `1` without contacting a server or
+the keychain.
 
 ### `brig telemetry`
 
