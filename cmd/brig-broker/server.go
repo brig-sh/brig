@@ -80,6 +80,13 @@ type serverConfig struct {
 	// network namespace that only one sandbox reaches, binds it and passes
 	// it as a file descriptor. It excludes listen.
 	listener net.Listener
+	// auditFile, when set, is an open file the audit lines are appended to
+	// in place of audit.log in dir. The platform that opened it owns it: the
+	// broker neither rotates nor renames it, and serves no route once it
+	// holds auditMax bytes, so a request is never served unaudited.
+	auditFile *os.File
+	// auditMax bounds auditFile. Zero is maxLog.
+	auditMax int64
 	// sandbox, when set, is the one sandbox the broker serves. A
 	// registration of any other id is refused, and so is a second stored
 	// policy. A platform that runs one broker per sandbox sets it, so a
@@ -139,6 +146,9 @@ type server struct {
 	ca      *authority
 	lock    *os.File
 	audit   *rotatingFile
+	// auditCap is the audit file the platform handed over, in place of
+	// audit.
+	auditCap *cappedFile
 	// auditLog writes the audit lines of the handler and of the divert
 	// sockets.
 	auditLog *slog.Logger
@@ -233,8 +243,21 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if logMax == 0 {
 		logMax = maxLog
 	}
-	if s.audit, err = openRotating(filepath.Join(cfg.dir, injector.AuditName), logMax); err != nil {
-		return nil, err
+	var auditTo io.Writer
+	if cfg.auditFile != nil {
+		max := cfg.auditMax
+		if max == 0 {
+			max = maxLog
+		}
+		if s.auditCap, err = newCappedFile(cfg.auditFile, max); err != nil {
+			return nil, err
+		}
+		auditTo = s.auditCap
+	} else {
+		if s.audit, err = openRotating(filepath.Join(cfg.dir, injector.AuditName), logMax); err != nil {
+			return nil, err
+		}
+		auditTo = s.audit
 	}
 	if cfg.logTo == nil {
 		if s.log, err = openRotating(filepath.Join(cfg.dir, injector.LogName), logMax); err != nil {
@@ -277,7 +300,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		renewerFor = lifecycleRenewer
 	}
 	s.creds = newCredentials(store, renewerFor, s.logger.Printf)
-	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
+	s.auditLog = slog.New(slog.NewTextHandler(auditTo, nil))
 	s.handler, err = broker.New(broker.Config{
 		HostKey:      hostKey,
 		Credentials:  s.creds,
@@ -346,7 +369,7 @@ func (s *server) serve(ctx context.Context) error {
 		connContext, where = addressContext, s.routes.Addr().String()+" with TLS"
 	}
 	routes := &http.Server{
-		Handler:           s.handler,
+		Handler:           s.audited(s.handler),
 		ConnContext:       connContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
@@ -359,7 +382,7 @@ func (s *server) serve(ctx context.Context) error {
 	// on, and its context marks whether it came in clear text. See
 	// briginternal.go and linklocal.go.
 	internal := &http.Server{
-		Handler:           s.handler,
+		Handler:           s.audited(s.handler),
 		ConnContext:       divertContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
@@ -430,6 +453,9 @@ func (s *server) close() {
 	}
 	if s.audit != nil {
 		_ = s.audit.Close()
+	}
+	if s.auditCap != nil {
+		_ = s.auditCap.f.Close()
 	}
 	if s.log != nil {
 		_ = s.log.Close()

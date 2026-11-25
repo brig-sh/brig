@@ -60,12 +60,17 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 	listenFD := fs.Int("listen-fd", -1, "serve the routes with TLS on this inherited file descriptor, a bound and "+
 		"listening TCP socket, as --listen serves them on its address")
 	sandbox := fs.String("sandbox", "", "serve this sandbox alone: refuse a registration of any other id and a "+
-		"second stored policy")
+		"second stored policy; on Linux the broker also takes no new privileges and refuses the system calls a "+
+		"broker never makes")
+	auditFD := fs.Int("audit-fd", -1, "append the audit lines to this inherited file descriptor, a regular file, "+
+		"instead of audit.log in --dir; the broker never rotates it")
+	auditMax := fs.Int64("audit-max", 0, "with --audit-fd, the size at which the broker refuses every route; "+
+		"0 is 64 MiB")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *dir == "" || fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--listen <host:port> | --listen-fd <n>] [--secret-dir <dir>] [--sandbox <id>]; brig starts it, there is no need to run it by hand")
+		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--listen <host:port> | --listen-fd <n>] [--secret-dir <dir>] [--sandbox <id>] [--audit-fd <n> [--audit-max <bytes>]]; brig starts it, there is no need to run it by hand")
 		return 2
 	}
 	if *listenFD >= 0 {
@@ -80,12 +85,32 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 		}
 		cfg.listener = ln
 	}
+	if *auditFD >= 0 {
+		f := os.NewFile(uintptr(*auditFD), "audit-fd")
+		if f == nil {
+			_, _ = fmt.Fprintf(stderr, "brig-broker: --audit-fd %d is not an open file descriptor\n", *auditFD)
+			return 2
+		}
+		cfg.auditFile = f
+	}
+	if *auditMax < 0 || (*auditMax > 0 && *auditFD < 0) {
+		_, _ = fmt.Fprintln(stderr, "brig-broker: --audit-max is a size, and only with --audit-fd")
+		return 2
+	}
+	cfg.auditMax = *auditMax
 	if *sandbox != "" {
 		if err := broker.ValidID(*sandbox); err != nil {
 			_, _ = fmt.Fprintln(stderr, "brig-broker: --sandbox:", err)
 			return 2
 		}
 		cfg.sandbox = *sandbox
+		// A broker for one sandbox is the process a guest reaches. If a
+		// request ever takes it over, it should not gain privileges through
+		// an exec or reach the kernel interfaces a broker never uses.
+		if err := hardenSandbox(); err != nil {
+			_, _ = fmt.Fprintln(stderr, "brig-broker: --sandbox:", err)
+			return 1
+		}
 	}
 	// Every file the broker creates is its own: the host key, the CA key,
 	// the audit log and the control socket.
