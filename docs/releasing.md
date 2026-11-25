@@ -85,12 +85,13 @@ The push starts the release workflow. The workflow:
   Enterprise
 - signs the checksums with cosign
 - signs and notarizes the macOS binaries
-- opens a **draft** release for the tag, with the Brig Community archives
+- opens a **draft** release for the tag, with the archives of both editions
 
-The Brig Enterprise archives, `brig-enterprise-<version>-<os>-<arch>.tar.gz`,
-are built, notarized and listed in the checksums, but not uploaded. Their
-release channel will decide where they are published. Every binary in both
-editions reports the same version.
+The release holds the Brig Community archives,
+`brig-<version>-<os>-<arch>.tar.gz`, and the Brig Enterprise archives,
+`brig-enterprise-<version>-<os>-<arch>.tar.gz`. One `checksums.txt` lists
+both, and one cosign signature covers it. Every binary in both editions
+reports the same version.
 
 Because of `draft: true`, a tag never publishes a release before someone
 reads the notes.
@@ -158,24 +159,26 @@ the existing draft and opens no second release, because
 
 ## The Homebrew tap
 
-The cask is in `brig-sh/homebrew-brig`, a separate repository. On a stable
-tag, the release job opens a pull request against that repository and does
-not push to it.
+The casks are in `brig-sh/homebrew-brig`, a separate repository: `brig` for
+Brig Community and `brig-enterprise` for Brig Enterprise. On a stable tag,
+the release job opens one pull request for each cask against that
+repository, and does not push to it.
 
-1. Make sure that the cask PR exists.
+1. Make sure that both cask PRs exist.
 
-2. Publish the draft release before you merge the cask PR. The CI of the tap
+2. Publish the draft release before you merge the cask PRs. The CI of the tap
    compares every cask against the published release. A draft is invisible
    to its token, so that check fails until the release is published.
 
-3. If the cask PR needs it, run `brew style --fix Casks/brig.rb` on its
+3. If a cask PR needs it, run `brew style --fix Casks/<cask>.rb` on its
    branch. goreleaser writes the cask with its own indentation. So far, each
    release needed a commit that applies `brew style` to the generated file.
 
-4. Merge the cask PR. A maintainer of the tap reviews and merges it.
+4. Merge the cask PRs. A maintainer of the tap reviews and merges them.
 
-goreleaser generates `Casks/brig.rb` in the tap, and the next stable release
-overwrites it. Make lasting changes in `.goreleaser.yaml`.
+goreleaser generates `Casks/brig.rb` and `Casks/brig-enterprise.rb` in the
+tap, and the next stable release overwrites them. Make lasting changes in
+`.goreleaser.yaml`.
 
 ### When the cask PR opens
 
@@ -198,12 +201,16 @@ a token for that repository:
 
 ## The prerelease channels
 
-`.github/workflows/channel.yml` publishes two casks that are not releases:
+`.github/workflows/channel.yml` publishes four casks that are not releases,
+one for each edition on each channel:
 
 | Cask | Source |
 | --- | --- |
-| `brig@main` | Rebuilt on every merge to `main`. |
-| `brig@experimental` | Promoted by hand from any ref, with a `workflow_dispatch`. |
+| `brig@main`, `brig-enterprise@main` | Rebuilt on every merge to `main`. |
+| `brig@experimental`, `brig-enterprise@experimental` | Promoted by hand from any ref, with a `workflow_dispatch`. |
+
+Both casks of a channel come from the same build and the same channel
+release, which holds the archives of both editions.
 
 With these casks you can try a feature before a release or a release
 candidate has it. See
@@ -257,8 +264,9 @@ ID, from any branch.
 
 ### The channel cask
 
-The workflow pushes the channel cask to the tap directly, with no pull
-request, because the cask is regenerated on every merge.
+The workflow pushes both casks of the channel to the tap directly, in one
+commit, with no pull request, because the casks are regenerated on every
+merge.
 
 - The `main` ruleset of the tap requires a reviewed pull request. So the
   push depends on the `brig-release-bot` App being a bypass actor there.
@@ -267,7 +275,7 @@ request, because the cask is regenerated on every merge.
 - The commit is signed off for the `DCO sign-off` check of the tap.
 - The channel of hull publishes the same way.
 
-`script/render-cask.py` renders the cask. goreleaser does not, because a
+`script/render-cask.py` renders the casks. goreleaser does not, because a
 channel has no version and its cask pipe has nothing to release. The
 renderer emits what `brew style` wants, so a channel cask needs no `--fix`
 pass.
@@ -397,8 +405,8 @@ runs.
 2. Make sure that the tag has one release only, and that the release is
    published.
 
-3. On a stable tag, make sure that the cask PR against
-   `brig-sh/homebrew-brig` exists. goreleaser skips the cask silently if
+3. On a stable tag, make sure that both cask PRs against
+   `brig-sh/homebrew-brig` exist. goreleaser skips the casks silently if
    neither tap token resolved.
 
 4. Make sure that the install path in the tap README works for the release
