@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -56,6 +58,28 @@ func (c *Client) do(ctx context.Context, req *http.Request) (int, []byte, error)
 		return 0, nil, fmt.Errorf("response from %s is larger than %d KiB", req.URL.Host, maxBody>>10)
 	}
 	return resp.StatusCode, body, nil
+}
+
+// postForm posts form to endpoint and returns the status and body. addr is
+// what the deployment calls the endpoint in an error, such as "token
+// address", and action names the request, such as "request a token". A
+// redirect is refused here, so the token and device endpoints say so in one
+// way.
+func (c *Client) postForm(ctx context.Context, endpoint, addr, action string, form url.Values) (int, []byte, error) {
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return 0, nil, fmt.Errorf("the %s of %s is not valid. Ask its administrator to fix it", addr, c.d)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	status, body, err := c.do(ctx, req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%s from %s: %w", action, c.d, err)
+	}
+	if status >= 300 && status < 400 {
+		return 0, nil, fmt.Errorf("%s redirects its %s elsewhere, and Brig does not follow redirects. Ask its administrator to fix it", c.d, addr)
+	}
+	return status, body, nil
 }
 
 // transportError is a request that failed in net/http or crypto/tls. Its text

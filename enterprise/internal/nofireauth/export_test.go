@@ -15,3 +15,6 @@ import (
 func UseRoots(c *Client, roots *x509.CertPool) {
 	c.http.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
 }
+
+// RedirectHTML is redirectHTML, for the test of its escaping.
+var RedirectHTML = redirectHTML
