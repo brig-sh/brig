@@ -12,7 +12,8 @@
 // The one exception is a linked git worktree. Its .git is a file, which the
 // toolchain does not recognise as a repository, so it embeds no VCS data at
 // all. The Makefile passes git's own answers in the variables below, and Read
-// uses them only when the toolchain embedded nothing. goreleaser passes none.
+// uses them only when the toolchain embedded nothing. goreleaser passes only
+// releaseVersion.
 package buildinfo
 
 import (
@@ -32,6 +33,14 @@ var (
 	gitDescribe   string // git describe --tags --long --match 'v[0-9]*'
 	gitModified   string // "true" when git status --porcelain printed anything
 )
+
+// releaseVersion is set with -X by goreleaser, to one value for every binary
+// of a release, so that Brig Community, Brig Enterprise, brigd and
+// brig-broker report the same version. The toolchain alone does not: Brig
+// Enterprise is the nested module github.com/brig-sh/brig/enterprise, whose
+// version it derives from enterprise/v* tags, and releases push v* tags.
+// Empty in every other build.
+var releaseVersion string
 
 // Info is one binary's build.
 type Info struct {
@@ -57,7 +66,16 @@ func Read() Info {
 	if info.Commit == "" {
 		info = info.withGit(gitCommit, gitCommitTime, gitDescribe, gitModified == "true")
 	}
-	return info
+	return info.withRelease(releaseVersion)
+}
+
+// withRelease replaces the version with the one the release build stamped,
+// when it stamped one.
+func (i Info) withRelease(version string) Info {
+	if version != "" {
+		i.Version = version
+	}
+	return i
 }
 
 // From reads one debug.BuildInfo. Fields the build info lacks fall back to

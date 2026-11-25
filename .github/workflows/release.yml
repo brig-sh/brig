@@ -64,6 +64,7 @@ jobs:
       - name: Check the tree stays clean after go mod tidy
         run: |
           go mod tidy
+          go -C enterprise mod tidy
           git diff --exit-code
 
       - uses: sigstore/cosign-installer@v3

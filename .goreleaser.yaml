@@ -1,7 +1,9 @@
 # goreleaser builds and publishes brig.
 #
 # Three binaries from one module: brig, the CLI, brigd, the session daemon,
-# and brig-broker, the credential broker of brokered routes. All three are
+# and brig-broker, the credential broker of brokered routes. A fourth,
+# brig-enterprise, is the brig of Brig Enterprise, built from the nested
+# enterprise module. Both editions share brigd and brig-broker. All are
 # pure Go with no cgo, so one Linux runner cross-compiles every
 # target -- including darwin/arm64, which is the one that matters most. The
 # keychain is read by shelling out to `security` rather than through cgo
@@ -23,14 +25,20 @@ before:
   hooks:
     - go mod tidy
     - go test ./...
+    # The enterprise module is not part of ./... above.
+    - go -C enterprise mod tidy
+    - go -C enterprise test ./...
 
-# No version is stamped into either binary. `brig version` reads the tag,
-# commit and modified flag the Go toolchain embeds from the checkout, which
-# is why the release workflow clones with full history: a shallow clone
-# without the tag would embed a pseudo-version instead. The `go mod tidy`
-# hook above has to leave the tree clean, or every release build reads as
-# +dirty; goreleaser checks the tree before hooks run, so the release
-# workflow runs the tidy first and fails on a diff.
+# Every binary is stamped with one version, v{{ .Version }}, through
+# buildinfo.releaseVersion, so brig, brigd, brig-broker and Brig Enterprise
+# report the same string. The toolchain alone would not give that: it derives
+# the nested enterprise module's version from enterprise/v* tags, which
+# releases do not push. The commit and modified flag still come from what the
+# Go toolchain embeds from the checkout, which is why the release workflow
+# clones with full history. The `go mod tidy` hooks above have to leave the
+# tree clean, or every release build reads as +dirty; goreleaser checks the
+# tree before hooks run, so the release workflow runs the tidy first and
+# fails on a diff.
 builds:
   - id: brig
     main: ./cmd/brig
@@ -43,6 +51,7 @@ builds:
       # Where brig's own telemetry goes. hull bakes the same endpoint into its
       # copy of the client.
       - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
+      - -X github.com/brig-sh/brig/internal/buildinfo.releaseVersion=v{{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   - id: brigd
@@ -55,6 +64,23 @@ builds:
       - -s -w
       # brigd sends no command event, but it uploads what is queued.
       - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
+      - -X github.com/brig-sh/brig/internal/buildinfo.releaseVersion=v{{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  # Brig Enterprise: the same CLI plus brig login and brig logout. It is built
+  # in enterprise/, whose go.mod replaces the core with the directory above,
+  # so both editions come from one commit.
+  - id: brig-enterprise
+    dir: enterprise
+    main: ./cmd/brig
+    binary: brig
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w
+      - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
+      - -X github.com/brig-sh/brig/internal/buildinfo.releaseVersion=v{{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   # A binary of its own because it refreshes credentials, and no package on
@@ -68,6 +94,7 @@ builds:
     goarch: [arm64, amd64]
     ldflags:
       - -s -w
+      - -X github.com/brig-sh/brig/internal/buildinfo.releaseVersion=v{{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 # Developer ID signing and notarization for the macOS binaries.
@@ -83,7 +110,7 @@ builds:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids: [brig, brigd, brig-broker]
+      ids: [brig, brig-enterprise, brigd, brig-broker]
       sign:
         certificate: "{{.Env.MACOS_SIGN_P12}}"
         password: "{{.Env.MACOS_SIGN_PASSWORD}}"
@@ -107,6 +134,26 @@ archives:
       # The completion scripts, verbatim: these are the bytes `brig completion
       # <shell>` prints, so the archive and the command cannot disagree about
       # what a shell is asked to source. The cask below installs them.
+      - src: internal/cli/completions/brig.bash
+        dst: completions/brig.bash
+      - src: internal/cli/completions/brig.zsh
+        dst: completions/brig.zsh
+      - src: internal/cli/completions/brig.fish
+        dst: completions/brig.fish
+
+  # Brig Enterprise, with the same brigd and brig-broker. It carries both
+  # licenses: LICENSE for the core and enterprise/LICENSE for the Enterprise
+  # code. It is built, signed and checksummed with every release, but not
+  # uploaded: where it is published is decided with its release channel. See
+  # release.ids below.
+  - id: brig-enterprise
+    ids: [brig-enterprise, brigd, brig-broker]
+    name_template: "{{ .ProjectName }}-enterprise-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+      - enterprise/LICENSE
       - src: internal/cli/completions/brig.bash
         dst: completions/brig.bash
       - src: internal/cli/completions/brig.zsh
@@ -178,6 +225,9 @@ release:
   # now, which makes the review the only thing standing between a tag and
   # something the world can download.
   draft: true
+  # Community only. The Brig Enterprise archive stays in dist/ until its
+  # release channel decides where it is published.
+  ids: [brig]
   # Re-run the workflow for a tag that already has a draft -- a
   # workflow_dispatch retry, or a second push -- and target that draft
   # instead of opening a second release beside it. Without this, tag

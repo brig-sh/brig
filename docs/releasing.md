@@ -81,10 +81,16 @@ with full history. Without the tag, the output changes:
 
 The push starts the release workflow. The workflow:
 
-- builds both binaries for every target
+- builds the binaries for every target, for Brig Community and Brig
+  Enterprise
 - signs the checksums with cosign
 - signs and notarizes the macOS binaries
-- opens a **draft** release for the tag
+- opens a **draft** release for the tag, with the Brig Community archives
+
+The Brig Enterprise archives, `brig-enterprise-<version>-<os>-<arch>.tar.gz`,
+are built, notarized and listed in the checksums, but not uploaded. Their
+release channel will decide where they are published. Every binary in both
+editions reports the same version.
 
 Because of `draft: true`, a tag never publishes a release before someone
 reads the notes.

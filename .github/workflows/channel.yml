@@ -126,6 +126,7 @@ jobs:
       - name: Check the tree stays clean after go mod tidy
         run: |
           go mod tidy
+          go -C enterprise mod tidy
           git diff --exit-code
 
       # The version is read off a binary rather than composed here. The Go
@@ -219,6 +220,8 @@ jobs:
           # The checkout persisted no credentials, so the push is given one.
           git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "$SIDE:refs/tags/$TAG"
+          # Community archives only: the Brig Enterprise ones wait for their
+          # own channel (.goreleaser.yaml, release.ids).
           # checksums.txt as well as the archives: the tap's CI asks each
           # release whether it really published the sha256 its cask claims,
           # and a channel cask has to answer that the same way a stable one
@@ -226,7 +229,7 @@ jobs:
           gh release create "$TAG" --draft --prerelease --verify-tag \
             --title "brig $V ($CHANNEL channel)" \
             --notes "Built from $SOURCE at $BUILT. Not a release." \
-            dist/*.tar.gz dist/checksums.txt
+            dist/brig-"$V"-*.tar.gz dist/checksums.txt
           gh release edit "$TAG" --draft=false
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
