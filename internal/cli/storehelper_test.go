@@ -27,6 +27,6 @@ func brigHelper() {
 		}
 		return f, nil
 	}
-	Main()
+	Main(Options{Edition: "community"})
 	os.Exit(0)
 }

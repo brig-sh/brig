@@ -3719,8 +3719,8 @@ case "$out" in
   *) bad "doctor says a hull with a capability report is asked by report -- got: $out" ;;
 esac
 # The first row is the build that produced the report, the same line
-# `brig version` prints after the word brig.
-build="$("$WORK/brig" version | sed 's/^brig //')"
+# `brig version` prints after the word brig, without the edition.
+build="$("$WORK/brig" version | sed 's/^brig //; s/, community)$/)/')"
 [ "$(head -1 "$WORK/doctor.out")" = "  ok  brig      $build" ] \
   && ok "doctor opens with the brig build" \
   || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
@@ -4160,6 +4160,28 @@ if command -v fish >/dev/null 2>&1; then
 else
   echo "  --   fish not installed, skipping its script"
 fi
+
+# --- brig login in Brig Community ---
+# Only Brig Enterprise has brig login and brig logout. Here each one prints a
+# hint and exits non-zero, and no keychain item of the login store appears.
+# The keychain is checked on macOS only, where `security` reads it.
+login_item() {
+  command -v security >/dev/null 2>&1 || { echo none; return; }
+  security find-generic-password -s sh.brig.login >/dev/null 2>&1 && echo present || echo absent
+}
+item_before="$(login_item)"
+for verb in login logout; do
+  out="$("$WORK/brig" "$verb" https://my.nofire.ai 2>&1)"; rc=$?
+  case "$out" in
+    "brig: brig $verb is part of Brig Enterprise, and this is Brig Community. Install Brig Enterprise to "*)
+      [ "$rc" != 0 ] && ok "brig $verb in Brig Community prints the hint and exits $rc" \
+        || bad "brig $verb in Brig Community exits 0" ;;
+    *) bad "brig $verb in Brig Community prints the hint -- got (exit $rc): $out" ;;
+  esac
+done
+[ "$(login_item)" = "$item_before" ] \
+  && ok "brig login in Brig Community leaves the keychain as it was" \
+  || bad "brig login in Brig Community changed the sh.brig.login keychain item"
 
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"

@@ -186,8 +186,78 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
                        (default). Another shim can give up the microVM
 `
 
-// Main runs brig on os.Args and exits the process.
-func Main() {
+// Options are what one build of brig adds to the command line every build
+// shares.
+type Options struct {
+	// Edition names the build, "community" or "enterprise". brig version
+	// prints it.
+	Edition string
+	// Commands are the verbs this build adds.
+	Commands []Command
+}
+
+// Command is a verb that a build adds to the command line.
+type Command struct {
+	// Verb is the word that runs the command.
+	Verb string
+	// Synopsis is the command's lines in brig help, set in that text's
+	// columns and ending in a newline.
+	Synopsis string
+	// Usage is what brig <verb> --help and brig help <verb> print.
+	Usage string
+	// Complete returns the words that may stand at the cursor, which holds
+	// cur, after the words rest. nil offers nothing.
+	Complete func(rest []string, cur string) []string
+	// Run runs the command with the words after the verb, and prints its
+	// output to out.
+	Run func(out io.Writer, args []string) error
+}
+
+// The build's additions, which Main records before it reads the line.
+var (
+	// edition is the build brig version names.
+	edition = "community"
+	// commands are the verbs the build added, keyed by verb.
+	commands = map[string]Command{}
+	// usageText is usage with the added verbs' lines.
+	usageText = usage
+)
+
+// usageAnchor is the line of usage that the added verbs' lines go above.
+const usageAnchor = "  brig telemetry status|on|off"
+
+// register records o, so that dispatch runs each added verb, and help and
+// completion name it as they name the verbs every build has.
+func register(o Options) {
+	if o.Edition != "" {
+		edition = o.Edition
+	}
+	for _, c := range o.Commands {
+		commands[c.Verb] = c
+		verbs = append(verbs, c.Verb)
+		verbUsages[c.Verb] = c.Usage
+		usageText = strings.Replace(usageText, usageAnchor, c.Synopsis+usageAnchor, 1)
+	}
+	slices.Sort(verbs)
+}
+
+// enterpriseOnly are the verbs only Brig Enterprise has, each with what it
+// does. A build that does not add one answers it with a hint rather than as
+// an unknown word, since the reader typed a real command.
+var enterpriseOnly = map[string]string{
+	"login":  "log in to NOFire AI",
+	"logout": "log out of NOFire AI",
+}
+
+// enterpriseOnlyf is the refusal of a verb only Brig Enterprise has.
+func enterpriseOnlyf(verb string) error {
+	return fmt.Errorf("brig %s is part of Brig Enterprise, and this is Brig Community. Install Brig Enterprise to %s",
+		verb, enterpriseOnly[verb])
+}
+
+// Main runs brig on os.Args with what o adds, and exits the process.
+func Main(o Options) {
+	register(o)
 	// The egress resolver brig starts for a sandbox under a policy on Linux.
 	// It reads no profile and no state, and runs inside a network namespace
 	// brig entered for it, so it is handled before anything else.
@@ -292,7 +362,7 @@ func dispatch(args []string) error {
 	globalJSON = g.json
 	if len(verbLine) == 0 {
 		// No verb: a bare `brig`, or global flags and nothing to do with them.
-		fmt.Print(usage)
+		fmt.Print(usageText)
 		return nil
 	}
 	verb, rest := verbLine[0], verbLine[1:]
@@ -368,6 +438,13 @@ func dispatch(args []string) error {
 		return jsonUnsupportedf(verb)
 	}
 
+	if c, ok := commands[verb]; ok {
+		return c.Run(os.Stdout, rest)
+	}
+	if _, ok := enterpriseOnly[verb]; ok {
+		return enterpriseOnlyf(verb)
+	}
+
 	switch verb {
 	case "-h", "--help", "help":
 		// `brig help <verb>` names a verb and answers with that verb's usage,
@@ -380,7 +457,7 @@ func dispatch(args []string) error {
 				return nil
 			}
 		}
-		fmt.Print(usage)
+		fmt.Print(usageText)
 		return nil
 	case "version", "--version":
 		return versionCmd(verb, rest)

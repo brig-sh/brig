@@ -108,6 +108,41 @@ jobs:
       - name: cross-compile linux/amd64
         run: GOOS=linux GOARCH=amd64 go build ./...
 
+  # Brig Enterprise is a module of its own under enterprise/, which the root
+  # ./... does not enter. It builds against the core beside it, so a core
+  # change that breaks it fails here, in the same pull request.
+  enterprise:
+    name: enterprise
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: enterprise
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+          cache-dependency-path: enterprise/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
   tests-kept:
     name: tests kept
     runs-on: ubuntu-latest

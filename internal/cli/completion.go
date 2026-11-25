@@ -256,6 +256,12 @@ func complete(words []string) (string, []string) {
 			return dirNone, nil
 		}
 		return names(cur, refCandidates())
+	case commands[verb].Verb != "":
+		c := commands[verb]
+		if c.Complete == nil {
+			return dirNone, nil
+		}
+		return names(cur, c.Complete(rest, cur))
 	case verb == "network":
 		return completeNetwork(rest, cur)
 	case verb == "config":

@@ -57,6 +57,16 @@ script/smoke.sh
 `gofmt -l .` must print nothing. `script/smoke.sh` runs the real binary
 against a stub runtime, so it runs anywhere and needs no VM.
 
+`enterprise/` is a separate Go module, and the commands above do not enter
+it. For a change to it, or to a core package it imports, also run in
+`enterprise/`:
+
+```bash
+gofmt -l .
+go vet ./...
+go test -race ./...
+```
+
 For a documentation change, also run:
 
 ```bash

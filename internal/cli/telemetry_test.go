@@ -163,6 +163,8 @@ func TestTelemetryCommandNeverSendsAStrayWord(t *testing.T) {
 		{"exec", "exec", false},
 		{"ls", "ls", false},
 		{"--version", "version", false},
+		{"login", "login", false},
+		{"logout", "logout", false},
 		{"claude", "run", true},
 		{"claude@refactor", "run", true},
 		{"ghcr.io/example/private-thing:v1", unknownCommand, false},

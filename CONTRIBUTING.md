@@ -47,6 +47,8 @@ CI does not call `make`. It runs these steps
   the only label that CI reads.
 - `goreleaser check` and a full snapshot build. They run the release config
   before a tag depends on it.
+- In `enterprise/`, a separate job: `gofmt -l .`, `go vet ./...` and
+  `go test -race ./...`.
 
 `gofmt` and `go vet` are the only static checks. The repository has no
 `golangci-lint` configuration and no lint target in the Makefile.
@@ -74,6 +76,17 @@ the `brig` built from the change. `script/hull-linux-boot.sh` holds the checks:
 - `brig rm` leaves no sandbox, hull instance or gateway behind.
 
 This job does not cover hull on macOS or nerdctl on Linux.
+
+## Brig Community and Brig Enterprise
+
+Everything outside [enterprise/](enterprise/) is Brig Community, under the
+Apache License 2.0 in [LICENSE](LICENSE). `enterprise/` is Brig Enterprise, a
+separate Go module under [enterprise/LICENSE](enterprise/LICENSE). A
+contribution to a file under `enterprise/` is made under that license.
+
+Imports go one way: Brig Enterprise imports the core, and the core never
+imports Brig Enterprise. `go vet ./...` and `go test ./...` at the root do not
+enter `enterprise/`. CI runs its gates in a job of their own.
 
 ## Dependencies
 
