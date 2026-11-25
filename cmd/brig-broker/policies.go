@@ -298,6 +298,11 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.refuseStopping(w) {
 		return
 	}
+	if other := s.otherPolicy(key); other != "" {
+		http.Error(w, fmt.Sprintf("policy %s: this broker serves sandbox %s alone and holds policy %s", key,
+			s.cfg.sandbox, other), http.StatusConflict)
+		return
+	}
 	ids := s.boundTo(key)
 	// The same content under another version moves nobody: the rules are
 	// the ones the sandboxes already have.
@@ -369,4 +374,20 @@ func (s *server) policyVersions() map[string]string {
 		out[key] = sp.version
 	}
 	return out
+}
+
+// otherPolicy returns the key of a stored policy other than key, when the
+// broker serves one sandbox, and "" otherwise. Such a broker holds the policy
+// of its sandbox and no other, so a broker that leaks holds no other
+// sandbox's rules. Called with mu held.
+func (s *server) otherPolicy(key string) string {
+	if s.cfg.sandbox == "" {
+		return ""
+	}
+	for k := range s.policies {
+		if k != key {
+			return k
+		}
+	}
+	return ""
 }

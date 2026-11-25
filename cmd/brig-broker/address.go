@@ -111,21 +111,18 @@ func (l registeredListener) Accept() (net.Conn, error) {
 	}
 }
 
-// listenAddress serves the routes on listen with TLS: a TCP listener that
-// drops unregistered peers in a registeredListener, bounded at maxConns by
-// newLimitListener, under tls.NewListener with the brig.internal
-// configuration of ca, wrapped in an addressListener.
+// listenAddress serves the routes on ln with TLS: ln drops unregistered
+// peers in a registeredListener, bounded at maxConns by newLimitListener,
+// under tls.NewListener with the brig.internal configuration of ca, wrapped
+// in an addressListener. ln is the listener of --listen, or the one handed
+// over with --listen-fd.
 //
 // The wrapper hides *tls.Conn from net/http, so the TLS handshake runs on the
 // server's first read of the connection, under ReadHeaderTimeout. r.TLS is
 // nil on these requests, and nothing on the route server reads it.
-func listenAddress(listen string, ca *authority, registered func(ip string) bool) (net.Listener, error) {
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		return nil, fmt.Errorf("cannot serve routes on %s: %w", listen, err)
-	}
+func listenAddress(ln net.Listener, ca *authority, registered func(ip string) bool) net.Listener {
 	filtered := registeredListener{Listener: ln, registered: registered}
-	return addressListener{tls.NewListener(newLimitListener(filtered, maxConns), ca.serverConfig())}, nil
+	return addressListener{tls.NewListener(newLimitListener(filtered, maxConns), ca.serverConfig())}
 }
 
 // addressContext marks a connection of the address listener.

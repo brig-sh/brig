@@ -19,6 +19,11 @@
 // registered with the address it came from. docs/broker.md ("Running the
 // broker on a node") describes both.
 //
+// A platform that runs one broker per sandbox starts it with --sandbox, and
+// may bind the route listener itself, somewhere only that sandbox reaches,
+// and hand it over with --listen-fd. docs/broker.md ("One broker per
+// sandbox") describes it.
+//
 // Nothing it holds goes on a command line. The host key that signs the tokens
 // is a file in its directory that only it reads. docs/broker.md describes it.
 package main
@@ -29,10 +34,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/brig-sh/brig/internal/broker"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
@@ -50,12 +57,35 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 		"the port file is neither read nor written")
 	secretDir := fs.String("secret-dir", "", "read credentials from the files of this directory, one per secret, "+
 		"instead of brig's secret store; the directory is read-only")
+	listenFD := fs.Int("listen-fd", -1, "serve the routes with TLS on this inherited file descriptor, a bound and "+
+		"listening TCP socket, as --listen serves them on its address")
+	sandbox := fs.String("sandbox", "", "serve this sandbox alone: refuse a registration of any other id and a "+
+		"second stored policy")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *dir == "" || fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--listen <host:port>] [--secret-dir <dir>]; brig starts it, there is no need to run it by hand")
+		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--listen <host:port> | --listen-fd <n>] [--secret-dir <dir>] [--sandbox <id>]; brig starts it, there is no need to run it by hand")
 		return 2
+	}
+	if *listenFD >= 0 {
+		if *listen != "" {
+			_, _ = fmt.Fprintln(stderr, "brig-broker: --listen and --listen-fd both name the route listener; pass one")
+			return 2
+		}
+		ln, err := inheritedListener(*listenFD)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "brig-broker:", err)
+			return 2
+		}
+		cfg.listener = ln
+	}
+	if *sandbox != "" {
+		if err := broker.ValidID(*sandbox); err != nil {
+			_, _ = fmt.Fprintln(stderr, "brig-broker: --sandbox:", err)
+			return 2
+		}
+		cfg.sandbox = *sandbox
 	}
 	// Every file the broker creates is its own: the host key, the CA key,
 	// the audit log and the control socket.
@@ -93,4 +123,25 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 		return 1
 	}
 	return 0
+}
+
+// inheritedListener turns the file descriptor fd, a bound and listening TCP
+// socket the parent opened, into a listener. Anything else is refused: a
+// unix socket or a socket that is not listening would fail only at the first
+// accept, after the platform had already registered a sandbox with it.
+func inheritedListener(fd int) (net.Listener, error) {
+	f := os.NewFile(uintptr(fd), "listen-fd")
+	if f == nil {
+		return nil, fmt.Errorf("--listen-fd %d is not an open file descriptor", fd)
+	}
+	defer f.Close()
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, fmt.Errorf("--listen-fd %d is not a listening socket: %w", fd, err)
+	}
+	if _, ok := ln.(*net.TCPListener); !ok {
+		_ = ln.Close()
+		return nil, fmt.Errorf("--listen-fd %d is a %s socket, not TCP", fd, ln.Addr().Network())
+	}
+	return ln, nil
 }

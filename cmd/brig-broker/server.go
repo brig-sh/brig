@@ -74,6 +74,17 @@ type serverConfig struct {
 	// Kubernetes node reaches the broker at. No port file is read or
 	// written, and the divert sockets keep working beside it.
 	listen string
+	// listener, when set, is a TCP listener the broker was handed, open and
+	// bound, and the routes are served on it as on listen. A platform that
+	// puts the listener where the broker itself has no business, such as a
+	// network namespace that only one sandbox reaches, binds it and passes
+	// it as a file descriptor. It excludes listen.
+	listener net.Listener
+	// sandbox, when set, is the one sandbox the broker serves. A
+	// registration of any other id is refused, and so is a second stored
+	// policy. A platform that runs one broker per sandbox sets it, so a
+	// broker cannot be made to serve a sandbox it was not started for.
+	sandbox string
 	// transport carries the upstream requests. nil is the broker's own,
 	// with the system roots.
 	transport http.RoundTripper
@@ -283,12 +294,16 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.listen != "" {
+	if cfg.onAddress() {
 		// The port file is the loopback listener's. A node broker neither
 		// reads nor writes it, so a stale one stays as it is.
-		if s.routes, err = listenAddress(cfg.listen, s.ca, s.registeredAddr); err != nil {
-			return nil, err
+		ln := cfg.listener
+		if ln == nil {
+			if ln, err = net.Listen("tcp", cfg.listen); err != nil {
+				return nil, fmt.Errorf("cannot serve routes on %s: %w", cfg.listen, err)
+			}
 		}
+		s.routes = listenAddress(ln, s.ca, s.registeredAddr)
 	} else {
 		ln, err := listenRoutes(cfg.dir)
 		if err != nil {
@@ -327,7 +342,7 @@ func (s *server) serve(ctx context.Context) error {
 	// TLS. Each marks its connections, and the handler's clear-text check
 	// reads the mark.
 	connContext, where := loopbackContext, fmt.Sprintf("127.0.0.1:%d", s.port)
-	if s.cfg.listen != "" {
+	if s.cfg.onAddress() {
 		connContext, where = addressContext, s.routes.Addr().String()+" with TLS"
 	}
 	routes := &http.Server{
@@ -500,6 +515,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := broker.ValidID(req.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.cfg.sandbox != "" && req.ID != s.cfg.sandbox {
+		http.Error(w, fmt.Sprintf("sandbox %s: this broker serves sandbox %s alone", req.ID, s.cfg.sandbox),
+			http.StatusForbidden)
 		return
 	}
 	var stored *storedPolicy
@@ -794,16 +814,24 @@ func (s *server) setVends(id string, vends map[string]vendRoute) {
 // nodeFlags names the flags that make the broker a node daemon, or "" for a
 // broker on a workstation.
 func (s *server) nodeFlags() string {
+	listen := "--listen"
+	if s.cfg.listener != nil {
+		listen = "--listen-fd"
+	}
 	switch {
-	case s.cfg.listen != "" && s.cfg.secretDir != "":
-		return "--listen and --secret-dir"
-	case s.cfg.listen != "":
-		return "--listen"
+	case s.cfg.onAddress() && s.cfg.secretDir != "":
+		return listen + " and --secret-dir"
+	case s.cfg.onAddress():
+		return listen
 	case s.cfg.secretDir != "":
 		return "--secret-dir"
 	}
 	return ""
 }
+
+// onAddress reports whether the routes are served on an address listener,
+// one the broker bound from --listen or one it was handed with --listen-fd.
+func (c serverConfig) onAddress() bool { return c.listen != "" || c.listener != nil }
 
 // refuseHostRoutes refuses a registration whose routes need the host, when
 // the broker runs as a node daemon. A route that vends runs the host's aws
@@ -881,8 +909,8 @@ func (s *server) sandboxAddr(req injector.Sandbox) (addr, uid string, err error)
 		if req.UID != "" {
 			return "", "", errors.New("it has a pod UID and no address")
 		}
-	case s.cfg.listen == "":
-		return "", "", errors.New("it has an address, and this broker runs without --listen, so no pod can reach it")
+	case !s.cfg.onAddress():
+		return "", "", errors.New("it has an address, and this broker runs without --listen or --listen-fd, so no pod can reach it")
 	case req.BrigInternal != "" || len(req.Modes) > 0:
 		return "", "", errors.New("it has an address, and a sandbox on the address listener has no brig.internal " +
 			"address and no route mode besides endpoint")
