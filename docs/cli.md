@@ -747,11 +747,11 @@ brig version
 ```
 
 `brig version` prints the version and, in parentheses, the build it came
-from: the short commit, the commit date, the Go version and the platform.
-`--version` is the same command.
+from: the short commit, the commit date, the Go version, the platform and the
+edition, `community` or `enterprise`. `--version` is the same command.
 
 ```
-brig v0.3.0 (91b0c7b, 2026-09-26, go1.26.0, darwin/arm64)
+brig v0.3.0 (91b0c7b, 2026-09-26, go1.26.0, darwin/arm64, community)
 ```
 
 The version comes from the nearest tag:
@@ -780,7 +780,8 @@ brig version --json
     "modified": false,
     "goVersion": "go1.26.0",
     "os": "darwin",
-    "arch": "arm64"
+    "arch": "arm64",
+    "edition": "community"
   }
 }
 ```

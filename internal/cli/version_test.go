@@ -9,9 +9,10 @@ import (
 
 // brig version names the build the binary came from, not a stamped string:
 // the version Go derived from the nearest tag, then the commit and the rest
-// of the build in parentheses. Both spellings print the same line.
+// of the build in parentheses, and the edition last in them. Both spellings
+// print the same line.
 func TestVersionPrintsTheBuild(t *testing.T) {
-	want := "brig " + buildinfo.Read().String() + "\n"
+	want := "brig " + strings.TrimSuffix(buildinfo.Read().String(), ")") + ", community)\n"
 	for _, verb := range []string{"version", "--version"} {
 		out, err := captureStdout(t, func() error { return run([]string{verb}) })
 		if err != nil {

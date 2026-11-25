@@ -135,7 +135,9 @@ Brig has not reached 1.0, and a minor release can make breaking changes.
 - Brand marks used on this page: [assets/README.md](assets/README.md).
 - Telemetry: the first run on a terminal asks before Brig sends anything.
   `brig telemetry off` turns it off. See [Telemetry](docs/telemetry.md).
-- License: Apache License 2.0. See [LICENSE](LICENSE).
+- License: Apache License 2.0. See [LICENSE](LICENSE). The exception is
+  [enterprise/](enterprise/), which holds Brig Enterprise under its own
+  license, [enterprise/LICENSE](enterprise/LICENSE).
 
 <p align="center">
   <picture>

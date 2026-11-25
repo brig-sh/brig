@@ -35,6 +35,7 @@ func TestVersionJSONCarriesTheBuild(t *testing.T) {
 				GoVersion  string `json:"goVersion"`
 				OS         string `json:"os"`
 				Arch       string `json:"arch"`
+				Edition    string `json:"edition"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal([]byte(out), &doc); err != nil {
@@ -45,7 +46,7 @@ func TestVersionJSONCarriesTheBuild(t *testing.T) {
 		}
 		d := doc.Data
 		if d.Version != info.Version || d.Commit != info.Commit || d.Modified != info.Modified ||
-			d.GoVersion != info.GoVersion || d.OS != info.OS || d.Arch != info.Arch {
+			d.GoVersion != info.GoVersion || d.OS != info.OS || d.Arch != info.Arch || d.Edition != "community" {
 			t.Errorf("brig %s data = %+v, want the build %+v", typed, d, info)
 		}
 		// A build without VCS has no commit time, and the field is then absent

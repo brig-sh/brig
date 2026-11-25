@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/brig-sh/brig/internal/buildinfo"
@@ -25,8 +26,14 @@ func versionCmd(verb string, rest []string) error {
 	if wantJSON {
 		return writeJSONDocument(os.Stdout, "Version", versionData(info))
 	}
-	fmt.Printf("brig %s\n", info)
+	fmt.Printf("brig %s\n", versionLine(info))
 	return nil
+}
+
+// versionLine is the build with the edition last in its parentheses, so the
+// one line a bug report quotes says which brig it was.
+func versionLine(info buildinfo.Info) string {
+	return strings.TrimSuffix(info.String(), ")") + ", " + edition + ")"
 }
 
 // versionPayload is the data of a Version document: the same fields the line
@@ -41,6 +48,7 @@ type versionPayload struct {
 	GoVersion  string `json:"goVersion"`
 	OS         string `json:"os"`
 	Arch       string `json:"arch"`
+	Edition    string `json:"edition"`
 }
 
 func versionData(info buildinfo.Info) versionPayload {
@@ -51,6 +59,7 @@ func versionData(info buildinfo.Info) versionPayload {
 		GoVersion: info.GoVersion,
 		OS:        info.OS,
 		Arch:      info.Arch,
+		Edition:   edition,
 	}
 	if !info.CommitTime.IsZero() {
 		p.CommitTime = info.CommitTime.UTC().Format(time.RFC3339)

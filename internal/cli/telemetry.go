@@ -152,6 +152,7 @@ var countedVerbs = map[string]struct {
 	"network": {"network", false}, "agent": {"agent", false}, "policy": {"policy", false},
 	"secret": {"secret", false}, "doctor": {"doctor", false}, "report": {"report", false},
 	"version": {"version", false}, "--version": {"version", false},
+	"login": {"login", false}, "logout": {"logout", false},
 	"help": {"help", false}, "-h": {"help", false}, "--help": {"help", false},
 }
 
