@@ -10,8 +10,8 @@ them, they win, and this file must be corrected.
 
 ## What Brig is
 
-Brig runs coding agents in a microVM sandbox. `cmd/brig` is the CLI and
-`cmd/brigd` is the session daemon. Everything else is under `internal/`, one
+Brig runs coding agents in a microVM sandbox. `cmd/brig` is the CLI, a main
+around `internal/cli`, and `cmd/brigd` is the session daemon. Everything else is under `internal/`, one
 package per concern. Each package states its job in its `// Package`
 comment. Read that comment before you change a package.
 

@@ -1,0 +1,556 @@
+package cli
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/wrap"
+)
+
+// removeRuntime is a runtime holding a fixed list of sandboxes and recording
+// which of them it was asked to remove. Everything else it embeds is nil and
+// panics if reached: rm has no business booting or exec'ing anything.
+type removeRuntime struct {
+	runtime.Runtime
+	list    []runtime.Instance
+	removed []string
+}
+
+func (r *removeRuntime) Kind() string                      { return "hull" }
+func (r *removeRuntime) Bin() string                       { return "hull" }
+func (r *removeRuntime) List() ([]runtime.Instance, error) { return r.list, nil }
+func (r *removeRuntime) Stop(string) error                 { return nil }
+func (r *removeRuntime) Remove(name string) error {
+	r.removed = append(r.removed, name)
+	return nil
+}
+
+// removeHost is jsonRunHost with the same fake wired into both detection
+// seams: `rm --all` reads the instance list off the read-verb detector, and
+// `rm <ref>` goes through the run line's.
+func removeHost(t *testing.T, rt runtime.Runtime) {
+	t.Helper()
+	jsonRunHost(t, rt)
+	withRuntime(t, rt)
+}
+
+func twoSandboxes() *removeRuntime {
+	return &removeRuntime{list: []runtime.Instance{
+		{Name: "brig-faker", State: "running"},
+		{Name: "brig-faker-refactor", State: "stopped"},
+	}}
+}
+
+// `brig rm --all` removes every sandbox there is, so with nobody to ask it
+// refuses and names the flag that answers in advance, rather than assuming yes
+// and making the scripted case the one that cannot be stopped. The test binary
+// has no terminal on stdin, which is exactly that case.
+func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		_, err := captureStdout(t, func() error { return run(args) })
+		if err == nil {
+			t.Fatalf("brig %s removed without asking", strings.Join(args, " "))
+		}
+		if !strings.Contains(err.Error(), "-y") {
+			t.Errorf("brig %s: %v, want it to name -y", strings.Join(args, " "), err)
+		}
+		if len(rt.removed) != 0 {
+			t.Errorf("brig %s removed %v after refusing", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
+// v0.5.0 removed `brig reset`. Every shape of it is refused by name, with the
+// whole of `brig rm --all` in the message, and removes nothing: the old verb
+// removed every sandbox, so a line that still has it must stop here.
+func TestResetRefusesAll(t *testing.T) {
+	for _, args := range [][]string{
+		{"reset"}, {"reset", "-y"}, {"reset", "--dry-run"},
+		{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"},
+	} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		_, err := captureStdout(t, func() error { return run(args) })
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s: %v, want a usageError", strings.Join(args, " "), err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "--all") || !strings.Contains(err.Error(), "brig rm --all") {
+			t.Errorf("brig %s: %v, want it to name --all and `brig rm --all`", strings.Join(args, " "), err)
+		}
+		if len(rt.removed) != 0 {
+			t.Errorf("brig %s removed %v after refusing", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
+// -y is the answer given in advance. Both spellings, on either side of --all.
+func TestRemoveAllWithYesRemovesEverySandbox(t *testing.T) {
+	for _, args := range [][]string{
+		{"rm", "--all", "-y"},
+		{"rm", "-y", "--all"},
+		{"rm", "--all", "--yes"},
+	} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		out, err := captureStdout(t, func() error { return run(args) })
+		if err != nil {
+			t.Errorf("brig %s: %v", strings.Join(args, " "), err)
+			continue
+		}
+		if len(rt.removed) != 2 {
+			t.Errorf("brig %s removed %v, want both", strings.Join(args, " "), rt.removed)
+		}
+		for _, name := range []string{"brig-faker", "brig-faker-refactor"} {
+			if !strings.Contains(out, name) {
+				t.Errorf("brig %s did not report removing %s:\n%s", strings.Join(args, " "), name, out)
+			}
+		}
+	}
+}
+
+// --dry-run prints what --all would remove, as refs, and removes nothing. It
+// exits 0: the list is the answer, not a refusal.
+func TestRemoveAllDryRunListsAndRemovesNothing(t *testing.T) {
+	for _, args := range [][]string{
+		{"rm", "--all", "--dry-run"},
+		{"rm", "--dry-run", "--all"},
+		{"rm", "--all", "--dry-run", "-y"},
+	} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		out, err := captureStdout(t, func() error { return run(args) })
+		if err != nil {
+			t.Errorf("brig %s: %v", strings.Join(args, " "), err)
+			continue
+		}
+		if len(rt.removed) != 0 {
+			t.Errorf("brig %s removed %v under --dry-run", strings.Join(args, " "), rt.removed)
+		}
+		for _, ref := range []string{"faker", "faker@refactor"} {
+			if !strings.Contains(out, ref) {
+				t.Errorf("brig %s did not list %s:\n%s", strings.Join(args, " "), ref, out)
+			}
+		}
+		if !strings.Contains(out, "running") || !strings.Contains(out, "stopped") {
+			t.Errorf("brig %s did not say the state of each:\n%s", strings.Join(args, " "), out)
+		}
+	}
+}
+
+// A sandbox whose ref brig cannot derive -- one named through BRIG_NAME, say --
+// is still removed by --all, so the list names it by its sandbox name rather
+// than leaving it out.
+func TestRemoveAllDryRunNamesAnUnreadableSandbox(t *testing.T) {
+	rt := &removeRuntime{list: []runtime.Instance{{Name: "brig-custom", State: "running"}}}
+	removeHost(t, rt)
+	out, err := captureStdout(t, func() error { return run([]string{"rm", "--all", "--dry-run"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "brig-custom") {
+		t.Errorf("the unreadable sandbox is not listed:\n%s", out)
+	}
+}
+
+// Nothing to remove is nothing to ask about.
+func TestRemoveAllAsksNothingWhenThereIsNothing(t *testing.T) {
+	rt := &removeRuntime{}
+	removeHost(t, rt)
+	if _, err := run2(t, []string{"rm", "--all"}); err != nil {
+		t.Errorf("brig rm --all with no sandboxes: %v", err)
+	}
+}
+
+// A sandbox that is not brig's is neither listed nor removed.
+func TestRemoveAllLeavesOtherSandboxesAlone(t *testing.T) {
+	rt := &removeRuntime{list: []runtime.Instance{
+		{Name: "brig-faker", State: "running"},
+		{Name: "somebody-else", State: "running"},
+	}}
+	removeHost(t, rt)
+	out, err := run2(t, []string{"rm", "--all", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "somebody-else") {
+		t.Errorf("a sandbox that is not brig's is listed:\n%s", out)
+	}
+	if _, err := run2(t, []string{"rm", "--all", "-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 1 || rt.removed[0] != "brig-faker" {
+		t.Errorf("removed %v, want only brig-faker", rt.removed)
+	}
+}
+
+// `brig rm <ref> --dry-run` names the one sandbox it would remove and its
+// workspace, and removes nothing. The preview is the output and goes to
+// stdout; the workspace sentence is a notice and goes to stderr, the same
+// split the real removal and `rm --all --dry-run` make.
+func TestRemoveRefDryRun(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	var out string
+	var err error
+	stderr := captureStderr(t, func() {
+		out, err = run2(t, []string{"rm", "faker@refactor", "--dry-run"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 0 {
+		t.Errorf("removed %v under --dry-run", rt.removed)
+	}
+	if !strings.Contains(out, "faker@refactor") {
+		t.Errorf("the ref is not named on stdout:\n%s", out)
+	}
+	if strings.Contains(out, "stays on the host") {
+		t.Errorf("the workspace notice is on stdout, want stderr:\n%s", out)
+	}
+	if !strings.Contains(stderr, "stays on the host") || !strings.Contains(stderr, os.Getenv("BRIG_WORKSPACE")) {
+		t.Errorf("the workspace is not named on stderr:\n%s", stderr)
+	}
+}
+
+// A ref with no sandbox is still a not-found under --dry-run: there is nothing
+// the command would do, and saying "would remove" about it would be a lie.
+func TestRemoveRefDryRunIsStillNotFound(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	_, err := run2(t, []string{"rm", "faker@nope", "--dry-run"})
+	var nf *notFoundError
+	if !errors.As(err, &nf) {
+		t.Errorf("brig rm faker@nope --dry-run: %v, want a notFoundError", err)
+	}
+}
+
+// `brig rm <ref>` asks no question, so -y is a flag that would do nothing.
+// Refused by name rather than accepted silently.
+func TestRemoveRefRefusesYes(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	for _, tc := range []struct {
+		args []string
+		flag string
+	}{
+		{[]string{"rm", "faker", "-y"}, "-y"},
+		{[]string{"rm", "-y", "faker"}, "-y"},
+		{[]string{"rm", "--yes", "faker"}, "--yes"},
+	} {
+		_, err := run2(t, tc.args)
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s: %v, want a usageError", strings.Join(tc.args, " "), err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.flag) {
+			t.Errorf("brig %s: %v, want it to name %s", strings.Join(tc.args, " "), err, tc.flag)
+		}
+	}
+	if len(rt.removed) != 0 {
+		t.Errorf("removed %v after refusing", rt.removed)
+	}
+}
+
+// After removing one sandbox, rm says the workspace is still there, and where.
+func TestRemoveRefSaysTheWorkspaceStays(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	var err error
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"rm", "faker"}) })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 1 || rt.removed[0] != "brig-faker" {
+		t.Errorf("removed %v, want brig-faker", rt.removed)
+	}
+	if !strings.Contains(stderr, "stays on the host") || !strings.Contains(stderr, os.Getenv("BRIG_WORKSPACE")) {
+		t.Errorf("rm did not say where the workspace is:\n%s", stderr)
+	}
+}
+
+// At a terminal, `rm --all` lists what it is about to remove and asks, and a
+// typed yes goes through. The prompt is on stderr, so a removal inside a
+// pipeline still asks where a person can see it.
+func TestRemoveAllAtATerminalListsAndAsks(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	master := terminalStdin(t)
+	if _, err := master.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"rm", "--all"}) })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 2 {
+		t.Errorf("removed %v after a yes, want both", rt.removed)
+	}
+	for _, want := range []string{"faker@refactor", "stopped", "stay on the host", "[y/N]"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the prompt does not say %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// The question defaults to no. A terminal whose other end has hung up answers
+// nothing, and nothing is what gets removed.
+func TestRemoveAllAtATerminalDefaultsToNo(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	_ = terminalStdin(t).Close()
+	var err error
+	captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"rm", "--all"}) })
+	})
+	if err == nil {
+		t.Fatal("an unanswered rm --all went through")
+	}
+	if len(rt.removed) != 0 {
+		t.Errorf("an unanswered rm --all removed %v", rt.removed)
+	}
+}
+
+// run2 is run with stdout captured, for a test that reads it or only wants it
+// out of the test's own output.
+func run2(t *testing.T, args []string) (string, error) {
+	t.Helper()
+	return captureStdout(t, func() error { return run(args) })
+}
+
+// pruneRuntime is removeRuntime with a shared network, and counts how often it
+// was asked to stop it.
+type pruneRuntime struct {
+	*removeRuntime
+	pruned int
+}
+
+func (r *pruneRuntime) PruneSharedNetwork() bool {
+	r.pruned++
+	return true
+}
+
+// `brig rm --all` stops the shared gateway only when it goes through. A
+// preview, a refusal and a "no" at the prompt leave it running. An empty
+// list still asks, because that is the host after an upgrade: every sandbox
+// gone and the old gateway still up.
+func TestRemoveAllStopsTheSharedGatewayOnlyWhenItRemoves(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		list     []runtime.Instance
+		declined bool
+		want     int
+	}{
+		{"dry run", []string{"rm", "--all", "--dry-run"}, twoSandboxes().list, false, 0},
+		{"no terminal and no -y", []string{"rm", "--all"}, twoSandboxes().list, false, 0},
+		{"declined at the prompt", []string{"rm", "--all"}, twoSandboxes().list, true, 0},
+		{"confirmed", []string{"rm", "--all", "-y"}, twoSandboxes().list, false, 1},
+		{"nothing to remove", []string{"rm", "--all", "-y"}, nil, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &pruneRuntime{removeRuntime: &removeRuntime{list: tc.list}}
+			jsonRunHost(t, rt)
+			withRuntime(t, rt)
+			if tc.declined {
+				_ = terminalStdin(t).Close()
+			}
+			captureStderr(t, func() { _, _ = run2(t, tc.args) })
+			if rt.pruned != tc.want {
+				t.Errorf("brig %s asked to stop the shared gateway %d time(s), want %d",
+					strings.Join(tc.args, " "), rt.pruned, tc.want)
+			}
+		})
+	}
+}
+
+// A sandbox whose profile is gone has no ref any verb accepts, so `rm --all`
+// is the way brig still removes it. The preview lists it under `-`, the way
+// `brig ls` shows it. This pins the way out that #367 leaves for a sandbox
+// stranded before agent rm refused to strand one.
+func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
+	rt := &removeRuntime{list: []runtime.Instance{{Name: "brig-gone", State: "stopped"}}}
+	removeHost(t, rt)
+	out, err := run2(t, []string{"rm", "--all", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "-  brig-gone") {
+		t.Errorf("the preview does not list brig-gone under -:\n%s", out)
+	}
+	if _, err := run2(t, []string{"rm", "--all", "-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 1 || rt.removed[0] != "brig-gone" {
+		t.Errorf("removed %v, want brig-gone", rt.removed)
+	}
+}
+
+// rm --all removes sandboxes without a Config, so it revokes each sandbox's
+// session tokens itself, as brig stop and brig rm do.
+func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		var revoked []string
+		swap(t, &revokeRoutes, func(name string) error {
+			revoked = append(revoked, name)
+			return nil
+		})
+		if _, err := captureStdout(t, func() error { return run(args) }); err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if strings.Join(revoked, " ") != "brig-faker brig-faker-refactor" {
+			t.Errorf("brig %s revoked %v, want both sandboxes", strings.Join(args, " "), revoked)
+		}
+	}
+}
+
+// rm --all also revokes what the broker still holds after its own removals:
+// a sandbox the detected runtime does not list keeps no token that still
+// works.
+func TestRemoveAllRevokesWhatTheBrokerStillHolds(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		swap(t, &revokeRoutes, func(string) error { return nil })
+		calls := 0
+		swap(t, &revokeAllRoutes, func() ([]string, error) {
+			calls++
+			return []string{"brig-unlisted"}, nil
+		})
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if calls != 1 {
+			t.Errorf("brig %s asked the broker for what it still holds %d times, want once",
+				strings.Join(args, " "), calls)
+		}
+		if !strings.Contains(stderr, "brig-unlisted") {
+			t.Errorf("brig %s did not say it revoked brig-unlisted: %q", strings.Join(args, " "), stderr)
+		}
+	}
+}
+
+// rm of a sandbox the runtime does not list revokes its tokens whatever the
+// runtime then says about it: an Exists that fails, one that finds it after
+// all, and a runtime that cannot be asked. Revoking starts nothing, so it
+// comes first, as in brig stop. --dry-run revokes nothing.
+func TestRemoveRevokesASandboxTheRuntimeDoesNotList(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		rt     func() runtime.Runtime
+		dryRun bool
+		want   []string
+	}{
+		{"reported absent", func() runtime.Runtime { return &existsRuntime{listRuntime: absent()} }, false,
+			[]string{"brig-claude-code"}},
+		{"runtime cannot say", func() runtime.Runtime {
+			return &existsRuntime{listRuntime: absent(), err: errors.New("inspect: store locked")}
+		}, false, []string{"brig-claude-code"}},
+		{"stopped and missed by the listing", func() runtime.Runtime {
+			return &existsRuntime{listRuntime: absent(), exists: true}
+		}, false, []string{"brig-claude-code"}},
+		{"no Exists to ask", func() runtime.Runtime { return absent() }, false, []string{"brig-claude-code"}},
+		{"dry run", func() runtime.Runtime { return &existsRuntime{listRuntime: absent()} }, true, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lostSession(t)
+			var revoked []string
+			swap(t, &revokeRoutes, func(name string) error {
+				revoked = append(revoked, name)
+				return nil
+			})
+			err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: tt.rt()}, "claude@refactor", tt.dryRun)
+			if exitCode(err) != exitNotFound {
+				t.Fatalf("rm exits %d, want %d: %v", exitCode(err), exitNotFound, err)
+			}
+			if !slices.Equal(revoked, tt.want) {
+				t.Errorf("revoked %v, want %v", revoked, tt.want)
+			}
+		})
+	}
+}
+
+// plantHook takes a look at a project's .git for the sandbox, then plants a
+// hook in it, which is what the guest does between two brig commands.
+func plantHook(t *testing.T, vmName string) {
+	t.Helper()
+	project := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(filepath.Join(project, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".git", "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &wrap.Config{Err: &bytes.Buffer{}, Verbosity: wrap.Normal, VMName: vmName, Project: project}
+	c.CheckProjectGit()
+	if err := os.WriteFile(filepath.Join(project, ".git", "hooks", "post-checkout"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `brig rm --all` forgets every sandbox's look at its project's .git, so a
+// hook the guest planted was never named on the one command that ends the
+// session. It compares first.
+func TestRemoveAllNamesAHookPlantedInAProject(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		plantHook(t, "brig-faker")
+		stderr := captureStderr(t, func() {
+			if _, err := run2(t, args); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if !strings.Contains(stderr, "added .git/hooks/post-checkout") {
+			t.Errorf("brig %s did not name the planted hook:\n%s", strings.Join(args, " "), stderr)
+		}
+		if len(rt.removed) != 2 {
+			t.Errorf("brig %s removed %v, want both sandboxes", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
+// A preview removes nothing and forgets nothing, so it names nothing and the
+// look is still there for the removal that follows. -q hides the warning.
+func TestRemoveAllDryRunAndQuietDoNotNameAHook(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	plantHook(t, "brig-faker")
+	stderr := captureStderr(t, func() {
+		if _, err := run2(t, []string{"rm", "--all", "--dry-run"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("--dry-run named a hook:\n%s", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if _, err := run2(t, []string{"-q", "rm", "--all", "-y"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("-q named a hook:\n%s", stderr)
+	}
+}

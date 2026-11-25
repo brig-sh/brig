@@ -1115,10 +1115,10 @@ printf '#!/bin/sh\nBRIG_TEST_BROKER_HELPER=1 BRIG_TEST_UPSTREAM_LOG=%q BRIG_TEST
 chmod +x "$WORK/brig-broker-helper-mtls"
 # brig refuses a routed run whose secret is not in its store, and the store of
 # whoever runs this is not the test's to fill. A routed run goes through
-# brig-stored instead: a test binary of cmd/brig that is brig itself, with a
+# brig-stored instead: a test binary of internal/cli that is brig itself, with a
 # store in memory that holds the secrets BRIG_TEST_SECRETS names, or no store
 # under BRIG_TEST_NO_STORE=1 (brigHelper).
-go test -c -o "$WORK/brig-stored.test" ./cmd/brig || { echo "build failed"; exit 1; }
+go test -c -o "$WORK/brig-stored.test" ./internal/cli || { echo "build failed"; exit 1; }
 printf '#!/bin/sh\nBRIG_TEST_BRIG_HELPER=1 exec %q "$@"\n' "$WORK/brig-stored.test" > "$WORK/brig-stored"
 chmod +x "$WORK/brig-stored"
 export BRIG_POLICY_DIR="$WORK/policies"

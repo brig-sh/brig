@@ -242,7 +242,7 @@ func TestTheRunPathReadsNoKeychain(t *testing.T) {
 
 // The other half of the guarantee, for the one package the dependency test
 // cannot cover. cmd/brig links this package because `brig secret import` lives
-// there; what must stay true is that the IMPORT VERB is the only thing in it
+// in internal/cli; what must stay true is that the IMPORT VERB is the only thing in it
 // that reaches a host source.
 //
 // So: exactly one file may name the package. A well-meaning "auto-import when
@@ -251,7 +251,7 @@ func TestTheRunPathReadsNoKeychain(t *testing.T) {
 // which is the same regression the dependency test catches everywhere else.
 func TestOnlyTheImportVerbReachesTheHostFromTheCLI(t *testing.T) {
 	const allowed = "secretimport.go"
-	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd", "brig"))
+	entries, err := os.ReadDir(filepath.Join("..", "..", "internal", "cli"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,25 +261,25 @@ func TestOnlyTheImportVerbReachesTheHostFromTheCLI(t *testing.T) {
 			strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		blob, err := os.ReadFile(filepath.Join("..", "..", "cmd", "brig", name))
+		blob, err := os.ReadFile(filepath.Join("..", "..", "internal", "cli", name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(blob), "brig/internal/hostsrc") {
-			t.Errorf("cmd/brig/%s reads a host source; only %s may", name, allowed)
+			t.Errorf("internal/cli/%s reads a host source; only %s may", name, allowed)
 		}
 	}
 }
 
 // The same rule for the code that runs aws, and for the code that runs
 // gcloud. The import verb checks an AWS profile and role, or a gcloud login,
-// before it stores the pointer; nothing else in cmd/brig may reach that code.
+// before it stores the pointer; nothing else in internal/cli may reach that code.
 // A run that fetched keys or minted a token itself would hand the guest a
 // credential the broker never gave, outside the route, its cache and its
 // audit line.
 func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
 	const allowed = "secretimport.go"
-	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd", "brig"))
+	entries, err := os.ReadDir(filepath.Join("..", "..", "internal", "cli"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,15 +289,15 @@ func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
 			strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		blob, err := os.ReadFile(filepath.Join("..", "..", "cmd", "brig", name))
+		blob, err := os.ReadFile(filepath.Join("..", "..", "internal", "cli", name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(blob), "brig/internal/awscred") {
-			t.Errorf("cmd/brig/%s reaches the code that runs aws; only %s may", name, allowed)
+			t.Errorf("internal/cli/%s reaches the code that runs aws; only %s may", name, allowed)
 		}
 		if strings.Contains(string(blob), "brig/internal/gcpcred") {
-			t.Errorf("cmd/brig/%s reaches the code that runs gcloud; only %s may", name, allowed)
+			t.Errorf("internal/cli/%s reaches the code that runs gcloud; only %s may", name, allowed)
 		}
 	}
 }

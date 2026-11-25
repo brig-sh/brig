@@ -9,9 +9,9 @@
 // that only checked "zero or not" keeps working; one that wants to branch on
 // the reason now can.
 //
-// cmd/brig/exit.go is the other producer of these numbers -- it classifies the
-// same internal error types for the CLI. It is package main and cannot be
-// imported, and an open PR is editing it, so it is left where it is; once the
+// internal/cli/exit.go is the other producer of these numbers -- it
+// classifies the same internal error types for the CLI. brigd does not link
+// the CLI, and an open PR is editing it, so it is left where it is; once the
 // branches touching it land it is to be moved onto this package so there is one
 // classifier rather than two that can drift. Do not do that move here.
 package exitcode
@@ -58,7 +58,7 @@ func (e *NotFoundError) Unwrap() error { return e.Err }
 // Of reads the exit status for a finished operation out of its error. It reads
 // the cause rather than the message, so a wrapped error keeps its class the
 // whole way up, and the order is most specific first -- the same order and the
-// same classes cmd/brig/exit.go reads.
+// same classes internal/cli/exit.go reads.
 func Of(err error) int {
 	if err == nil {
 		return OK
@@ -79,7 +79,7 @@ func Of(err error) int {
 		return Capability
 	}
 	// A run that required a microVM and would not get one it can establish.
-	// The same class as above, kept in step with cmd/brig/exit.go.
+	// The same class as above, kept in step with internal/cli/exit.go.
 	var isolation *runtime.IsolationError
 	if errors.As(err, &isolation) {
 		return Capability

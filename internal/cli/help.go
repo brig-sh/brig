@@ -1,0 +1,315 @@
+package cli
+
+// The usage text of each top-level verb, answered by both spellings that ask
+// for it: `brig <verb> --help` (or -h) and `brig help <verb>`. One text per
+// verb means the two answers cannot drift, and the global `usage` stays the
+// command list and the flags the verbs share.
+//
+// The verb groups (agent, secret, policy, network, telemetry, completion) keep
+// their own usage const beside their command and are named in verbUsages too,
+// so `brig help agent` answers like `brig agent --help` rather than falling
+// back to the global text.
+
+const runUsage = `brig run -- start a sandbox and run an agent
+
+usage:
+  brig run [flags] <ref> [project] [args...]
+  brig run --target NAME [--session NAME] [-f PATH] [flags] [-- args...]
+  brig run [flags] [-- args...]
+
+A project is mounted read-write at /work/<name>, and the agent starts there.
+Brig reads its own flags before the ref, and after the ref and the project up
+to the first agent argument. Everything from the first agent argument on is
+the agent's, and -- ends brig's parsing. Put brig's flags before the ref:
+there brig refuses a flag it does not know, so a typo never reaches the agent.
+
+With --target it runs a target of this repository's Brigfile. The directory
+of the Brigfile is the project, so the line takes no ref and no project. The
+agent's arguments go after --, and replace the target's args. With no ref and
+no --target, brig runs the Brigfile's default target.
+
+A run of a target boots only what you approved. Brig shows the plan and asks.
+A yes is stored, and the next run with the same configuration asks nothing.
+With no terminal, a run that no stored approval covers boots nothing, exits 8
+and prints the digest of the approval. --approve DIGEST approves that run
+without a question, for CI. A change to the Brigfile, to a file it names, to
+a setting or to this line asks again.
+
+flags:
+      --image IMAGE   guest image to boot
+      --home PATH     host directory to mount as the guest home
+      --no-project    mount no project this session, even one it ran with last
+      --mem MB        guest memory
+      --cpus N        guest vCPUs
+  -d, --detach        start the sandbox and exit, without attaching
+      --skills        copy your ~/.claude skills and plugins into the guest home
+      --network MODE  shared, isolated or offline (or BRIG_NETWORK)
+      --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
+      --publish PORT  open a guest port on the host; repeatable
+      --json          run the agent as a child and print one JSON line after it
+
+flags of a run of a target:
+      --target NAME     the target to run
+      --session NAME    a session of the target, with its own sandbox and home
+  -f, --file PATH       read this Brigfile instead of looking for one
+      --approve DIGEST  approve this run by its digest, without a question
+      --recreate        boot the session's sandbox again, on the same guest home,
+                        when its configuration changed
+
+brig help lists every command, every flag and every setting.
+`
+
+const shUsage = `brig sh -- a login shell or one command inside the sandbox
+
+usage:
+  brig sh <ref> [command...]
+  brig sh <ref> -c '<script>' [args...]
+
+With no command brig starts the sandbox if it is not running and opens a login
+shell. With a command it runs the command under a login shell, and each word
+after the ref reaches the guest as one argument, as you typed it. No shell
+parses the words again, so a pipe, a ; or a glob is not shell syntax there.
+The first bare word after the ref is the guest command, so brig's own flags
+come before it.
+
+To run a script, put -c in front of it, as with sh -c. The login shell parses
+the script in the guest. -ec, -xc and -uc work as they do with sh -c.
+
+flags:
+      --image IMAGE   guest image to boot
+      --home PATH     host directory to mount as the guest home
+      --mem MB        guest memory
+      --cpus N        guest vCPUs
+      --skills        copy your ~/.claude skills and plugins into the guest home
+      --network MODE  shared, isolated or offline (or BRIG_NETWORK)
+      --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
+      --publish PORT  open a guest port on the host; repeatable
+      --json          run the command as a child and print one JSON line after it
+
+brig help lists every command, every flag and every setting.
+`
+
+const stopUsage = `brig stop -- stop the sandbox and keep it
+
+usage:
+  brig stop <ref>
+  brig stop --target NAME [--session NAME] [-f PATH]
+
+Stopping a sandbox that is not running is not an error: that is already the
+state stop asks for. The name, the workspace and the guest home survive.
+
+With --target it stops a session of a target of this repository's Brigfile.
+It finds the session from the project and the target, so it works after the
+Brigfile is deleted or the target is gone from it. A session brig has no
+record of, and no sandbox for, exits 3.
+
+flags:
+      --target NAME   stop a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
+
+brig help lists every command, every flag and every setting.
+`
+
+const rmUsage = `brig rm -- stop and remove the sandbox
+
+usage:
+  brig rm <ref> [--dry-run]
+  brig rm --target NAME [--session NAME] [-f PATH] [--dry-run]
+  brig rm --all [--dry-run] [-y]
+
+One ref removes that sandbox. --all lists every brig sandbox, asks, then stops
+and removes them. When brig created the guest home, rm deletes it too and prints
+its path; a guest home you named and your project are host directories, and are
+left alone.
+
+With --target it removes a session of a target of this repository's Brigfile,
+with its guest home. It works after the Brigfile is deleted or the target is
+gone from it.
+
+flags:
+      --target NAME   remove a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
+      --dry-run       report what would be removed, and stop
+  -y, --yes           with --all: the answer, given in advance
+
+brig help lists every command, every flag and every setting.
+`
+
+const logsUsage = `brig logs -- stream a sandbox's log
+
+usage:
+  brig logs <ref> [--follow] [--tail N] [--raw]
+  brig logs --gateway [<ref>]
+
+Streams the sandbox's log. Given --gateway it reads the gateway's log instead:
+the shared one, or with a ref the gateway serving that sandbox alone.
+
+flags:
+      --follow   keep the stream open and print lines as they appear
+      --tail N   print the last N lines (all of them by default)
+      --raw      print the runtime's bytes without filtering terminal control
+                 sequences
+      --gateway  read the gateway's log instead of the sandbox's
+
+brig help lists every command, every flag and every setting.
+`
+
+const infoUsage = `brig info -- print the execution envelope and the environment
+
+usage:
+  brig info <ref>
+
+Prints what a run would boot and which credential variables it would forward,
+by name, without booting anything. It fails if a declared secret is missing.
+The run-line flags below change the envelope the same way they would change a
+run, so brig info --image IMAGE claude previews that image.
+
+flags:
+      --image IMAGE   guest image to boot
+      --home PATH     host directory to mount as the guest home
+      --network MODE  shared, isolated or offline (or BRIG_NETWORK)
+      --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
+      --publish PORT  open a guest port on the host; repeatable
+      --json          print the envelope as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
+const planUsage = `brig plan -- print the permissions a run would get
+
+usage:
+  brig plan <ref> [project]
+  brig plan --target NAME [--session NAME] [-f PATH]
+
+Prints the mounts, the network, the policies, the limits, the image, the
+runtime and the credentials of a run, by name. It boots nothing and opens no
+secret: a missing secret is marked unresolved. plan reads the run line as
+brig run does, so brig plan claude ~/src/demo previews that first run, and a
+run brig would refuse opens the plan with a REFUSED row while plan still
+exits 0.
+
+With --target it plans a target of this repository's Brigfile instead. The
+project is the directory that holds the Brigfile. The plan says where each
+value comes from, where each policy comes from, and the upstream and the
+secrets of every route, and the arguments the agent gets. brig run --target
+shows these rows before it asks you to approve a run.
+
+flags:
+      --target NAME   plan this target of the Brigfile
+      --session NAME  with --target: plan the named session, not the default one
+  -f, --file PATH     with --target: read this Brigfile instead of looking for one
+      --image IMAGE   guest image to boot
+      --home PATH     host directory to mount as the guest home
+      --no-project    plan with no project, even one the session ran with last
+      --mem MB        guest memory
+      --cpus N        guest vCPUs
+      --skills        copy your ~/.claude skills and plugins into the guest home
+      --network MODE  shared, isolated or offline (or BRIG_NETWORK)
+      --offline       shorthand for --network offline
+      --isolation MODE
+                      microvm: refuse a run not shown to be a microVM
+      --publish PORT  open a guest port on the host; repeatable
+      --json          print the plan as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
+const lsUsage = `brig ls -- list sandboxes
+
+usage:
+  brig ls [-q] [--json]
+
+Lists every sandbox brig has, with its ref, state and guest home. The
+sessions of Brigfile targets follow in a table of their own, with the target,
+the session and the project. They have no ref, so -q leaves them out.
+
+flags:
+  -q, --quiet  print the refs only, one per line, for a script
+      --json   print the listing as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
+const doctorUsage = `brig doctor -- check the host, the runtime and an agent's image
+
+usage:
+  brig doctor [<agent>] [--json]
+
+Reports, in the order a boot hits them, the prerequisites a first run can fail
+on. Given an agent, it also checks that agent's image.
+
+flags:
+      --json  print the report as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
+const reportUsage = `brig report -- write a diagnostic report for a session
+
+usage:
+  brig report [<ref>] [-o <file>] [--tail N]
+
+Writes one plain-text file with what a maintainer needs to tell why a session
+hung, slowed down or died: brig doctor, the runtime and VMM state, questions
+put to the guest, and the console, gateway and broker logs. Known failures
+are named at the top with the fix. Run it from another shell while the
+session is stuck; it only observes, and every step has a deadline.
+
+Credentials of known shapes are masked. Read the file before you post it.
+
+flags:
+  -o <file>     where to write the report
+                (default: brig-report-<ref>-<time>.txt here)
+      --tail N  keep the last N lines of each log (default: 2000)
+
+brig help lists every command, every flag and every setting.
+`
+
+const versionUsage = `brig version -- print the brig build
+
+usage:
+  brig version [--json]
+
+One line naming the tag, the commit and the Go platform, or the same build as
+JSON.
+
+flags:
+      --json  print the build as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
+// verbUsages is the usage each top-level verb answers with, keyed by the word
+// the reader typed. `brig <verb> --help` (or -h) and `brig help <verb>` read
+// the same entry, so the two spellings cannot drift apart. The groups keep
+// their const beside their command and are named here too.
+var verbUsages = map[string]string{
+	"run":        runUsage,
+	"sh":         shUsage,
+	"stop":       stopUsage,
+	"rm":         rmUsage,
+	"logs":       logsUsage,
+	"info":       infoUsage,
+	"plan":       planUsage,
+	"ls":         lsUsage,
+	"doctor":     doctorUsage,
+	"report":     reportUsage,
+	"version":    versionUsage,
+	"agent":      agentUsage,
+	"secret":     secretUsage,
+	"policy":     policyUsage,
+	"network":    networkUsage,
+	"telemetry":  telemetryUsage,
+	"completion": completionUsage,
+	"target":     targetUsage,
+	"config":     configUsage,
+	"init":       initUsage,
+}

@@ -65,7 +65,7 @@ with full history. Without the tag, the output changes:
    now, before the tag exists.
 
 3. If this release is the one that a retired spelling's notice names, such
-   as `flatPolicyGoesIn` in `cmd/brig/policy.go`, remove that spelling first.
+   as `flatPolicyGoesIn` in `internal/cli/policy.go`, remove that spelling first.
    As an alternative, move that constant and the docs to a later release.
    v0.3.0 shipped with the retired spellings still in, because no step
    checked.

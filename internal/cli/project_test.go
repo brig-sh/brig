@@ -1,0 +1,261 @@
+package cli
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/brig-sh/brig/internal/runtime"
+)
+
+// `brig run <ref> [project] [agent args...]`. The second bare word is the
+// project directory, and brig's parsing still ends there: everything after it
+// is the agent's, exactly as it was when the word itself was.
+func TestRunTakesTheProjectAsAPositional(t *testing.T) {
+	for _, c := range []struct {
+		args    []string
+		project string
+		tail    string
+	}{
+		{[]string{"claude", "/tmp/p"}, "/tmp/p", ""},
+		{[]string{"claude", "/tmp/p", "-p", "hi"}, "/tmp/p", "-p hi"},
+		{[]string{"claude", "-d", "/tmp/p"}, "/tmp/p", ""},
+		// brig reads past the project, which is its own operand, and stops
+		// at the next bare word: that is where the agent's argv starts.
+		{[]string{"claude", "/tmp/p", "status"}, "/tmp/p", "status"},
+		{[]string{"claude", "/tmp/p", "-d", "status"}, "/tmp/p", "status"},
+		// An explicit -- declares the rest the agent's, project included: the
+		// line has already said which reading it wants.
+		{[]string{"claude", "--", "/tmp/p"}, "", "/tmp/p"},
+		// A project named before the marker stands: -- speaks for what comes
+		// after it, not for what came before.
+		{[]string{"claude", "/tmp/p", "--", "--version"}, "/tmp/p", "--version"},
+		{[]string{"claude"}, "", ""},
+		{[]string{"claude", "-p", "hi"}, "", "-p hi"},
+	} {
+		o, profileName, tail, err := parse("run", c.args)
+		if err != nil {
+			t.Errorf("parse(%q): %v", c.args, err)
+			continue
+		}
+		if profileName != "claude" {
+			t.Errorf("parse(%q) resolved the profile %q, want claude", c.args, profileName)
+		}
+		if o.load.Project != c.project || strings.Join(tail, " ") != c.tail {
+			t.Errorf("parse(%q) = project %q, tail %q; want %q and %q",
+				c.args, o.load.Project, strings.Join(tail, " "), c.project, c.tail)
+		}
+	}
+}
+
+// Only run takes a positional. On sh -- and on the two spellings it replaces --
+// a second bare word is already the guest command, and on the verbs that take a
+// ref and nothing more it is still a mistake for rejectTail to name. Both get
+// the word back at the head of their tail, and brig stops reading there: a
+// flag after the guest command is the guest's.
+func TestOnlyRunKeepsTheSecondBareWord(t *testing.T) {
+	_, _, word, tail, err := split("run", []string{"claude", "myproject", "-p", "hi"})
+	if err != nil {
+		t.Fatalf("split(run): %v", err)
+	}
+	if word != "myproject" || strings.Join(tail, " ") != "-p hi" {
+		t.Errorf("run: project %q, tail %q; want myproject and -p hi", word, tail)
+	}
+	for _, verb := range []string{"sh", "exec", "create", "stop", "rm", "info", "env"} {
+		_, _, word, tail, err := split(verb, []string{"claude", "echo", "hi"})
+		if err != nil {
+			t.Errorf("split(%s): %v", verb, err)
+			continue
+		}
+		if word != "" {
+			t.Errorf("%s took %q as a project", verb, word)
+		}
+		if strings.Join(tail, " ") != "echo hi" {
+			t.Errorf("%s: tail %q, want the word back at the head (echo hi)", verb, tail)
+		}
+	}
+	// Nothing to decide when there is no second bare word.
+	if _, _, word, tail, err := split("run", []string{"claude", "-p", "hi"}); err != nil ||
+		word != "" || strings.Join(tail, " ") != "-p hi" {
+		t.Errorf("no positional: project %q, tail %q, err %v", word, tail, err)
+	}
+}
+
+// Brig's own flags keep working after the project positional.
+//
+// The positional is brig's operand, like the ref before it, so it does not end
+// brig's reading of the line -- split's rule is that the first token brig does
+// not own ends it, and this is a token brig owns. Before this, every brig flag
+// after the path went to the agent: `brig run claude ~/proj --mem 4096 -d
+// --offline` booted in the foreground with default memory and the network on,
+// warned about but not acted on.
+func TestBrigFlagsAfterTheProjectAreStillBrigs(t *testing.T) {
+	o, _, tail, err := parse("run", []string{"claude", "/tmp/p", "--mem", "4096", "-d", "--offline"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if o.load.Project != "/tmp/p" {
+		t.Errorf("project = %q, want /tmp/p", o.load.Project)
+	}
+	if o.load.Mem != 4096 || !o.detach || !o.offline {
+		t.Errorf("mem=%d detach=%v offline=%v, want 4096 true true", o.load.Mem, o.detach, o.offline)
+	}
+	if len(tail) != 0 {
+		t.Errorf("tail = %q, want empty", tail)
+	}
+
+	// A flag brig does not own still ends the reading, and a third bare word
+	// still does: those are the agent's, and the boundary rule is unchanged.
+	for _, c := range []struct {
+		args []string
+		tail string
+	}{
+		{[]string{"claude", "/tmp/p", "--resume"}, "--resume"},
+		{[]string{"claude", "/tmp/p", "npm", "test"}, "npm test"},
+		{[]string{"claude", "/tmp/p", "-d", "npm", "test"}, "npm test"},
+	} {
+		o, _, tail, err := parse("run", c.args)
+		if err != nil {
+			t.Errorf("parse(%q): %v", c.args, err)
+			continue
+		}
+		if o.load.Project != "/tmp/p" || strings.Join(tail, " ") != c.tail {
+			t.Errorf("parse(%q) = project %q, tail %q; want /tmp/p and %q",
+				c.args, o.load.Project, strings.Join(tail, " "), c.tail)
+		}
+	}
+}
+
+// The contradiction is refused in the spelling people type, not only in the
+// one where the flag comes first. Reaching it is what the positional no longer
+// ending brig's reading buys.
+func TestNoProjectAfterThePositionalIsRefused(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"run", "--no-project", "claude", dir},
+		{"run", "claude", dir, "--no-project"},
+	} {
+		err := run(args)
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s: error is %T (%v), want a usage error",
+				strings.Join(args, " "), err, err)
+		}
+	}
+}
+
+// A project on the line is the documented spelling, and the first line of the
+// quickstart, so it runs without a notice. The warning that the word used to
+// reach the agent shipped in 0.1.0-rc18, promised to go in the next release,
+// and still printed through 0.2.0 (#315).
+//
+// Two markers, not one: the phrase that named the new reading and the `--`
+// hint that named the old one. A reworded notice would have to drop both to
+// get past this.
+//
+// The run has to get far enough to have printed it, or the test covers
+// nothing. The notice sat in dispatch, and a scratch host has no runtime on
+// PATH, so a run that got past dispatch ends on ErrNoRuntime. Any other
+// error means it stopped earlier.
+func TestAProjectRunsWithoutANotice(t *testing.T) {
+	scratchHost(t)
+	var err error
+	notice := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"run", "claude", "."}) })
+	})
+	if !errors.Is(err, runtime.ErrNoRuntime) {
+		t.Fatalf("the run stopped before it could have printed the notice: %v", err)
+	}
+	for _, old := range []string{"project directory", "put it after --"} {
+		if strings.Contains(notice, old) {
+			t.Errorf("a run naming a project printed the old notice (%q):\n%s", old, notice)
+		}
+	}
+}
+
+// --home is what sets the guest home. v0.5.0 removed -w and --workspace, the
+// spellings it replaced: after the ref they are the agent's -- cursor's
+// --workspace, claude's and gemini's -w -- and set no home.
+func TestHomeReplacesWorkspace(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		home string
+		tail string
+	}{
+		{[]string{"claude", "--home", "/h"}, "/h", ""},
+		{[]string{"claude", "--home=/h"}, "/h", ""},
+		{[]string{"claude", "-w", "/h"}, "", "-w /h"},
+		{[]string{"claude", "--workspace", "/h"}, "", "--workspace /h"},
+		{[]string{"claude", "--workspace=/h"}, "", "--workspace=/h"},
+	} {
+		var (
+			o    options
+			tail []string
+			err  error
+		)
+		notice := captureStderr(t, func() { o, _, tail, err = parse("run", c.args) })
+		if err != nil {
+			t.Errorf("parse(%q): %v", c.args, err)
+			continue
+		}
+		if o.load.Workspace != c.home || strings.Join(tail, " ") != c.tail {
+			t.Errorf("parse(%q) = home %q, tail %q; want %q and %q",
+				c.args, o.load.Workspace, tail, c.home, c.tail)
+		}
+		if notice != "" {
+			t.Errorf("parse(%q) printed a notice:\n%s", c.args, notice)
+		}
+	}
+}
+
+// --no-project is a run-line flag like the positional it answers, so it parses
+// between the verb and the ref and reaches wrap.Options.
+func TestNoProjectParses(t *testing.T) {
+	o, _, tail, err := parse("run", []string{"--no-project", "claude"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !o.load.NoProject {
+		t.Error("--no-project did not reach the options")
+	}
+	if len(tail) != 0 {
+		t.Errorf("--no-project left a tail: %q", tail)
+	}
+}
+
+// Both at once ask for two contradictory things, and either winner would be
+// silent about the other: the directory mounted with --no-project ignored, or
+// dropped with the word the line names ignored. Refuse and name both.
+func TestNoProjectWithAPositionalIsRefused(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	dir := t.TempDir()
+	err := run([]string{"run", "--no-project", "claude", dir})
+	if err == nil {
+		t.Fatal("--no-project alongside a project was accepted")
+	}
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error is %T, want a usage error: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "--no-project") {
+		t.Errorf("the error does not name both: %v", err)
+	}
+}
+
+// Elsewhere the flag would do nothing, which is worse than being refused: a
+// user would think the session had been detached and find it still mounted.
+func TestNoProjectOnAnotherVerbIsRefused(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	for _, verb := range []string{"sh", "info", "stop"} {
+		err := run([]string{verb, "--no-project", "claude"})
+		if err == nil {
+			t.Errorf("brig %s --no-project was accepted", verb)
+			continue
+		}
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s --no-project: error is %T, want a usage error", verb, err)
+		}
+	}
+}

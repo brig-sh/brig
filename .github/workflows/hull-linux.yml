@@ -14,6 +14,7 @@ on:
       - internal/runtime/**
       - internal/wrap/**
       - cmd/brig/**
+      - internal/cli/**
       - install.sh
       - script/hull-linux-boot.sh
       - .github/workflows/hull-linux.yml
@@ -22,6 +23,7 @@ on:
       - internal/runtime/**
       - internal/wrap/**
       - cmd/brig/**
+      - internal/cli/**
       - install.sh
       - script/hull-linux-boot.sh
       - .github/workflows/hull-linux.yml

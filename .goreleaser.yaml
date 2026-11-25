@@ -107,11 +107,11 @@ archives:
       # The completion scripts, verbatim: these are the bytes `brig completion
       # <shell>` prints, so the archive and the command cannot disagree about
       # what a shell is asked to source. The cask below installs them.
-      - src: cmd/brig/completions/brig.bash
+      - src: internal/cli/completions/brig.bash
         dst: completions/brig.bash
-      - src: cmd/brig/completions/brig.zsh
+      - src: internal/cli/completions/brig.zsh
         dst: completions/brig.zsh
-      - src: cmd/brig/completions/brig.fish
+      - src: internal/cli/completions/brig.fish
         dst: completions/brig.fish
 
 checksum:
