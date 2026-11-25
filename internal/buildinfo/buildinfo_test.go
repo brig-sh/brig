@@ -155,3 +155,16 @@ func TestWithGitKeepsWhatItCannotImprove(t *testing.T) {
 		t.Errorf("Version = %q, want the toolchain's v0.3.0 kept", proxy.Version)
 	}
 }
+
+// A release stamps one version into every binary, Brig Enterprise included,
+// whose nested module gets no release version from the toolchain. The stamp
+// must win, and an unstamped build must keep what the toolchain derived.
+func TestWithReleaseTakesTheStampedVersion(t *testing.T) {
+	derived := Info{Version: "v0.0.0-20261125120000-0123456789ab", Commit: "0123456789ab"}
+	if got := derived.withRelease("v0.6.0").Version; got != "v0.6.0" {
+		t.Errorf("stamped build reports %q, want v0.6.0", got)
+	}
+	if got := derived.withRelease("").Version; got != derived.Version {
+		t.Errorf("unstamped build reports %q, want %q", got, derived.Version)
+	}
+}
