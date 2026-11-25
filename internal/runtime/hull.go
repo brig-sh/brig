@@ -1513,6 +1513,11 @@ func (h *hull) Replace(spec ExecSpec) error {
 	if err != nil {
 		return err
 	}
+	return h.handover(argv, env)
+}
+
+// handover replaces brig with the built command. On success it does not return.
+func (h *hull) handover(argv, env []string) error {
 	// brig's process ends at the exec: its command event is queued, and
 	// a process of its own uploads it.
 	telemetry.Handover()
@@ -1531,6 +1536,13 @@ func (h *hull) Attach(spec ExecSpec) (int, error) {
 	argv, env, err := h.replaceCmd(spec)
 	if err != nil {
 		return 0, err
+	}
+	if spec.Relay != nil {
+		code, err := spec.Relay(argv, env)
+		if errors.Is(err, ErrRelayDeclined) {
+			return 0, h.handover(argv, env)
+		}
+		return code, err
 	}
 	return attachHandover(argv, env)
 }
