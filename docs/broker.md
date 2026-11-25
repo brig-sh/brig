@@ -837,8 +837,11 @@ a workstation.
 | --- | --- |
 | `--listen <host:port>` | Serves the routes on this TCP address, with TLS, instead of on a loopback port |
 | `--secret-dir <path>` | Reads every credential from the files of this directory, one file per secret, instead of from Brig's secret store |
+| `--listen-fd <n>` | Serves the routes with TLS on file descriptor `n`, a bound and listening TCP socket the parent opened, as `--listen` serves them on its address. It excludes `--listen` |
+| `--sandbox <id>` | Serves the sandbox `id` alone. See [One broker per sandbox](#one-broker-per-sandbox) |
 
-The flags combine. A node broker is usually started with both.
+The flags combine. A node broker is usually started with `--listen` and
+`--secret-dir`.
 
 ### The address listener
 
@@ -1047,6 +1050,42 @@ reaches every sandbox registered with it at once:
 
 A request already in flight when the policy changes finishes under the rules
 it started with, and never under some of the old rules and some of the new.
+### One broker per sandbox
+
+A broker on a node serves every sandbox of the node. It terminates TLS for
+all of them, so it sees the requests of every sandbox, and every pod can
+reach its listener. A platform can instead start one broker per sandbox.
+Each one then sees the requests of its own sandbox only.
+
+`--sandbox <id>` makes a broker serve one sandbox:
+
+| Request | Answer |
+| --- | --- |
+| `POST /sandboxes` with another id | 403, and nothing is registered |
+| `PUT /policies/<namespace>/<name>` while another policy is stored | 409, and the stored policy stays |
+| `PUT` of the policy it holds | Stored, as on any broker. A running sandbox takes the change as [Policies by reference](#policies-by-reference) describes |
+
+A request that names another sandbox finds no sandbox and gets 404, as on
+any broker.
+
+Each broker runs on a directory of its own, so each has its own host key,
+CA, control socket and audit log. A guest trusts the CA from the answer to
+its registration, which is its own broker's CA alone.
+
+The platform decides where the route listener is. With `--listen-fd` it
+binds the socket itself and passes it to the broker. For instance, the
+platform can bind `169.254.171.1:443` in a network namespace that only the
+sandbox's guest reaches, and run the broker elsewhere:
+
+```
+brig-broker --dir /run/broker/sandboxes/pod-7f3a --listen-fd 3 --sandbox pod-7f3a
+```
+
+The broker then needs no privilege to bind the port and no access to that
+namespace. Its upstream connections leave from the network namespace it
+runs in. The arrival rule of [The address listener](#the-address-listener)
+still applies to each connection.
+
 ## Routes that vend
 
 A route on the `aws` preset answers the guest itself, and has no upstream.
