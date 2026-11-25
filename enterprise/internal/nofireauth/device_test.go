@@ -132,7 +132,9 @@ func TestDeniedAndExpiredEnd(t *testing.T) {
 			if len(rec.sleeps) != 1 {
 				t.Errorf("sleeps = %v, want one: the flow must stop at the refusal", rec.sleeps)
 			}
-			_ = out
+			if strings.Contains(out.String(), "Bearer") || strings.Contains(out.String(), "access_token") {
+				t.Errorf("out shows a token: %q", out.String())
+			}
 		})
 	}
 }
@@ -357,5 +359,108 @@ func TestDeviceSendsTTL(t *testing.T) {
 	}
 	if g.ExpiresIn != 36*time.Hour {
 		t.Errorf("ExpiresIn = %s", g.ExpiresIn)
+	}
+}
+
+func sum(ds []time.Duration) (t time.Duration) {
+	for _, d := range ds {
+		t += d
+	}
+	return t
+}
+
+func TestServerIntervalAboveFiveIsHonoured(t *testing.T) {
+	// start, not deviceFake: the fake must advertise 7 s.
+	s := start(t, fakeas.Options{Interval: 7 * time.Second})
+	rec := &recorder{}
+	f, _ := deviceFlow(t, s.URL, rec)
+	if _, err := f.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{7 * time.Second}; !slices.Equal(rec.sleeps, want) {
+		t.Errorf("sleeps = %v, want %v", rec.sleeps, want)
+	}
+}
+
+func TestSuccessiveSlowDownsAccumulate(t *testing.T) {
+	s := deviceFake(t, fakeas.Options{Polls: []string{"slow_down", "slow_down", "authorization_pending"}})
+	rec := &recorder{}
+	f, _ := deviceFlow(t, s.URL, rec)
+	if _, err := f.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 15 * time.Second, 15 * time.Second}
+	if !slices.Equal(rec.sleeps, want) {
+		t.Errorf("sleeps = %v, want %v", rec.sleeps, want)
+	}
+}
+
+func TestDeviceCodeExpiryCapsWait(t *testing.T) {
+	polls := slices.Repeat([]string{"authorization_pending"}, 50)
+	s := deviceFake(t, fakeas.Options{Polls: polls, DeviceExpiresIn: 8})
+	rec := &recorder{}
+	f, _ := deviceFlow(t, s.URL, rec) // MaxWait stays at its 15 minutes
+	_, err := f.Run(context.Background())
+	if err == nil || len(s.Issued()) != 0 {
+		t.Fatalf("err = %v, issued %d", err, len(s.Issued()))
+	}
+	if total := sum(rec.sleeps); total > 8*time.Second || len(rec.sleeps) != 1 {
+		t.Errorf("sleeps = %v: waited %s past the 8s code lifetime", rec.sleeps, total)
+	}
+}
+
+func TestPollFailuresEndTheFlow(t *testing.T) {
+	for _, poll := range []string{"bogus_error", "http500", "badjson"} {
+		t.Run(poll, func(t *testing.T) {
+			s := deviceFake(t, fakeas.Options{Polls: []string{poll}})
+			rec := &recorder{}
+			f, out := deviceFlow(t, s.URL, rec)
+			if _, err := f.Run(context.Background()); err == nil {
+				t.Fatal("Run succeeded")
+			}
+			if len(s.Issued()) != 0 {
+				t.Errorf("issued %d tokens", len(s.Issued()))
+			}
+			if len(rec.sleeps) != 1 {
+				t.Errorf("sleeps = %v, want one: the flow must stop at the failure", rec.sleeps)
+			}
+			if strings.Contains(out.String(), "Bearer") {
+				t.Errorf("out shows a token: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestIncompleteDeviceResponseRefused(t *testing.T) {
+	for _, field := range []string{"user_code", "device_code", "verification_uri"} {
+		t.Run(field, func(t *testing.T) {
+			s := deviceFake(t, fakeas.Options{DeviceOmit: []string{field}})
+			rec := &recorder{}
+			f, out := deviceFlow(t, s.URL, rec)
+			if _, err := f.Run(context.Background()); err == nil {
+				t.Fatal("Run succeeded")
+			}
+			if len(rec.sleeps) != 0 || slices.Contains(s.Requests(), "POST /oauth/token") {
+				t.Errorf("polled: sleeps %v, requests %q", rec.sleeps, s.Requests())
+			}
+			if out.Len() != 0 {
+				t.Errorf("printed %q", out.String())
+			}
+		})
+	}
+}
+
+func TestDeviceAuthorizationRefusalNamesTheRightRequest(t *testing.T) {
+	s := deviceFake(t, fakeas.Options{})
+	f, _ := deviceFlow(t, s.URL, &recorder{})
+	// A ttl under 1 s is sent as 0, which the fake refuses at the device
+	// authorization endpoint.
+	f.TTL = 500 * time.Millisecond
+	_, err := f.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run succeeded")
+	}
+	if !strings.Contains(err.Error(), "device code request was refused") || strings.Contains(err.Error(), "token request") {
+		t.Errorf("err = %q", err)
 	}
 }
