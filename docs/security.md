@@ -920,7 +920,9 @@ The warning is a look between two brig commands, not a guard:
 
 - A foreground run hands the terminal to the agent, so Brig is not there
   when it ends. Nothing is said until the next brig command for that
-  sandbox, and a git command you run before that runs whatever is there.
+  sandbox, and a git command you run before that runs whatever is there. A
+  recorded run of Brig Enterprise keeps Brig as the parent while it runs, but
+  it makes no look when the run ends either.
 - It does not stop the write, and the guest can write again after the look.
 - It names a change, not who made it. A hook manager or a `git push -u` on
   the host changes the same files.
@@ -1335,8 +1337,10 @@ built it.
 ## The NOFire AI login token
 
 `brig login` adds one host credential: a token for a NOFire AI deployment. A
-run never reads it. Only Brig Enterprise has `brig login`; Brig Community
-does not link the login store.
+sandbox never receives it, and nothing in the core's run path reads it. One
+part of Brig Enterprise does read it while a run goes on: the session
+recorder, which [the next section](#session-recording) describes. Only Brig
+Enterprise has `brig login`; Brig Community does not link the login store.
 
 - **Where it is stored.** The token is stored in the OS keychain under the
   service `sh.brig.login`, one item for each deployment, with the fixed
@@ -1351,8 +1355,10 @@ does not link the login store.
   packages that the architecture test lists (`internal/wrap`,
   `internal/creds`, `internal/injector`, `cmd/brigd` and `cmd/brig-broker`)
   cannot import the login store, and `internal/secret/login/arch_test.go`
-  fails if one does. The same test fails if a file other than the login
-  verb's, `enterprise/internal/login/login.go`, imports the store.
+  fails if one does. The same test fails if a file other than
+  `enterprise/internal/login/login.go` imports the store. That file serves
+  the login verbs and one accessor, `AccessToken`, which the recorder calls.
+  A test in `enterprise/internal/recordings` fails if any other code calls it.
 - **Logging in again** replaces the stored token and revokes the previous
   one. If that revocation fails, the login still succeeds, and Brig prints a
   note to revoke the earlier token from the dashboard.
@@ -1417,7 +1423,10 @@ of its own, whoever sets them can read the sign-in and the token, and, with a
 proxy, answer a logout's revocation and keep the token valid. So when either
 is set, `brig login` and `brig logout` name it and ask before they contact
 any deployment, and refuse without a terminal. They also ask on macOS, where
-Go ignores the variables, so the rule is the same on both.
+Go ignores the variables, so the rule is the same on both. If you answer yes
+to `brig login`, Brig keeps the name and absolute path of each variable with the
+token, so that [session recording](#session-recording) can tell what you
+accepted from what was set since.
 
 A proxy from `HTTPS_PROXY` or `HTTP_PROXY` gets a notice and no question:
 `brig login` and `brig logout` print `Using the proxy <URL> (from <variable>)`,
@@ -1432,8 +1441,135 @@ response header or the names in a certificate. Such an error is printed as
 one line.
 
 Limits: a process that runs as you can read the token, as it can read your
-other keychain items. The token authenticates you to NOFire AI only, and no
-sandbox or `brig run` uses it.
+other keychain items. The token authenticates you to NOFire AI only. No
+sandbox uses it. A signed-in `brig run` on Brig Enterprise uses it to talk to
+the deployment, as the next section says.
+
+## Session recording
+
+Brig Enterprise can record the terminal output of a run for the organization
+that runs the NOFire AI deployment you signed in to. Brig Community records
+nothing. This section says what is captured, who decides, what leaves the
+machine, and what the recording does not promise.
+
+**What is captured.** The recording holds the bytes the run writes to your
+terminal, the terminal's size when it changes, a marker where Brig dropped
+output it could not keep up with, and the exit status. Brig does not capture
+keystrokes. A terminal echoes most of what you type, though, so most typed
+text is in the output. Text typed where the terminal does not echo, such as a
+password, is not. Anything the agent prints, a credential it prints
+included, is in the recording. A run whose input or output is not a terminal,
+or whose stdin and stdout are different terminals, is not recorded and runs
+exactly as it does without recording. So is a run on a runtime other than hull.
+
+**Where it is captured.** On your host, outside the guest. Brig is the parent
+of the attached command and owns its terminal, so the guest cannot see the
+recorder or turn it off. Brig Community does not link the recorder, and a run
+with no recorder hook has no relay and goes the way it always did.
+
+**Who decides.** The organization's setting at the deployment decides, for a
+person who signed in to that deployment with `brig login`. Brig records no
+run of a person who has not. At the start of every recorded run Brig prints
+`brig: this run is recorded for your organization` to stderr. No flag,
+variable, profile key or Brigfile key turns recording on or off. A deployment
+that is down, slow or says no leaves the run unrecorded, so an outage cannot
+stop a sandbox from booting.
+
+**What leaves the machine, and where to.** Brig sends to the deployment you
+signed in to, over HTTPS, with the login token as a bearer header. `http` works
+only for a loopback address. The first request says what the run is: the
+sandbox name, the agent and the session name, the profile, your host name
+(printable ASCII, at most 128 bytes), the runtime, the Brig version, the
+terminal size, the start time and a random key. After that Brig sends the
+captured output in compressed batches, then the exit status. A run sends your
+token only to the deployment it was stored for. The requests go to that
+deployment's URL, path included: for `https://example.com/nofire` Brig calls
+`https://example.com/nofire/api/v2/control-room/recordings`, never the root of
+the host. If `BRIG_NOFIRE_URL` names a deployment you did not sign in to, Brig
+finds no token for it and sends nothing. If `SSL_CERT_FILE` or `SSL_CERT_DIR`
+is set and was not accepted when you signed in with the same value, Brig does
+not record, because with a CA of its own whoever set the variable could read
+the token, and a run cannot ask you as `brig login` does. When `brig login`
+asks about the variable and you answer yes, Brig stores the variable's name and
+value, made an absolute path against the directory you ran it in, in the same
+keychain item as the token. `brig logout` removes them with it, and the next
+`brig login` replaces them. A run makes the variable's value an absolute,
+cleaned path against its own working directory and compares that, so a relative
+path from another directory, such as a cloned repository's own `certs/ca.pem`,
+is not what you accepted. `SSL_CERT_FILE` is one path. Only `SSL_CERT_DIR` is a
+list, split at `:` as Go reads it. A value with a `..` element is never
+accepted, because the kernel resolves `..` through symlinks and a cleaned path
+can name another file: `brig login` does not ask about it and says so, and a
+run treats it as not accepted whatever is stored. Brig does not resolve
+symlinks and does not read the file, so the content of the file is not pinned:
+a certificate file replaced under the same path is still trusted. A signed-in
+terminal run on hull with a variable that was not accepted prints one line to
+stderr at its start that says Brig could not check whether the run is recorded,
+names the variable, never its value, and says that `brig login` accepts it. A
+run that is not a terminal session, and a person who is not signed in, get no
+line.
+
+**The token.** A recorded run reads the login token. One small package of
+Brig Enterprise reads it and hands it to the recorder as a value. The
+recorder cannot open the login store. The token still never reaches a
+sandbox. The token is not in the argv or the environment of the recorded
+command, in the spool, or in anything Brig prints. A recording is sent only to
+the deployment the token was stored for, and Brig does not follow a redirect
+from it.
+
+**The spool.** Brig writes what it captures to `~/.brig/recordings` as the run
+goes, and uploads it from there. The spool directory is 0700 and its files are
+0600. Brig does not encrypt the spool. Anyone who can read your home as you can
+read it. A spool holds at most 512 MiB. The limit counts all the output of a
+run. A run that writes more is recorded only up to the limit, and the rest is
+not recorded. A sandbox can do this on purpose by printing a lot. At the limit
+Brig adds a marker, stops recording, closes the recording with the end reason
+`spool_cap`, which the deployment can show as cut short, and prints a line to
+stderr when the run ends. A write error on the spool ends the recording the
+same way, with the end reason `recorder_error`. The spool is removed when the
+deployment has the whole recording, or says not to record. What the network did
+not take stays there until the next recorded run, or `brig recordings flush`,
+sends it. Before it sends anything, Brig asks the deployment, with the login
+stored now, whether the recording is that login's. If the deployment says it
+has no such recording, Brig sends nothing and opens no recording, so output
+recorded under one login never goes into a recording of another. A spool is
+removed after 30 days only when the deployment says the recording is not that
+login's or its details file cannot be used. A spool that only lacks a usable
+login stays however old it is. If Brig is stopped between removing a
+recording's details file and its spool, the spool stays on disk and is never
+sent. A later flush removes it once it is 30 days old. The file with a
+recording's details holds no token.
+
+**What the deployment is trusted with.** Only the decision whether to record.
+A recording id, a batch size or an offset that the deployment sends is checked
+before Brig uses it. An id must be a short token that fits one URL path
+segment. A size past a fixed limit refuses the recording. An offset outside
+what the spool holds, or an answer that claims more than Brig sent, ends the
+upload. Brig prints no text the deployment sends.
+
+Limits:
+
+- The recorder runs on your own machine. Someone who controls the machine can
+  stop it, kill Brig, edit the spool, or send a false recording. A recording is
+  not tamper-proof evidence of what happened. - A run is recorded only when the
+  checks pass, and only for `brig run` and `brig sh` on hull, without `--json`.
+  A run on nerdctl is not recorded. A recording can also end early. At the
+  spool limit Brig adds a marker to the recording, closes it and says so when
+  the run ends. When the deployment says not to record, Brig says so when the
+  run ends. - Your stdin and stdout must be the same terminal device. A run started with
+  `</dev/tty` uses a different device that names the same terminal, and is not
+  recorded.
+- A recorded run keeps Brig between you and the command, so two
+  things differ from an unrecorded run. If your stderr is not the same terminal
+  as your stdout (a file, a pipe or another terminal), the command's stderr
+  stays that file, pipe or terminal, and it is not recorded. Ctrl-Z does not
+  stop the command: your terminal is in raw mode, so the key reaches the
+  command's own pseudo-terminal as a byte, and the stop signal that terminal
+  raises is discarded because the command is the leader of its own session. In
+  an unrecorded run the terminal itself sends Ctrl-Z to the run's foreground
+  process group, which holds hull, so the signal reaches hull. - A process that
+  runs as you can read the token and the spool. - Brig Community records
+  nothing.
 
 ## Telemetry
 
@@ -1639,7 +1775,10 @@ tracking, bracketed paste and the alternate screen pass through. It drops
 the sequences that ask the terminal for a reply or reach past the display:
 OSC 52 queries, OSC 1337, palette queries, device and status reports,
 window reports, and DCS, SOS, PM and APC strings. It filters only when the
-output is a terminal. A pipe or a file gets the bytes as they are.
+output is a terminal. A pipe or a file gets the bytes as they are. In a
+recorded run of Brig Enterprise, Brig's relay sits between hull and your
+terminal and copies what hull emits unchanged, so hull's filter still applies
+to what you see and what is recorded.
 
 Two things still pass on macOS:
 

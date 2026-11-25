@@ -104,6 +104,19 @@ as subprocesses and does not link them. That keeps the attack surface small
 for a tool that handles credentials. Do not add a dependency unless the pull
 request says why a subprocess or the standard library is not sufficient.
 
+The Brig Enterprise module requires two modules directly. `golang.org/x/sys` is
+one of the core's four, at the same version, and Brig Enterprise requires it
+directly for the session
+recorder's pseudo-terminal, terminal-mode and `select` calls. It adds no module
+to the build. The other is `github.com/klauspost/compress`, for the zstd
+compression of the session recorder's upload format. Brig links it and does not
+run a `zstd` subprocess,
+because the recorder compresses a live stream against a fixed dictionary, and
+a subprocess would be a second process that holds the terminal output of a
+run and would need a `zstd` binary on every host. Only `enterprise/go.mod`
+lists `compress`. The core's `go.mod` does not, and an architecture test fails if the
+Brig Community binary links it.
+
 ## The two promises
 
 Brig exists for two properties. A change that weakens either one is a bug,

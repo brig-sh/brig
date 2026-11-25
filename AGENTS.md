@@ -105,7 +105,9 @@ rename, say why in the pull request and ask a maintainer for the
 Brig keeps its direct dependencies to four. It runs `cosign`, `oras` and
 `security` as subprocesses and does not link them. Do not add a module to
 `go.mod` unless the pull request says why the standard library or a
-subprocess is not sufficient.
+subprocess is not sufficient. The Brig Enterprise module has one dependency of
+its own, a zstd library for the session recorder. [CONTRIBUTING.md](CONTRIBUTING.md)
+says why it is linked.
 
 ## Commits and pull requests
 

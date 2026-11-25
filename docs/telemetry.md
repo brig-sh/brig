@@ -54,6 +54,8 @@ Some invocations send no command event:
 
 - `brig telemetry`, which is how you answer, and the shell completion
   script, which runs in every new shell
+- `brig recordings` of Brig Enterprise, which is not a command you use Brig
+  through
 - `brig target`, `brig config` and `brig init`, which queue no event and
   start no uploader
 - a bare `brig`, a mistyped global flag, and a spelling Brig has removed
