@@ -49,6 +49,10 @@ type agentExit struct{ code int }
 
 func (e *agentExit) Error() string { return "" }
 
+// ExitCode is exitCode, so that a command a build adds can test the status
+// its errors give.
+func ExitCode(err error) int { return exitCode(err) }
+
 // exitCode reads the exit status for a finished run out of its error. It reads
 // the cause rather than the message, so a wrapped error keeps its class the
 // whole way up the stack, and the order is most specific first.
