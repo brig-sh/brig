@@ -49,7 +49,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | Page | What it covers |
 | --- | --- |
 | [cli.md](cli.md) | Every verb and flag, the environment variables, the JSON output and the exit codes |
-| [cli-enterprise.md](cli-enterprise.md) | The Brig Enterprise verbs, `brig login` and `brig logout` |
+| [cli-enterprise.md](cli-enterprise.md) | The Brig Enterprise verbs, `brig login`, `brig logout` and `brig recordings`, and session recording |
 | [profiles.md](profiles.md) | Every profile field |
 | [brigfile.md](brigfile.md) | The Brigfile format, where Brig looks for one, and the approval of a run of a target |
 | [policies.md](policies.md) | Every policy field, route and preset, and where a policy is enforced |

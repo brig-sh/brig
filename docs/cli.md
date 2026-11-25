@@ -1058,13 +1058,14 @@ and the sources a profile can declare.
 
 ### Brig Enterprise verbs
 
-`brig login` and `brig logout` are Brig Enterprise commands. [Brig
-Enterprise command line reference](cli-enterprise.md) documents them. Brig
-Community does not list them in help or completion. In Brig Community, each
-prints
+`brig login`, `brig logout` and `brig recordings` are Brig Enterprise
+commands. [Brig Enterprise command line reference](cli-enterprise.md)
+documents them. Brig Community does not list them in help or completion, and
+it records no run. In Brig Community, `brig login` and `brig logout` each
+print
 `brig login is part of Brig Enterprise, and this is Brig Community. Install Brig Enterprise to log in to NOFire AI`,
-or the same for `brig logout`, and exits `1` without contacting a server or
-the keychain.
+or the same for `brig logout`, and exit `1` without contacting a server or
+the keychain. `brig recordings` is not a verb of Brig Community.
 
 ### `brig telemetry`
 

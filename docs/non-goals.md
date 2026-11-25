@@ -72,9 +72,14 @@ pointed at it, and nothing else.
 
 Brig Enterprise has an optional NOFire AI account. This replaces the earlier
 non-goal of no hosted control plane or account.
-[`brig login`](cli-enterprise.md#brig-login) signs you in, and nothing else in Brig
-needs it. Brig Community has no account. `brig run`, `brig sh` and every other
-verb work without an account.
+[`brig login`](cli-enterprise.md#brig-login) signs you in. Nothing in Brig
+needs it, and one optional feature uses it: [session
+recording](cli-enterprise.md#session-recording), which your organization
+turns on at the deployment. A run whose input or output is not a terminal, or
+whose stdin and stdout are different terminals, is not recorded and runs
+exactly as it does without recording, and so is a run on a runtime other than
+hull. Brig Community has no account. `brig run`, `brig sh` and every other verb
+work without an account.
 
 Every piece of state a run needs is still on your disk:
 
@@ -90,10 +95,13 @@ sandbox never receives it. [The NOFire AI login
 token](security.md#the-nofire-ai-login-token) lists the limits.
 [Telemetry](telemetry.md) stays anonymous when you are logged in.
 
-A run never contacts the account service, so an outage on our side cannot
-stop a sandbox from booting. The account adds our servers to the threat
-model only for `brig login` and `brig logout`, the two verbs that contact a
-deployment.
+A run still boots with no network and no account. A signed-in Brig Enterprise
+run asks the deployment once, with a 3 second timeout, whether to record it,
+and goes on unrecorded on any failure. So an outage on our side cannot stop a
+sandbox from booting. The account adds our servers to the threat model for
+`brig login` and `brig logout`, and for every signed-in run, because a signed-in
+run asks the deployment whether to record it even when the answer is no.
+[Session recording](security.md#session-recording) lists what that sends.
 
 **Reopens when** a feature requires the account for a run, and not only for a
 service beside it. A required account is still a non-goal. Brig without an
@@ -137,7 +145,9 @@ early.
 
 A live interface must also stay in the middle of a session, and Brig does
 not. `brig sh` replaces itself with the runtime, so `^C` and the exit status
-belong to the agent. [docs/security.md](security.md) explains that cost and
+belong to the agent. A recorded run of Brig Enterprise is the one exception:
+Brig stays the parent to record the output, and passes the terminal and the
+exit status through. [docs/security.md](security.md) explains that cost and
 accepts it.
 
 **Reopens when** the CLI covers the whole surface and someone shows a task
