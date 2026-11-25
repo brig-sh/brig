@@ -19,8 +19,14 @@ import (
 // keeps run-path code off the keyring package; this asserts the one remaining
 // door, the login package itself, stays shut to them as well.
 //
-// cmd/brig is Brig Community, which has no brig login, so it has no reason
-// to link the store either. Brig Enterprise links it from enterprise/.
+// cmd/brig is Brig Community, which has no brig login and records nothing, so
+// it has no reason to link the store either. Brig Enterprise links it from
+// enterprise/, and there the session recorder does read the token while a run
+// goes on: it sends it to the deployment it was stored for. That reader is
+// not in the core. It reaches the store only through the one accessor of
+// enterprise/internal/login, and the tests of enterprise/internal/recordings
+// pin that. Nothing in this module's run path can reach the store, and the
+// token is never handed to a sandbox.
 func TestRunPathCannotOpenTheLoginStore(t *testing.T) {
 	const login = "github.com/brig-sh/brig/internal/secret/login"
 	for _, pkg := range []string{
@@ -86,10 +92,16 @@ func TestOnlyTheLoginStoreNamesItsService(t *testing.T) {
 	}
 }
 
-// Brig Enterprise must link this package for brig login, and the dependency
-// test above sees only the core module. The file is the unit instead: in the
-// whole tree, only the login verb's file may import the store, so no other
-// verb, and none of the code that starts a run, can read the token.
+// Brig Enterprise must link this package, and the dependency test above sees
+// only the core module. The file is the unit instead: in the whole tree, only
+// enterprise/internal/login/login.go may import the store, so no other verb,
+// and none of the code that starts a run in the core, can open it. That file
+// serves two callers: the login verbs, and the session recorder through
+// login.AccessToken, which returns the stored token of one deployment, or the
+// name of the environment variable that stops it being used, and does nothing
+// else. The recorder is the one place that reads the token during a
+// run. The tests of enterprise/internal/recordings pin that it is the only
+// caller of the accessor and that the recorder itself cannot import the store.
 func TestOnlyTheLoginVerbReachesTheLoginStore(t *testing.T) {
 	allowed := filepath.Join("enterprise", "internal", "login", "login.go")
 	root := filepath.Join("..", "..", "..")

@@ -155,3 +155,25 @@ func TestLoadRefusesAnItemForAnotherDeployment(t *testing.T) {
 		t.Errorf("Load = %+v, %q; want no token and no text from the item", got, err)
 	}
 }
+
+// The trust store a person accepted at login is stored with the token, and a
+// record written without the field loads with none.
+func TestTheAcceptedTrustStoreIsStoredWithTheToken(t *testing.T) {
+	s, f := open(t)
+	url := "https://my.example"
+	want := Token{URL: url, AccessToken: "tok", ExpiresAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second),
+		Trust: map[string]string{"SSL_CERT_FILE": "/etc/ca.pem"}}
+	if err := s.Save(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load(url)
+	if err != nil || got.Trust["SSL_CERT_FILE"] != "/etc/ca.pem" || len(got.Trust) != 1 {
+		t.Fatalf("Load = %+v, %v", got, err)
+	}
+	// An item written before the field existed.
+	f.items[Account(url)] = []byte(`{"url":"` + url + `","access_token":"tok","expires_at":"2099-01-01T00:00:00Z"}`)
+	got, err = s.Load(url)
+	if err != nil || got.Trust != nil {
+		t.Fatalf("an older item loaded as %+v, %v; want no trust", got, err)
+	}
+}
