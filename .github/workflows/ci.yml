@@ -143,6 +143,11 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+      # brig login and brig logout through the real binary, against the fake
+      # authorization server.
+      - name: smoke test
+        run: ./script/smoke.sh
+
   tests-kept:
     name: tests kept
     runs-on: ubuntu-latest
