@@ -153,3 +153,83 @@ func TestRunAttachedDoesNotExitEarlyOnSIGINT(t *testing.T) {
 		t.Errorf("exit status = %d, want %d -- SIGINT, not SIGTERM, ended it", code, want)
 	}
 }
+
+// A Relay on the spec runs the attached exec in place of the child brig
+// would start, and gets exactly the argv and env the child would have had.
+// Its status is Attach's. The child path is not taken at all.
+func TestHullAttachRunsTheRelayWithTheChildCommand(t *testing.T) {
+	spec := ExecSpec{
+		Name: "brig-x",
+		Cmd:  []string{"agent", "--flag", "v"},
+		TTY:  true,
+		Env:  []Var{{Name: "GH_TOKEN", Value: "t", Secret: true}},
+	}
+	wantArgv, wantEnv := captureAttach(t, func() { _, _ = (&hull{bin: "/opt/hull"}).Attach(spec) })
+
+	prev := attachHandover
+	attachHandover = func([]string, []string) (int, error) {
+		t.Error("Attach started its own child although a relay was set")
+		return 0, nil
+	}
+	t.Cleanup(func() { attachHandover = prev })
+
+	var gotArgv, gotEnv []string
+	spec.Relay = func(argv, env []string) (int, error) { gotArgv, gotEnv = argv, env; return 42, nil }
+	code, err := (&hull{bin: "/opt/hull"}).Attach(spec)
+	if err != nil || code != 42 {
+		t.Fatalf("Attach = %d, %v; want 42, nil", code, err)
+	}
+	if !reflect.DeepEqual(gotArgv, wantArgv) || !reflect.DeepEqual(gotEnv, wantEnv) {
+		t.Errorf("relay got argv %v env %v; the child would have got argv %v env %v", gotArgv, gotEnv, wantArgv, wantEnv)
+	}
+}
+
+// A relay that declines gets the process handed over as Replace hands it over:
+// the same argv and env, through the same exec, and no child.
+func TestHullAttachHandsOverWhenTheRelayDeclines(t *testing.T) {
+	spec := ExecSpec{
+		Name: "brig-x",
+		Cmd:  []string{"agent", "--flag", "v"},
+		TTY:  true,
+		Env:  []Var{{Name: "GH_TOKEN", Value: "t", Secret: true}},
+	}
+	wantArgv, wantEnv := captureHandover(t, func() { _ = (&hull{bin: "/opt/hull"}).Replace(spec) }, nil)
+
+	prev := attachHandover
+	attachHandover = func([]string, []string) (int, error) {
+		t.Error("Attach started a child although the relay declined")
+		return 0, nil
+	}
+	t.Cleanup(func() { attachHandover = prev })
+
+	asked := 0
+	spec.Relay = func([]string, []string) (int, error) { asked++; return 0, ErrRelayDeclined }
+	var gotArgv, gotEnv []string
+	execPrev := execHandover
+	execHandover = func(_ string, a, e []string) error { gotArgv, gotEnv = a, e; return nil }
+	t.Cleanup(func() { execHandover = execPrev })
+	if _, err := (&hull{bin: "/opt/hull"}).Attach(spec); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if asked != 1 || !reflect.DeepEqual(gotArgv, wantArgv) || !reflect.DeepEqual(gotEnv, wantEnv) {
+		t.Errorf("relay asked %d; exec got argv %v env %v, Replace gives argv %v env %v", asked, gotArgv, gotEnv, wantArgv, wantEnv)
+	}
+}
+
+// A run that cannot build its command never reaches the relay, so nothing the
+// relay does (asking a deployment, writing a file, printing a notice) happens
+// for a run that never starts.
+func TestHullAttachDoesNotCallTheRelayWhenTheCommandCannotBeBuilt(t *testing.T) {
+	spec := ExecSpec{
+		Name: "brig-x",
+		Cmd:  []string{"agent"},
+		Env:  []Var{{Name: "HOME", Value: "/h", Secret: true}}, // a stored secret the runtime reads for itself
+	}
+	spec.Relay = func([]string, []string) (int, error) {
+		t.Error("the relay was called for a run whose command could not be built")
+		return 0, nil
+	}
+	if _, err := (&hull{bin: "/opt/hull"}).Attach(spec); err == nil {
+		t.Fatal("Attach built a command that splitEnv refuses")
+	}
+}

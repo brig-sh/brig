@@ -199,7 +199,18 @@ type ExecSpec struct {
 	// applies it to Probe and Feed as well, since they share one agent call;
 	// nerdctl reads it in Output only.
 	Ctx context.Context
+	// Relay, when set, runs the exec that Attach hands down, in place of
+	// giving the child brig's own terminal. It receives the argv and
+	// environment Replace would have exec'd, and is called only once they are
+	// built. It may return ErrRelayDeclined before it has run anything, and
+	// Attach then hands the process over as Replace does. hull's Attach honours
+	// it; the nerdctl adapter does not, so a caller sets it only for hull.
+	Relay func(argv, env []string) (int, error) `json:"-"`
 }
+
+// ErrRelayDeclined is what a Relay returns, before it has run anything, to say
+// the run goes the way it would with no relay.
+var ErrRelayDeclined = errors.New("runtime: the relay declined the run")
 
 // Egress is a sandbox's outbound rule set as the runtime takes it: a default
 // verdict and the rules that beat it. Deny beats Allow beats Default.
