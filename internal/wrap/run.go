@@ -1028,6 +1028,7 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 		TTY:     tty,
 		Env:     c.guestEnv(set),
 		Counted: true,
+		Relay:   c.Relay,
 	}
 }
 

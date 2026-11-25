@@ -27,13 +27,20 @@ func isatty(fd uintptr) bool {
 // not a terminal or the driver reports no size. TIOCGWINSZ fills a struct
 // winsize, four unsigned shorts on both operating systems.
 func termWidth(fd uintptr) int {
+	cols, _ := termSize(fd)
+	return cols
+}
+
+// termSize returns the columns and rows of the terminal on fd, or 0 and 0
+// when fd is not a terminal or the driver reports no size.
+func termSize(fd uintptr) (cols, rows int) {
 	var ws struct{ row, col, xpixel, ypixel uint16 }
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGWINSZ,
 		uintptr(unsafe.Pointer(&ws)))
 	if errno != 0 {
-		return 0
+		return 0, 0
 	}
-	return int(ws.col)
+	return int(ws.col), int(ws.row)
 }
 
 // foreground returns whether this process is in the foreground process group

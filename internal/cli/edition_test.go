@@ -48,9 +48,9 @@ func TestCommunityHelpAndCompletionDoNotOfferLogin(t *testing.T) {
 // registerForTest records o as Main would, and undoes it when the test ends.
 func registerForTest(t *testing.T, o Options) {
 	t.Helper()
-	oldVerbs, oldUsages, oldText, oldEdition := slices.Clone(verbs), maps.Clone(verbUsages), usageText, edition
+	oldVerbs, oldUsages, oldText, oldEdition, oldAttach := slices.Clone(verbs), maps.Clone(verbUsages), usageText, edition, attachHook
 	t.Cleanup(func() {
-		verbs, verbUsages, usageText, edition = oldVerbs, oldUsages, oldText, oldEdition
+		verbs, verbUsages, usageText, edition, attachHook = oldVerbs, oldUsages, oldText, oldEdition, oldAttach
 		commands = map[string]Command{}
 	})
 	register(o)
