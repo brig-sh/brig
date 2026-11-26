@@ -316,14 +316,24 @@ func waitReadable(fd, wake int, timeout *unix.Timeval) (fdReady, wakeReady bool,
 	}
 }
 
-func writeAll(fd int, p []byte) error {
+// errWoken is what writeAll returns when the wake pipe fires while it waits for
+// room.
+var errWoken = errors.New("ptyrelay: woken while writing")
+
+// writeAll writes p to fd, which must not block. While fd has no room it waits
+// in short steps and gives up with errWoken once wake is readable, so a stop
+// reaches a writer whose reader has gone.
+func writeAll(fd int, p []byte, wake int) error {
 	for len(p) > 0 {
 		n, err := unix.Write(fd, p)
 		if err == unix.EINTR {
 			continue
 		}
 		if err == unix.EAGAIN {
-			time.Sleep(time.Millisecond)
+			step := unix.NsecToTimeval(int64(time.Millisecond))
+			if woke, _, _ := waitReadable(wake, -1, &step); woke {
+				return errWoken
+			}
 			continue
 		}
 		if err != nil {
@@ -336,8 +346,12 @@ func writeAll(fd int, p []byte) error {
 
 // pumpInput copies the user's terminal to the master until wake is readable or
 // the user's input ends. It reads only when select says data is ready, so a
-// stop never leaves it holding a byte the next reader needed.
+// stop never leaves it holding a byte the next reader needed. The master is set
+// not to block: when the command's terminal has stopped taking input, which a
+// process that outlives the command can cause, a blocked write could not be
+// woken and Run could not return.
 func pumpInput(inFd, mfd, wake int) {
+	_ = unix.SetNonblock(mfd, true)
 	buf := make([]byte, chunk)
 	for {
 		ready, woke, err := waitReadable(inFd, wake, nil)
@@ -354,7 +368,7 @@ func pumpInput(inFd, mfd, wake int) {
 		if err != nil || n == 0 {
 			return
 		}
-		if writeAll(mfd, buf[:n]) != nil {
+		if writeAll(mfd, buf[:n], wake) != nil {
 			return
 		}
 	}

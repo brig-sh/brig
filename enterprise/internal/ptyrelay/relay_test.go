@@ -639,3 +639,45 @@ func TestTheCommandDoesNotInheritTheWakePipes(t *testing.T) {
 		t.Errorf("the listing %v is not the command's descriptors", fds)
 	}
 }
+
+// A write to the command's terminal that has no room is woken by the stop, so
+// Run can always return and restore the person's terminal. The master stands in
+// as a pipe nobody reads, filled until it takes no more.
+func TestPumpInputStopsWhileTheCommandTakesNoInput(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer inW.Close()
+	mR, mW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mR.Close()
+	defer mW.Close()
+	wR, wW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wR.Close()
+	defer wW.Close()
+	go func() { _, _ = inW.Write(bytes.Repeat([]byte("x"), 1<<20)) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pumpInput(int(inR.Fd()), int(mW.Fd()), int(wR.Fd()))
+	}()
+	time.Sleep(200 * time.Millisecond) // the pipe is full and the writer waits
+	select {
+	case <-done:
+		t.Fatal("pumpInput ended before it was woken")
+	default:
+	}
+	_, _ = unix.Write(int(wW.Fd()), []byte{1})
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pumpInput stayed blocked in a write after the wake")
+	}
+}
