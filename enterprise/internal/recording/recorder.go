@@ -37,6 +37,16 @@ type Recorder struct {
 	closed   bool
 }
 
+// How long OpenSpool waits for the lock on a spool it just created.
+const (
+	spoolLockTries = 10
+	spoolLockPause = 10 * time.Millisecond
+)
+
+// afterSpoolCreate is called between creating a spool and locking it; a test
+// uses it to hold a lock in that gap.
+var afterSpoolCreate = func(string) {}
+
 // OpenSpool creates the spool at path, mode 0600, append-only, and takes an
 // exclusive lock on it for the life of the Recorder so `brig recordings flush`
 // leaves a live recording alone. capBytes <= 0 means DefaultSpoolCap.
@@ -45,9 +55,22 @@ func OpenSpool(path string, start time.Time, capBytes int64) (*Recorder, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	afterSpoolCreate(path)
+	// The file is new, so nothing holds it for long. A sweep of orphan spools
+	// takes a shared lock on one without a meta file for the moment it checks
+	// its age, so a short wait covers that. When the lock still fails the
+	// file is this call's and is removed, so no empty spool is left behind.
+	var lerr error
+	for i := 0; i < spoolLockTries; i++ {
+		if lerr = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); lerr != syscall.EWOULDBLOCK {
+			break
+		}
+		time.Sleep(spoolLockPause)
+	}
+	if lerr != nil {
+		_ = os.Remove(path)
 		_ = f.Close()
-		return nil, err
+		return nil, lerr
 	}
 	if capBytes <= 0 {
 		capBytes = DefaultSpoolCap
