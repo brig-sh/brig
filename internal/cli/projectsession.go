@@ -218,6 +218,7 @@ func removeProject(cfg *wrap.Config, ref projectRef, dryRun bool) error {
 		}
 		_, _ = wrap.ForgetSandbox(cfg.VMName)
 		runtime.ForgetBootedNet(cfg.VMName)
+		wrap.ForgetBoot(cfg.VMName)
 		wrap.ForgetSlugClaim(cfg.VMName)
 		_, _ = wrap.Revoke(cfg.VMName)
 		for _, n := range stays {

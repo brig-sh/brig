@@ -10,6 +10,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/wrap"
 )
 
 // Every --json shape is the shared envelope: it parses, and it carries the
@@ -317,4 +318,52 @@ func containsStr(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A sandbox brig has a boot record for carries it in ls, and one without, as
+// a sandbox booted by an older release is, carries no boot object at all.
+func TestLsJSONCarriesTheBootRecord(t *testing.T) {
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	booted := wrap.BootRecord{
+		Image: wrap.BootImage{Ref: "ghcr.io/brig-sh/claude-code:latest",
+			Digest: "sha256:" + strings.Repeat("a", 64),
+			Verification: wrap.BootVerification{Mode: "require", Outcome: "verified",
+				Trust: &wrap.BootTrust{Registry: "ghcr.io/brig-sh/"}}},
+		Policies: []wrap.BootPolicy{{Name: "github", Digest: "sha256:" + strings.Repeat("b", 64)}},
+	}
+	dir := os.Getenv("BRIG_STATE_DIR")
+	blob, err := json.Marshal(map[string]wrap.BootRecord{"brig-claude-code": booted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "boots.json"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows := []sandboxRow{
+		{ref: "claude-code", name: "brig-claude-code", state: "running"},
+		{ref: "codex", name: "brig-codex", state: "running"},
+	}
+	var buf bytes.Buffer
+	if err := writeJSONDocument(&buf, "SandboxList", sandboxListData(rows, nil)); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Data struct {
+			Sandboxes []map[string]json.RawMessage `json:"sandboxes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	var got wrap.BootRecord
+	if err := json.Unmarshal(doc.Data.Sandboxes[0]["boot"], &got); err != nil {
+		t.Fatalf("the booted sandbox has no readable boot object: %v\n%s", err, buf.String())
+	}
+	if got.Image.Digest != booted.Image.Digest || got.Image.Verification.Outcome != "verified" ||
+		len(got.Policies) != 1 || got.Policies[0].Name != "github" {
+		t.Errorf("boot = %+v, want the record as written", got)
+	}
+	if _, ok := doc.Data.Sandboxes[1]["boot"]; ok {
+		t.Errorf("a sandbox with no record carries a boot object:\n%s", buf.String())
+	}
 }

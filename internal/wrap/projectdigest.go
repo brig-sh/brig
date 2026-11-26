@@ -139,5 +139,6 @@ func (c *Config) Recreate() error {
 	}
 	dropSessionEntries(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	ForgetBoot(c.VMName)
 	return nil
 }

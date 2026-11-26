@@ -3270,6 +3270,14 @@ grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
   && ok "the verified digest is what hull was told to boot" \
   || bad "hull was told to boot the tag, not the verified digest: $(grep 'argv: run ' "$STUB_LOG" | tail -1)"
 
+# What booted stays readable after the run: `brig --json ls` carries the digest
+# hull was told to boot and the decision it was booted under.
+"$WORK/brig" --json ls > "$WORK/boot-ls.json" 2>/dev/null
+case "$(tr -d ' \n' < "$WORK/boot-ls.json")" in
+  *'"boot":{'*'"digest":"sha256:aaaa'*'"mode":"warn","outcome":"verified"'*) ok "ls names the booted digest and the signature decision" ;;
+  *) bad "ls names the booted digest and the signature decision -- got: $(cat "$WORK/boot-ls.json")" ;;
+esac
+
 # What the default run gets instead of the detail is the outcome, in one line.
 # One line for the whole step, not one per check. The registry is out of reach
 # here, so the stand-ins match only hull's record beside them, and that record
@@ -3396,12 +3404,28 @@ case "$out" in
   *) bad "a third-party image warns -- got: $out" ;;
 esac
 [ "$rc" = 0 ] && ok "a third-party image still boots" || bad "a third-party image was blocked"
+# And its record says what the check found, which is not a verification.
+"$WORK/brig" --json ls > "$WORK/boot-ls.json" 2>/dev/null
+case "$(tr -d ' \n' < "$WORK/boot-ls.json")" in
+  *'"ref":"docker.io/library/ubuntu:24.04"'*'"outcome":"not-ours"'*) ok "ls records a third-party boot as not-ours" ;;
+  *) bad "ls records a third-party boot as not-ours -- got: $(cat "$WORK/boot-ls.json")" ;;
+esac
 
 fresh
 out="$(BRIG_VERIFY=require BRIG_IMAGE=docker.io/library/ubuntu:24.04 \
   "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
 [ "$rc" = 5 ] && ok "require refuses what it cannot check (exit 5)" \
   || bad "require refuses what it cannot check with exit 5 -- got $rc"
+# A refused boot records nothing, so ls never names an image that did not boot.
+fresh
+BRIG_VERIFY=require BRIG_IMAGE=registry.example.com/refused/agent:1 \
+  "$WORK/brig" run claude -p hi > /dev/null 2>&1; rc=$?
+"$WORK/brig" --json ls > "$WORK/boot-ls.json" 2>/dev/null
+if [ "$rc" = 5 ] && ! grep -q 'registry.example.com/refused' "$WORK/boot-ls.json"; then
+  ok "a refused boot leaves no boot record"
+else
+  bad "a refused boot leaves no boot record -- got $rc: $(cat "$WORK/boot-ls.json")"
+fi
 
 # The kernel and initrd are compared with the bundle that verified. Here the
 # record beside them is for another bundle. BRIG_BOOT_ASSETS names the

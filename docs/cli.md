@@ -319,6 +319,24 @@ In `brig --json ls`, a sandbox of a target has a `project` object and no
 
 A sandbox of a profile has no `project` object.
 
+In `brig --json ls`, a sandbox has a `boot` object that records what Brig
+booted it with. Brig writes it when the runtime starts the sandbox, and
+nowhere else. A sandbox that an older release booted has no `boot` object.
+
+| Field | Meaning |
+| --- | --- |
+| `bootedAt` | when the boot started, in UTC |
+| `image.ref` | the image reference that the run named |
+| `image.digest` | the digest that Brig told the runtime to boot. Omitted when the tag booted (see [Digest pinning](security.md#digest-pinning)) |
+| `image.verification.mode` | `BRIG_VERIFY`: `off`, `warn` or `require` |
+| `image.verification.outcome` | `verified`, `not-ours`, `no-tooling`, `unresolved`, `mismatch` or `failed`, and `unchecked` under `off`. Under `require`, only `verified` boots. Under `warn`, `failed` and `mismatch` boot only when you answer yes |
+| `image.verification.trust` | the trust policy of the check: `registry`, `identity`, `issuer`, and `replaced` when `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` or `BRIG_VERIFY_ISSUER` replaced the one Brig ships. Omitted under `off` |
+| `bootAssets` | for a profile that boots a kernel bundle: `verified`, and the bundle `digest` whose signature verified |
+| `policies` | each policy bound at boot, in merge order, with its `name` and the sha256 `digest` of the document as Brig parsed it. A policy edited since applies at the next boot, so its digest here can differ from the file now |
+
+The record is a file in Brig's state directory. It reports what Brig did, and
+anything that runs as you can rewrite it.
+
 ### `brig logs`
 
 ```bash
