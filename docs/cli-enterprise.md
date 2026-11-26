@@ -155,9 +155,10 @@ true:
   expired. The deployment is `BRIG_NOFIRE_URL`, else `https://my.nofire.ai`,
   as for `brig login` with no argument. A token you stored for another
   deployment does not count.
-- The runtime is hull. With nerdctl nothing is recorded. Only `brig run` and
-  `brig sh` are recorded, and not under `--json`, with `--detach`, or for a
-  GUI agent.
+- The runtime is hull. With nerdctl nothing is recorded, and `BRIG_RUNTIME`
+  can select it. Only `brig run` and `brig sh` are recorded, and not under
+  `--json`, with `--detach`, or for a GUI agent. `brig exec` hands over no <!-- retired-ok -->
+  terminal, so it is not recorded.
 - Your stdin and stdout are the same terminal. A run whose input or output is
   a pipe or a file, or whose stdin and stdout are two terminals, is not
   recorded. Brig compares the terminal device, so a run started with
@@ -176,6 +177,11 @@ true:
   file.
 - Your organization turned recording on at the deployment. Brig asks the
   deployment once, with a 3 second timeout.
+
+No setting exists to turn recording on or off. A deployment you did not sign
+in to, such as one `BRIG_NOFIRE_URL` names, `--json`, `brig exec` and <!-- retired-ok -->
+`BRIG_RUNTIME=nerdctl` exist for other reasons, and each leaves a run
+unrecorded.
 
 If any of these fails, or the deployment is down, the run goes on as it always
 does, with no message and no delay beyond the timeout. Two cases print one
