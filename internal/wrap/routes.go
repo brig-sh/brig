@@ -35,6 +35,12 @@ type routeServer interface {
 	// when nothing is left. A broker that does not hold it is nothing to
 	// remove. It starts nothing.
 	ForgetService(kind, id string) error
+	// RegisterMCP registers the MCP servers of s, starting the broker when
+	// none is running, and returns its answer. Other servers than the ones
+	// registered are refused, with 409.
+	RegisterMCP(s injector.MCPSandbox) (injector.AddResponse, error)
+	// MintMCP returns an MCP token for a sandbox registered for MCP servers.
+	MintMCP(r injector.MCPMintRequest) (string, error)
 	// Status is what a running broker reports, and false when none answers.
 	// A broker whose process is alive and does not answer reports its PID
 	// alone, with false. It starts nothing.
@@ -418,6 +424,18 @@ func (c *Config) forgetRoutes() {
 	}
 }
 
+// forgetRoutesOnly revokes this sandbox's session tokens and keeps its guest
+// services registered, so the tokens of an agent another exec started for
+// them stay valid. A failure is said and does not fail the exec.
+func (c *Config) forgetRoutesOnly() {
+	if err := c.routeBroker().ForgetRoutes(c.VMName); err != nil {
+		c.warnf("the credential broker could not revoke the session tokens of %s: %v", c.VMName, err)
+	}
+	if err := forgetModes(c.VMName); err != nil {
+		c.warnf("could not remove what the routes of %s left on the host: %v", c.VMName, err)
+	}
+}
+
 // RevokeRoutes removes the sandbox vmName from the credential broker, which
 // refuses its session tokens from the next request on, and stops the broker
 // when no sandbox is left. It starts nothing. brig rm --all and brig reset
@@ -492,16 +510,16 @@ func namesBrokered(refs []string, brokered map[string]string) bool {
 	return false
 }
 
-// withRoutes returns the profile and the env bindings a run with routes
-// delivers. A secret a route injects is never delivered to the guest: a
-// files: binding of it is dropped, an env binding whose chain names it is
-// dropped whole, so an ambient value cannot stand in for it either, and it
-// leaves the profile's secrets list, so brig does not read it. The broker
-// reads it on the host. skipped names each secret a route injects, whether
-// or not the profile delivers it.
-func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alpha1.Route) (
+// withBrokered returns the profile and the env bindings a run delivers when
+// the broker holds the secrets brokered names: the ones the routes inject and
+// the ones the MCP servers' credentials name. Such a secret is never
+// delivered to the guest: a files: binding of it is dropped, an env binding
+// whose chain names it is dropped whole, so an ambient value cannot stand in
+// for it either, and it leaves the profile's secrets list, so brig does not
+// read it. The broker reads it on the host. skipped names each brokered
+// secret, whether or not the profile delivers it.
+func withBrokered(t profile.Profile, bindings []profile.EnvBinding, brokered map[string]string) (
 	profile.Profile, []profile.EnvBinding, []string) {
-	brokered := brokeredSecrets(routes)
 	if len(brokered) == 0 {
 		return t, bindings, nil
 	}
@@ -555,7 +573,7 @@ func githubRoutes(routes []v1alpha1.Route) (api, git string) {
 // withoutGitHubToken drops GH_TOKEN and GITHUB_TOKEN when a route reaches
 // GitHub. The route keeps the token on the host, and forwarding it as well
 // would put the real token in the guest beside the route's session token.
-// withRoutes drops them only when the route brokers the same secret. With
+// withBrokered drops them only when the route brokers the same secret. With
 // forward set, both stay, and the warning says where the token is. forward
 // is its own setting, not BRIG_ALLOW_DENIED: the billing denylist is a
 // separate decision. override is the setting to quote, such as

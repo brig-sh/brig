@@ -54,7 +54,12 @@ type ApprovalSubject struct {
 	// Routes is every route, with where it sends requests and which of your
 	// secrets it reads.
 	Routes []PlanRoute `json:"routes"`
-	// KeptOnHost are the secrets the routes keep on the host.
+	// MCP is every MCP server, with where it sends calls, which of your
+	// secrets it reads and which tools it allows. Omitted when empty, so a
+	// run without one keeps its digest.
+	MCP []PlanMCP `json:"mcp,omitempty"`
+	// KeptOnHost are the secrets the routes and the MCP servers keep on the
+	// host.
 	KeptOnHost []string      `json:"keptOnHost"`
 	Image      ApprovalImage `json:"image"`
 	Limits     PlanLimits    `json:"limits"`
@@ -187,6 +192,7 @@ func (c *Config) ApprovalSubject(in ApprovalInput) (ApprovalSubject, bool) {
 			SHA256: jsonSHA256(digestProfile(c.Profile))},
 		Policies:    []ApprovalPolicy{},
 		Routes:      c.planRoutes(),
+		MCP:         c.planMCP(),
 		KeptOnHost:  sortedCopy(c.routeSkipped),
 		Image:       ApprovalImage{Ref: c.Image, Pinned: strings.Contains(c.Image, "@sha256:"), Pull: c.Pull},
 		Limits:      PlanLimits{Mem: c.Mem, CPUs: c.CPUs},
@@ -445,6 +451,23 @@ func ApprovalChanges(was, now ApprovalSubject) []string {
 			}
 			if !slices.Equal(a.GitInsteadOf, b.GitInsteadOf) || !slices.Equal(a.GuestEnv, b.GuestEnv) {
 				add("%s changed the git URLs it takes over or the variables it sets in the guest", k)
+			}
+		})
+	mcpKey := func(m PlanMCP) string { return "mcp " + m.Name }
+	diffKeyed(was.MCP, now.MCP, mcpKey, func(m PlanMCP) string { return jsonSHA256(m) },
+		func(k string) { add("%s is new", k) }, func(k string) { add("%s is gone", k) },
+		func(k string, a, b PlanMCP) {
+			if a.URL != b.URL {
+				add("%s sends to %s, and sent to %s", k, b.URL, a.URL)
+			}
+			if !slices.Equal(a.Secrets, b.Secrets) {
+				add("%s reads your secret %s, and read %s", k, listOr(b.Secrets), listOr(a.Secrets))
+			}
+			if !slices.Equal(a.Tools, b.Tools) {
+				add("%s allows %s, and allowed %s", k, toolsText(b.Tools), toolsText(a.Tools))
+			}
+			if a.Policy != b.Policy || a.Preset != b.Preset {
+				add("%s changed its policy or preset", k)
 			}
 		})
 	if !slices.Equal(was.KeptOnHost, now.KeptOnHost) {

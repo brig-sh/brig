@@ -1034,7 +1034,7 @@ func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
 }
 
 // mcpConfigOf is the seam a test replaces to give a run an MCP
-// configuration, which no service adds to yet.
+// configuration without loading a policy that declares a server.
 var mcpConfigOf = (*wrap.Config).MCPConfig
 
 // options are brig's own flags for one invocation.

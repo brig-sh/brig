@@ -13,7 +13,7 @@ import (
 )
 
 // githubRouteDoc binds a GitHub route whose credential is a secret the profile
-// does not name, so withRoutes leaves the profile's GH_TOKEN binding alone.
+// does not name, so withBrokered leaves the profile's GH_TOKEN binding alone.
 func githubRouteDoc(preset string) string {
 	return `apiVersion: brig.sh/v1alpha1
 kind: Policy

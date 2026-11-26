@@ -245,6 +245,7 @@ Kubernetes envelope: `apiVersion`, `kind`, `metadata` and `spec`.
 | `metadata.name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name. See [Naming a policy](#naming-a-policy) |
 | `metadata.description` | no | One line, shown by `brig policy ls` |
 | `metadata.labels`, `metadata.annotations` | no | Maps of strings. Brig does not read them |
+| `spec.mcp` | no | The remote MCP servers the run attaches. See [MCP servers](#mcp-servers) |
 | `spec.egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
 | `spec.egress.allow` | no | Exceptions to a `deny` default |
 | `spec.egress.deny` | no | A host or range to refuse regardless. Where the rules are enforced, `deny` takes priority over `allow` and over `default`. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
@@ -859,6 +860,129 @@ brig: policy claude-only (route anthropic) declares a route in mode endpoint, an
 ```
 
 `brig plan` and `brig run` report the same refusal.
+
+## MCP servers
+
+`spec.mcp` lists remote MCP servers that the agent in the guest can call.
+The credential of a server stays on the host. The broker stands in front of
+the server: it adds the credential, lets only the tools you name run, and
+audits each call. The guest reaches a server at
+`https://brig.internal/<sandbox-id>/mcp/<name>` with a token of its own.
+Only the `claude-code` profile takes MCP servers, and Brig refuses a run of
+any other profile whose policies declare one. A run with an MCP server
+needs `brig.internal`, so it runs where a route in mode `endpoint` does, and
+is isolated as a run with a route is. On hull on Linux that is the `hvi`
+monitor: Brig refuses the run before boot on another.
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: nofire
+spec:
+  mcp:
+    - name: nofire
+      preset: nofire
+      credential:
+        secretRef: { name: nofire-mcp }
+      tools:
+        allow:
+          - nofire_search_entities
+          - nofire_get_entity_dependencies
+          - nofire_get_entity_changes
+          - nofire_get_entity_metrics
+          - nofire_assess_deployment_risk
+          - nofire_analyze_blast_radius
+          - nofire_find_related_incidents
+          - nofire_get_cluster_summary
+          - nofire_get_recent_deploys
+```
+
+Store the token first, with `brig secret create nofire-mcp`. See
+[Secrets](secrets.md). The `nofire` preset points at the NOFire AI MCP
+server. The [NOFire AI documentation](https://docs.nofire.ai/mcp/getting-started) lists
+its tools, all read-only. The example names all nine. Name only the ones
+the agent needs.
+
+### MCP server fields
+
+| field | required | what it is |
+| --- | --- | --- |
+| `name` | yes | The name of the server. It is the last segment of the guest's URL, and unique across the policies bound to a run. `brig-memory` is reserved |
+| `preset` | no | `nofire`. Sets `transport`, `url` and `inject`. The preset fixes where the credential goes, so a server with a `preset` may not set `url` or `inject` |
+| `transport` | with no preset | `http`, the only value. `stdio` is refused |
+| `url` | with no preset | The upstream, `https://`, with no userinfo and no query string, as the upstream of a route |
+| `credential.secretRef.name` | with a preset, or when `inject` uses `{value}` | The secret in your store that the broker sends. The whole secret: `credential.field` is refused. Brig refuses a header that holds `{value}` when the server names no credential |
+| `inject.headers` | with no preset | The headers to set, with `{value}` standing for the secret, as for a [route](#route-fields). `inject.headers` is the only part of `inject` an MCP server accepts |
+| `tools.allow` | yes | The tools the agent may call, at least one. A preset never sets it. `"*"` allows every tool and is the only wildcard |
+
+`"*"` allows a tool the server adds after you wrote the policy.
+`brig policy check` warns for it, and `brig plan` says "all tools (*)".
+List the tools instead.
+
+### What the broker forwards
+
+| Request | What the broker does |
+| --- | --- |
+| `initialize` | Forwards it, after removing `sampling`, `elicitation` and `roots` from the client capabilities |
+| `ping`, `notifications/*` | Forwards them |
+| `tools/list` | Forwards it, and cuts the answer down to the allowed tools, on every page |
+| `tools/call` | Forwards a call of an allowed tool. Any other tool gets a JSON-RPC error, and the request never reaches the server |
+| any other method, such as `resources/read` or `prompts/get` | Refuses it with `-32601` |
+| a batch | Refuses it whole with `-32600` |
+
+`POST` and `DELETE` go to the server. `GET` gets 405, so the server has no
+stream of its own to the agent. The broker also drops a request that the
+server sends the agent, such as sampling, inside a response. It asks the
+server for an uncompressed response and refuses a compressed one with 502,
+because it cannot filter one. A request is at most 1 MiB. A sandbox has at
+most 8 MCP calls in flight, and a call ends after 10 minutes.
+
+Brig writes the servers into `/brig/mcp/mcp.json`, and starts `claude` with `--mcp-config` for it. The file holds
+no token: it names `BRIG_MCP_TOKEN`, which Claude Code expands when it reads
+the file. The token reaches the guest in the environment of the exec, never
+in argv, and it opens the MCP servers of that sandbox and nothing else. A
+route refuses it. See [the broker](broker.md#mcp-servers) and
+[MCP servers](security.md#mcp-servers).
+
+A profile that binds the secret an MCP server's credential names, as an
+`env` or `files` binding, does not hand it to the guest. Brig drops the
+binding and never reads the secret for it, because a copy in the guest
+could reach the server around the tool allowlist.
+
+### In a repository
+
+A policy that a [Brigfile](brigfile.md) supplies may declare an MCP server
+only through a preset, and may not set `url` or `inject`. A repository can
+attach NOFire AI, and your token goes only to the preset's address. It may
+still name any secret in your store, so `brig plan` and the approval show
+the secret name of each server, and a change to a server asks again. A
+policy in your own policy directory has no such limit.
+
+### What check and plan print for MCP servers
+
+`check` prints each server under its policy, with its upstream and tools:
+
+```console
+$ brig policy check claude-code
+nofire
+  mcp nofire  https://mcp.nofire.ai/mcp  tools: nofire_search_entities, nofire_get_entity_dependencies
+```
+
+`brig plan` has one row for each server in its `BROKER` rows, in the form
+`mcp nofire to https://mcp.nofire.ai/mcp with your secret nofire-mcp, tools
+nofire_search_entities, from nofire`. It prints the name of the secret and
+never its value.
+
+### Schema for editors
+
+`brig policy create` writes a `# yaml-language-server: $schema=` line as the
+first line of the file. It points at
+`api/policy/v1alpha1/policy.schema.json`, a JSON Schema (draft 2020-12) for
+the whole document, which an editor with the YAML language server uses to
+complete `spec.mcp` and flag a wrong key. `egress` and `routes` are typed
+loosely. The schema is help for the editor: `brig policy check` and the run
+apply the rules above, and they win if the two differ.
 
 ## Naming a policy
 

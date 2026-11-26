@@ -56,6 +56,11 @@ func (c *Config) deliverSecretFiles() error {
 	if err := c.deliverBrigCA(); err != nil {
 		return err
 	}
+	// And the guest's MCP configuration, which names the token's variable
+	// and holds no secret either.
+	if err := c.deliverMCPConfig(); err != nil {
+		return err
+	}
 	if len(c.Profile.Volumes) == 0 && len(c.Profile.Files) == 0 {
 		return nil
 	}

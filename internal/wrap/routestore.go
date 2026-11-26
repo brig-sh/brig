@@ -193,8 +193,9 @@ func (c *Config) routeCreateCommand(name string) string {
 	return "brig secret create " + name
 }
 
-// routedBy names each route that injects one of names, with the policy that
-// declares it, the way a refusal does.
+// routedBy names each route that injects one of names, and each MCP server
+// whose credential is one of them, with the policy that declares it, the way
+// a refusal does.
 func (c *Config) routedBy(names []string) string {
 	var out []string
 	for _, r := range c.routes {
@@ -204,6 +205,11 @@ func (c *Config) routedBy(names []string) string {
 				out = append(out, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
 				break
 			}
+		}
+	}
+	for _, e := range c.mcp {
+		if cr := e.Server.Credential; cr != nil && slices.Contains(names, cr.SecretRef.Name) {
+			out = append(out, fmt.Sprintf("%s (mcp %s)", e.Policy, e.Server.Name))
 		}
 	}
 	return strings.Join(out, ", ")

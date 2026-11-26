@@ -109,6 +109,17 @@ func caFile(name string) string {
 	return GuestCABundlePath
 }
 
+// CAVars are the variables that point a guest's TLS clients at the brig CA,
+// for a guest that reaches brig.internal for a service and no endpoint
+// route. GuestEnv adds the same for a run with an endpoint route.
+func CAVars() []runtime.Var {
+	vars := make([]runtime.Var, 0, len(caEnv))
+	for _, name := range caEnv {
+		vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
+	}
+	return vars
+}
+
 // TokenVar is the variable that holds the session token of a git route, which
 // the credential helper answers with. - reads as _, so the name maps to one
 // variable only for a route name v1alpha1.CheckRouteName accepts, and
