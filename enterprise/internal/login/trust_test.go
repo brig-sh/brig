@@ -49,7 +49,7 @@ func TestAccessTokenWithATrustStoreFromTheEnvironment(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			tok, v := AccessToken(a)
+			tok, v := access(a)
 			if tok != tc.wantToken || v != tc.wantVar {
 				t.Errorf("AccessToken = %q, %q; want %q, %q", tok, v, tc.wantToken, tc.wantVar)
 			}
@@ -65,7 +65,7 @@ func TestAStoredLoginWithNoTrustFieldAcceptsNothing(t *testing.T) {
 	a := parseDeployment(t, "https://a.example")
 	m.items[a.String()] = login.Token{URL: a.String(), AccessToken: "tok-a", ExpiresAt: time.Now().Add(time.Hour)}
 	t.Setenv("SSL_CERT_DIR", "/etc/certs")
-	if tok, v := AccessToken(a); tok != "" || v != "SSL_CERT_DIR" {
+	if tok, v := access(a); tok != "" || v != "SSL_CERT_DIR" {
 		t.Errorf("AccessToken = %q, %q", tok, v)
 	}
 }
@@ -126,7 +126,7 @@ func TestLogoutRemovesTheAcceptedTrustStore(t *testing.T) {
 	}
 	t.Setenv("SSL_CERT_FILE", "/etc/ca.pem")
 	d := parseDeployment(t, s.URL)
-	if tok, v := AccessToken(d); tok != "" || v != "" {
+	if tok, v := access(d); tok != "" || v != "" {
 		t.Errorf("AccessToken after logout = %q, %q", tok, v)
 	}
 }
@@ -164,13 +164,13 @@ func TestARelativeTrustStoreIsAcceptedOnlyFromTheDirectoryItWasAcceptedIn(t *tes
 
 	for _, val := range []string{"certs/ca.pem", "./certs/ca.pem", want, home + "/certs/./ca.pem", home + "//certs/ca.pem"} {
 		t.Setenv("SSL_CERT_FILE", val)
-		if tok, v := AccessToken(d); tok == "" || v != "" {
+		if tok, v := access(d); tok == "" || v != "" {
 			t.Errorf("%q from the same directory: %q, %q; want it accepted", val, tok, v)
 		}
 	}
 	t.Chdir(repo)
 	t.Setenv("SSL_CERT_FILE", "certs/ca.pem")
-	if tok, v := AccessToken(d); tok != "" || v != "SSL_CERT_FILE" {
+	if tok, v := access(d); tok != "" || v != "SSL_CERT_FILE" {
 		t.Errorf("the same text from another directory: %q, %q; want it refused", tok, v)
 	}
 }
@@ -192,7 +192,7 @@ func TestAValueWithAParentElementIsNeverAccepted(t *testing.T) {
 		"..",
 	} {
 		t.Setenv("SSL_CERT_FILE", val)
-		if tok, v := AccessToken(a); tok != "" || v != "SSL_CERT_FILE" {
+		if tok, v := access(a); tok != "" || v != "SSL_CERT_FILE" {
 			t.Errorf("%q: %q, %q; want it refused", val, tok, v)
 		}
 	}
@@ -200,7 +200,7 @@ func TestAValueWithAParentElementIsNeverAccepted(t *testing.T) {
 	m.items[a.String()] = login.Token{URL: a.String(), AccessToken: "tok-a", ExpiresAt: time.Now().Add(time.Hour),
 		Trust: map[string]string{"SSL_CERT_FILE": filepath.Join(dir, "a..b", "ca.pem")}}
 	t.Setenv("SSL_CERT_FILE", dir+"/a..b/ca.pem")
-	if tok, v := AccessToken(a); tok == "" || v != "" {
+	if tok, v := access(a); tok == "" || v != "" {
 		t.Errorf("a..b was refused: %q, %q", tok, v)
 	}
 	// One .. entry of an SSL_CERT_DIR list refuses the list.
@@ -208,11 +208,11 @@ func TestAValueWithAParentElementIsNeverAccepted(t *testing.T) {
 	m.items[a.String()] = login.Token{URL: a.String(), AccessToken: "tok-a", ExpiresAt: time.Now().Add(time.Hour),
 		Trust: map[string]string{"SSL_CERT_DIR": dir + "/d1:" + dir + "/d2"}}
 	t.Setenv("SSL_CERT_DIR", dir+"/d1:"+dir+"/d2")
-	if tok, _ := AccessToken(a); tok == "" {
+	if tok, _ := access(a); tok == "" {
 		t.Error("an accepted list was refused")
 	}
 	t.Setenv("SSL_CERT_DIR", dir+"/d1:"+dir+"/x/../d2")
-	if tok, v := AccessToken(a); tok != "" || v != "SSL_CERT_DIR" {
+	if tok, v := access(a); tok != "" || v != "SSL_CERT_DIR" {
 		t.Errorf("a list with a .. entry: %q, %q", tok, v)
 	}
 }

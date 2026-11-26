@@ -197,7 +197,8 @@ type Options struct {
 	// Attach, when set, is asked before each attached run on a runtime that
 	// can hand the attached exec to a relay. It returns the function that
 	// runs that exec, or nil for a run that goes the way it always has. It
-	// must touch neither the network nor the disk: the runtime calls the
+	// must touch neither the network nor the disk, and may wait a bounded time
+	// for the keychain: the runtime calls the
 	// function it returns only once the exec's command is built, and that
 	// function may return ErrRelayDeclined before it runs anything.
 	// Brig Community sets none.

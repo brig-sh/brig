@@ -28,10 +28,12 @@ var ErrRelayDeclined = runtime.ErrRelayDeclined
 var attachHook func(AttachedRun) func(argv, env []string) (int, error)
 
 // relayRun asks the build's hook, once, whether it runs this run's attached
-// exec. The hook decides from what is local to this machine and touches
-// neither the network nor the disk: the relay it returns is called by the
-// runtime only after the exec's command is built, and may still decline. When it returns a function, relayRun sets it on cfg and reports true,
-// and the caller takes the attached path with it. With no hook, a runtime
+// exec. The hook decides from what is local to this machine: it touches
+// neither the network nor the disk, and it may wait a bounded time for the
+// keychain. The relay it returns is called by the runtime only after the exec's
+// command is built, and may still decline. When it returns a function, relayRun
+// sets it on cfg and reports true, and the caller takes the attached path with
+// it. With no hook, a runtime
 // other than hull, or a nil answer, it changes nothing and reports false, and
 // the run goes the way it always has.
 //

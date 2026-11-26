@@ -132,10 +132,21 @@ func UnacceptedTrust(accepted map[string]string, getenv func(string) string) str
 	return ""
 }
 
+// KeyringWait is how long a run waits for the keychain to give up the login. A
+// locked keychain can show an unlock prompt that nobody sees, and a run must not
+// wait on it: past this the run goes on unrecorded.
+const KeyringWait = 3 * time.Second
+
 // AccessToken returns the access token stored for exactly d, and "" for it when
 // there is none, when it has expired, or when the host has no keychain. It asks
-// the keychain and nothing else: no prompt, no network call, no file written,
-// and no detail about why there is no token.
+// the keychain and nothing else: no prompt that it waits on, no network call, no
+// file written, and no detail about why there is no token.
+//
+// It waits at most wait for the keychain. The keychain call is bound to that
+// deadline where the backend honours one, and runs in a goroutine besides, so a
+// backend that does not still cannot hold the caller: after the deadline
+// timedOut is true, nothing else is returned, and a late answer is dropped by
+// the goroutine, which only reads.
 //
 // When a login is stored and a trust store from the environment was not
 // accepted at that login (see UnacceptedTrust), it returns no token and the
@@ -148,22 +159,43 @@ func UnacceptedTrust(accepted map[string]string, getenv func(string) string) str
 // internal/secret/login and of enterprise/internal/recordings). The recorder
 // sends the token to d and nowhere else. The token is never handed to a
 // sandbox.
-func AccessToken(d nofireauth.Deployment) (token, unaccepted string) {
+func AccessToken(d nofireauth.Deployment, wait time.Duration) (token, unaccepted string, timedOut bool) {
 	if d.String() == "" {
-		return "", ""
+		return "", "", false
 	}
-	store, err := openLoginStore()
-	if err != nil {
-		return "", ""
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	type answer struct {
+		t   login.Token
+		err error
 	}
-	t, err := store.Load(d.String())
-	if err != nil || t.AccessToken == "" || !t.ExpiresAt.After(time.Now()) {
-		return "", ""
+	ch := make(chan answer, 1) // buffered: a late answer is dropped, not blocked on
+	go func() {
+		store, err := openLoginStore()
+		if err != nil {
+			ch <- answer{err: err}
+			return
+		}
+		t, err := login.WithContext(ctx, store).Load(d.String())
+		ch <- answer{t, err}
+	}()
+	var t login.Token
+	select {
+	case a := <-ch:
+		if a.err != nil {
+			return "", "", ctx.Err() != nil
+		}
+		t = a.t
+	case <-ctx.Done():
+		return "", "", true
+	}
+	if t.AccessToken == "" || !t.ExpiresAt.After(time.Now()) {
+		return "", "", false
 	}
 	if v := UnacceptedTrust(t.Trust, os.Getenv); v != "" {
-		return "", v
+		return "", v, false
 	}
-	return t.AccessToken, ""
+	return t.AccessToken, "", false
 }
 
 // completeLogin offers brig login's flags. --ttl takes a lifetime, typed
