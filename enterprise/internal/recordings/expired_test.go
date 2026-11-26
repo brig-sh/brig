@@ -21,12 +21,22 @@ const (
 	failedLine = "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in\n"
 )
 
+// oldToken is the token of a sign-in that expired. The fake deployment accepts
+// recToken only, so a run that used the old token would be refused.
+const oldToken = "nfoa-OLD-expired-token"
+
 // expire stores a login for the deployment h.srv stands for and marks it
-// expired, so the person's sign-in has run out.
+// expired, so the person's sign-in has run out. Its token is oldToken.
 func (h *recHost) expire(t *testing.T) nofireauth.Deployment {
 	t.Helper()
-	h.signIn(t)
-	d, err := nofireauth.ParseDeployment(h.srv.URL())
+	return h.expireAt(t, h.srv.URL())
+}
+
+// expireAt is expire for the deployment at url.
+func (h *recHost) expireAt(t *testing.T, url string) nofireauth.Deployment {
+	t.Helper()
+	h.signInTo(t, url, oldToken)
+	d, err := nofireauth.ParseDeployment(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +44,16 @@ func (h *recHost) expire(t *testing.T) nofireauth.Deployment {
 	h.logins.expired[d.String()] = true
 	h.logins.mu.Unlock()
 	return d
+}
+
+// renew is a sign-in that succeeds: it stores recToken, the token the fake
+// deployment accepts, in place of the expired one, as brig login does.
+func (h *recHost) renew(out io.Writer, d nofireauth.Deployment) error {
+	h.logins.mu.Lock()
+	defer h.logins.mu.Unlock()
+	h.logins.items[d.String()] = recToken
+	h.logins.expired[d.String()] = false
+	return nil
 }
 
 // A run that could be recorded, with an expired sign-in, pauses before the
@@ -55,10 +75,7 @@ func TestAnExpiredSignInPausesSignsInAndTheRunIsRecorded(t *testing.T) {
 		if n := h.srv.Requests(); n != 0 {
 			t.Errorf("%d recording requests before the sign-in finished", n)
 		}
-		h.logins.mu.Lock()
-		h.logins.expired[dep.String()] = false
-		h.logins.mu.Unlock()
-		return nil
+		return h.renew(out, dep)
 	}
 
 	relay := Attach(hullRun())
@@ -90,14 +107,17 @@ func TestAnExpiredSignInPausesSignsInAndTheRunIsRecorded(t *testing.T) {
 		t.Errorf("close %+v", rec.End)
 	}
 	if h.srv.BadAuth() != 0 {
-		t.Errorf("%d requests without the bearer token", h.srv.BadAuth())
+		t.Errorf("%d requests with a token the deployment does not accept: the run used the expired token", h.srv.BadAuth())
+	}
+	if h.srv.Requests() == 0 {
+		t.Error("no request reached the deployment")
 	}
 	if out, _ := seen(); out == "" {
 		t.Error("the command's output did not reach the terminal")
 	}
 }
 
-// A sign-in that fails, is cancelled, or does not leave a usable token prints
+// A sign-in that fails or is cancelled, or does not leave a usable token prints
 // one more line, sends nothing to the recording routes, creates no file, does
 // not run the command itself, and declines so that the runtime hands the
 // process over unrecorded.
@@ -107,10 +127,7 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 		after  func(nofireauth.Deployment, time.Duration) (string, string, bool, bool)
 		last   string
 	}{
-		"fails": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
-			return func(io.Writer, nofireauth.Deployment) error { return errors.New("the deployment is down") }
-		}, last: failedLine},
-		"cancelled": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
+		"fails or is cancelled": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
 			return func(io.Writer, nofireauth.Deployment) error { return errors.New("login cancelled") }
 		}, last: failedLine},
 		"finishes with no token to read": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
@@ -120,6 +137,11 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 			return func(io.Writer, nofireauth.Deployment) error { return nil }
 		}, after: func(nofireauth.Deployment, time.Duration) (string, string, bool, bool) { return "", "", true, false },
 			last: "brig: could not read your login within 3 seconds, so this run is not recorded\n"},
+		"finishes and the trust store is not accepted": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
+			return func(io.Writer, nofireauth.Deployment) error { return nil }
+		}, after: func(nofireauth.Deployment, time.Duration) (string, string, bool, bool) {
+			return "", "SSL_CERT_FILE", false, false
+		}, last: "brig: could not check whether this run is recorded: SSL_CERT_FILE is set and was not accepted when you signed in. Run `brig login` to accept it\n"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -161,6 +183,52 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 			}
 			if _, err := os.Stat(h.state); !os.IsNotExist(err) {
 				t.Errorf("state dir was created: %v", err)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Error("the relay ran the command; the runtime does that for a declined run")
+			}
+		})
+	}
+}
+
+// After a sign-in that finished, the deployment decides as it does for any
+// signed-in run: a "not recorded" answer, or a deployment that cannot be
+// reached, hands the run over with no line beyond the pause line. The sign-in
+// ran once, and its token was the one sent.
+func TestAfterASignInTheDeploymentCanStillLeaveTheRunUnrecorded(t *testing.T) {
+	cases := map[string]func(h *recHost) nofireauth.Deployment{
+		"the deployment says not recorded": func(h *recHost) nofireauth.Deployment {
+			h.srv.SetRecorded(false)
+			return h.expire(t)
+		},
+		"the deployment cannot be reached": func(h *recHost) nofireauth.Deployment {
+			t.Setenv(nofireauth.EnvURL, "http://127.0.0.1:1")
+			return h.expireAt(t, "http://127.0.0.1:1")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newRecHost(t)
+			d := setup(h)
+			calls := 0
+			signIn = func(out io.Writer, dep nofireauth.Deployment) error { calls++; return h.renew(out, dep) }
+			relay := Attach(hullRun())
+			if relay == nil {
+				t.Fatal("no relay")
+			}
+			marker := filepath.Join(t.TempDir(), "ran")
+			code, err := relay([]string{"sh", "-c", "touch " + marker}, os.Environ())
+			if !errors.Is(err, cli.ErrRelayDeclined) || code != 0 {
+				t.Errorf("relay: %d %v, want it to decline", code, err)
+			}
+			if want := fmt.Sprintf(pauseLine, d); h.notice.String() != want {
+				t.Errorf("notice %q, want only %q", h.notice, want)
+			}
+			if calls != 1 {
+				t.Errorf("%d sign-ins, want 1", calls)
+			}
+			if _, err := os.Stat(h.recordingsDir()); !os.IsNotExist(err) {
+				t.Errorf("a recording was started: %v", err)
 			}
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Error("the relay ran the command; the runtime does that for a declined run")
