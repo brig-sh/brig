@@ -389,6 +389,17 @@ func runLogin(out, ask io.Writer, d nofireauth.Deployment, src nofireauth.URLSou
 	if err != nil {
 		return fmt.Errorf("brig login needs a keychain to hold the token: %w", err)
 	}
+	// SignIn only: another run with the same expired login may have signed
+	// in while this one waited at a question. Then there is nothing to do.
+	if held != nil {
+		stored, err := loadLogin(held, store, d.String())
+		if errors.Is(err, errKeychainWait) || errors.Is(err, errLoginCancelled) {
+			return err
+		}
+		if usable(stored) {
+			return nil
+		}
+	}
 
 	ctx := held
 	if ctx == nil {
@@ -442,6 +453,18 @@ func runLogin(out, ask io.Writer, d nofireauth.Deployment, src nofireauth.URLSou
 	// The token this login replaces. Once the new one is saved nothing here
 	// can log the old one out, so it is revoked below.
 	prev, _ := loadLogin(held, store, d.String())
+	if held != nil && usable(prev) {
+		// The stored login is unexpired, so it is not the one this sign-in set
+		// out to replace: another run signed in while this one did, and its
+		// token is the stored one. Revoking it, as a replaced token is revoked, would end
+		// that run's uploads, so this token is the one that goes, and both
+		// runs use the stored one.
+		if rerr := c.Revoke(context.Background(), m, g.AccessToken); rerr != nil {
+			noticesFor(ask).Say(fmt.Sprintf("cannot revoke the token this sign-in obtained for %s: %s. Revoke it from the dashboard",
+				d, nofireauth.CleanLine(rerr.Error())))
+		}
+		return nil
+	}
 	t := login.Token{URL: d.String(), AccessToken: g.AccessToken, ExpiresAt: time.Now().Add(g.ExpiresIn), Trust: trust}
 	if err := saveLogin(held, store, t); err != nil {
 		// A token that is not stored cannot be used or logged out of, so it
@@ -475,6 +498,11 @@ func noticesFor(w io.Writer) *wrap.Notices {
 		return wrap.Stderr
 	}
 	return &wrap.Notices{W: w}
+}
+
+// usable reports whether t is a stored login that has not expired.
+func usable(t login.Token) bool {
+	return t.AccessToken != "" && t.ExpiresAt.After(time.Now())
 }
 
 // signInKeychainWait is how long SignIn waits for one keychain call. It is a
