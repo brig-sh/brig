@@ -271,3 +271,35 @@ func TestARelativeValueIsRefusedWhenTheWorkingDirectoryCannotBeRead(t *testing.T
 		t.Errorf("err = %v, requests %v", err, s.Requests())
 	}
 }
+
+// brig logout asks about a trust store as it always has, with the value as
+// written, and a value with a .. element does not stop it: the path rules are
+// for what brig login stores and what a run compares. Answered yes, the token
+// is revoked and removed.
+func TestLogoutWithAParentElementInTheTrustStoreAsksAndRemovesTheToken(t *testing.T) {
+	m := loginHost(t)
+	s := fakeDeployment(t, fakeas.Options{})
+	if err := loginCmd(io.Discard, []string{s.URL, "--device"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", "../certs/ca.pem")
+	master := terminalStdin(t)
+	if _, err := master.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() { err = logoutCmd(&out, []string{s.URL}) })
+	if err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if !strings.Contains(out.String(), "Trusting certificates from ../certs/ca.pem (from SSL_CERT_FILE)\n") {
+		t.Errorf("out = %q, want the value as written", out.String())
+	}
+	if !strings.Contains(stderr, "Continue logging out of "+s.URL+"? [y/N]") {
+		t.Errorf("not asked: %q", stderr)
+	}
+	if _, ok := m.items[s.URL]; ok || len(s.Revoked()) != 1 {
+		t.Errorf("stored %v, revoked %d; want the token removed and revoked", ok, len(s.Revoked()))
+	}
+}
