@@ -320,8 +320,7 @@ func loginCmd(out io.Writer, args []string) (err error) {
 //
 // Ctrl-C ends the sign-in and nothing else. Brig catches it from before the
 // first question until SignIn returns, and a second Ctrl-C is caught too, so it
-// can neither end Brig nor reach the command that starts afterwards. Where
-// Brig was started with SIGINT ignored, it is ignored again on return. While a
+// can neither end Brig nor reach the command that starts afterwards. While a
 // question waits for an answer, the Ctrl-C takes effect once it is answered.
 func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
 	defer func() { err = cleanError(err) }()
@@ -341,8 +340,8 @@ func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
 // catching Ctrl-C until stop is called: a later one is swallowed rather than
 // handed back to the default, which would end Brig. signal.NotifyContext
 // cannot do that, because it stops catching with the first signal. stop
-// restores what the signal was before, which is ignored if Brig inherited it
-// ignored.
+// stops catching. A signal that Brig inherited as ignored stays ignored then,
+// which the Go runtime guarantees whatever this code does.
 func heldContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)

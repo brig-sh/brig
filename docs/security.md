@@ -1523,10 +1523,9 @@ deployment whose token expired. If it succeeds, the run goes on as a signed-in
 run does. If it fails, times out or you press Ctrl-C, Brig prints one line that
 says the sign-in did not finish and names `brig login`, sends nothing to the
 recording routes, and the run goes unrecorded. Ctrl-C ends the sign-in only: it
-does not end Brig and the command does not receive it, and a signal Brig
-inherited as ignored is ignored again afterwards. A run that cannot be recorded
-for any local reason, such as a pipe, two terminals, another runtime or
-`--json`, does not pause and starts no sign-in.
+does not end Brig and the command does not receive it. A run that cannot be
+recorded for any local reason, such as a pipe, two terminals, another runtime
+or `--json`, does not pause and starts no sign-in.
 
 **The token.** A recorded run reads the login token. One small package of
 Brig Enterprise reads it and hands it to the recorder as a value. It learns
