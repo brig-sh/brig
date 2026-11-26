@@ -77,8 +77,10 @@ const flushKeyringWait = 30 * time.Second
 const requestTimeout = 30 * time.Second
 
 // The seams the tests replace. Nothing here is a switch for a person: whether
-// a run is recorded is the deployment's answer, and there is no flag,
-// variable, profile key or Brigfile key that changes it.
+// a run is recorded is the deployment's answer, and no setting exists to turn
+// recording on or off. A deployment the person is not signed in to, --json,
+// brig exec and a runtime other than hull exist for other reasons, and each
+// leaves a run unrecorded.
 var (
 	// accessToken is the token stored for a deployment, or "", and the name of
 	// the trust-store variable that was not accepted at sign-in, if one stops it

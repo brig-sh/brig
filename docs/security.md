@@ -1471,9 +1471,9 @@ with no recorder hook has no relay and goes the way it always did.
 person who signed in to that deployment with `brig login`. Brig records no
 run of a person who has not. At the start of every recorded run Brig prints
 `brig: this run is recorded for your organization` to stderr. No flag,
-variable, profile key or Brigfile key turns recording on or off. A deployment
-that is down, slow or says no leaves the run unrecorded, so an outage cannot
-stop a sandbox from booting.
+variable, profile key or Brigfile key exists to turn recording on or off. A
+deployment that is down, slow or says no leaves the run unrecorded, so an outage
+cannot stop a sandbox from booting.
 
 **What leaves the machine, and where to.** Brig sends to the deployment you
 signed in to, over HTTPS, with the login token as a bearer header. `http` works
@@ -1556,25 +1556,35 @@ Limits:
 
 - The recorder runs on your own machine. Someone who controls the machine can
   stop it, kill Brig, edit the spool, or send a false recording. A recording is
-  not tamper-proof evidence of what happened. - A run is recorded only when the
-  checks pass, and only for `brig run` and `brig sh` on hull, without `--json`.
-  A run on nerdctl is not recorded. A recording can also end early. At the
-  spool limit Brig adds a marker to the recording, closes it and says so when
-  the run ends. When the deployment says not to record, Brig says so when the
-  run ends. - Your stdin and stdout must be the same terminal device. A run started with
+  not tamper-proof evidence of what happened.
+- A run is recorded only when these hold: it is a terminal session, which is
+  `brig run` or `brig sh` on hull with your stdin and stdout on the same
+  terminal; you are signed in to the deployment; and no trust-store variable
+  was left unaccepted. These are not recorded: a run whose stdin or stdout is a
+  pipe or a file, or whose stdin and stdout are different terminals; a run on a
+  runtime other than hull, which `BRIG_RUNTIME` can select; a run under
+  `--json`, with `--detach`, or for a GUI agent; `brig exec`, which hands over <!-- retired-ok -->
+  no terminal; a run for a deployment you did not sign in to, such as one that
+  `BRIG_NOFIRE_URL` names; and a run with a trust-store variable that was not
+  accepted. No setting exists to turn recording on or off. These exist for
+  other reasons, and each leaves a run unrecorded.
+- Your stdin and stdout must be the same terminal device. A run started with
   `</dev/tty` uses a different device that names the same terminal, and is not
   recorded.
-- A recorded run keeps Brig between you and the command, so two
-  things differ from an unrecorded run. If your stderr is not the same terminal
-  as your stdout (a file, a pipe or another terminal), the command's stderr
-  stays that file, pipe or terminal, and it is not recorded. Ctrl-Z does not
-  stop the command: your terminal is in raw mode, so the key reaches the
-  command's own pseudo-terminal as a byte, and the stop signal that terminal
-  raises is discarded because the command is the leader of its own session. In
-  an unrecorded run the terminal itself sends Ctrl-Z to the run's foreground
-  process group, which holds hull, so the signal reaches hull. - A process that
-  runs as you can read the token and the spool. - Brig Community records
-  nothing.
+- A recording can end early. At the spool limit Brig adds a marker to the
+  recording, closes it and says so when the run ends. When the deployment says
+  not to record, Brig says so when the run ends.
+- A recorded run keeps Brig between you and the command, so two things differ
+  from an unrecorded run. If your stderr is not the same terminal as your stdout
+  (a file, a pipe or another terminal), the command's stderr stays that file,
+  pipe or terminal, and it is not recorded. Ctrl-Z does not stop the command:
+  your terminal is in raw mode, so the key reaches the command's own
+  pseudo-terminal as a byte, and the stop signal that terminal raises is
+  discarded because the command is the leader of its own session. In an
+  unrecorded run the terminal itself sends Ctrl-Z to the run's foreground
+  process group, which holds hull, so the signal reaches hull.
+- A process that runs as you can read the token and the spool.
+- Brig Community records nothing.
 
 ## Telemetry
 
