@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	pauseLine  = "brig: your sign-in to %s expired. Signing you in again so this run can be recorded\n"
+	pauseLine  = "brig: your sign-in to %s expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n"
 	failedLine = "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in\n"
 )
 
@@ -49,7 +49,7 @@ func TestAnExpiredSignInPausesSignsInAndTheRunIsRecorded(t *testing.T) {
 		signed = append(signed, dep.String())
 		// The line is printed before the sign-in, and nothing has been sent to
 		// the recording routes yet.
-		if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded\n"; h.notice.String() != want {
+		if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n"; h.notice.String() != want {
 			t.Errorf("notice at sign-in %q, want %q", h.notice, want)
 		}
 		if n := h.srv.Requests(); n != 0 {
@@ -79,7 +79,7 @@ func TestAnExpiredSignInPausesSignsInAndTheRunIsRecorded(t *testing.T) {
 	if len(signed) != 1 || signed[0] != d.String() {
 		t.Errorf("sign-ins %v, want one for %s", signed, d)
 	}
-	if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded\n" + recordedNotice + "\n"; h.notice.String() != want {
+	if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n" + recordedNotice + "\n"; h.notice.String() != want {
 		t.Errorf("notice %q, want %q", h.notice, want)
 	}
 	keys := h.srv.Keys()
@@ -150,7 +150,7 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 			if !errors.Is(err, cli.ErrRelayDeclined) || code != 0 {
 				t.Errorf("relay: %d %v, want it to decline", code, err)
 			}
-			if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded\n" + c.last; h.notice.String() != want {
+			if want := "brig: your sign-in to " + d.String() + " expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n" + c.last; h.notice.String() != want {
 				t.Errorf("notice %q, want %q", h.notice, want)
 			}
 			if calls != 1 {

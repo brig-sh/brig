@@ -205,8 +205,11 @@ Brig pauses before the command starts and signs you in again, with the same
 sign-in `brig login` runs. First it prints:
 
 ```text
-brig: your sign-in to https://my.nofire.ai expired. Signing you in again so this run can be recorded
+brig: your sign-in to https://my.nofire.ai expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording
 ```
+
+Ctrl-C at this point does not end `brig run`: it skips the sign-in and starts
+the command without recording, as the line says.
 
 Then it behaves as `brig login` with no argument does. It picks the browser or
 the device flow for this host, asks the same questions about a deployment from
