@@ -385,7 +385,7 @@ func runLogin(out, ask io.Writer, d nofireauth.Deployment, src nofireauth.URLSou
 	if held != nil && held.Err() != nil {
 		return errors.New("login cancelled")
 	}
-	store, err := openLoginStore()
+	store, err := openKeychain(held)
 	if err != nil {
 		return fmt.Errorf("brig login needs a keychain to hold the token: %w", err)
 	}
@@ -441,9 +441,9 @@ func runLogin(out, ask io.Writer, d nofireauth.Deployment, src nofireauth.URLSou
 
 	// The token this login replaces. Once the new one is saved nothing here
 	// can log the old one out, so it is revoked below.
-	prev, _ := store.Load(d.String())
+	prev, _ := loadLogin(held, store, d.String())
 	t := login.Token{URL: d.String(), AccessToken: g.AccessToken, ExpiresAt: time.Now().Add(g.ExpiresIn), Trust: trust}
-	if err := store.Save(t); err != nil {
+	if err := saveLogin(held, store, t); err != nil {
 		// A token that is not stored cannot be used or logged out of, so it
 		// must not stay valid on the server. Not under ctx: an interrupt
 		// that arrived meanwhile must not leave it live.
@@ -475,6 +475,77 @@ func noticesFor(w io.Writer) *wrap.Notices {
 		return wrap.Stderr
 	}
 	return &wrap.Notices{W: w}
+}
+
+// signInKeychainWait is how long SignIn waits for one keychain call. It is a
+// variable for the tests. A keychain can block on an unlock prompt nobody sees,
+// and SignIn catches Ctrl-C until it returns, so without a bound nothing could
+// end it. The wait is longer than the run's 3 seconds for reading the login,
+// because the person is here and may have to type a password.
+var signInKeychainWait = 30 * time.Second
+
+var (
+	errKeychainWait   = errors.New("the keychain did not answer in time")
+	errLoginCancelled = errors.New("login cancelled")
+)
+
+// bounded runs fn, which makes one keychain call, for SignIn: it gives up at
+// signInKeychainWait or when held ends. fn is bound to the same deadline where
+// the backend honours one, and runs in a goroutine besides, so a backend that
+// does not still cannot hold the sign-in. An answer that comes after that is
+// dropped.
+func bounded[T any](held context.Context, fn func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(held, signInKeychainWait)
+	defer cancel()
+	type answer struct {
+		v   T
+		err error
+	}
+	ch := make(chan answer, 1) // buffered: a late answer is dropped, not blocked on
+	go func() {
+		v, err := fn(ctx)
+		ch <- answer{v, err}
+	}()
+	var a answer
+	select {
+	case a = <-ch:
+		if a.err == nil || ctx.Err() == nil {
+			return a.v, a.err
+		}
+	case <-ctx.Done():
+	}
+	var zero T
+	if held.Err() != nil {
+		return zero, errLoginCancelled
+	}
+	return zero, errKeychainWait
+}
+
+// openKeychain opens the login store. For SignIn, which passes its held
+// context, the call is bounded; brig login passes nil and is not.
+func openKeychain(held context.Context) (login.Store, error) {
+	if held == nil {
+		return openLoginStore()
+	}
+	open := openLoginStore // read here: the goroutine may outlive the caller
+	return bounded(held, func(context.Context) (login.Store, error) { return open() })
+}
+
+// loadLogin is store.Load, bounded for SignIn.
+func loadLogin(held context.Context, store login.Store, url string) (login.Token, error) {
+	if held == nil {
+		return store.Load(url)
+	}
+	return bounded(held, func(ctx context.Context) (login.Token, error) { return login.WithContext(ctx, store).Load(url) })
+}
+
+// saveLogin is store.Save, bounded for SignIn.
+func saveLogin(held context.Context, store login.Store, t login.Token) error {
+	if held == nil {
+		return store.Save(t)
+	}
+	_, err := bounded(held, func(ctx context.Context) (struct{}, error) { return struct{}{}, login.WithContext(ctx, store).Save(t) })
+	return err
 }
 
 // loginFailed reports an interrupt as one short line rather than as the
