@@ -111,12 +111,12 @@ func TestRecorderSpoolCapStopsRecordingWithAMarker(t *testing.T) {
 
 func TestUploaderContiguousBatchesAndCloseAfterDrain(t *testing.T) {
 	f := newFake(t)
-	f.SetMaxBatch(4096)
+	f.SetMaxBatch(frame.MaxFrame + 1000)
 	c := fakeClient(f)
 	dir := t.TempDir()
 	start := time.Now()
 	rec, _ := OpenSpool(filepath.Join(dir, "a.spool"), start, 0)
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 2000; i++ {
 		rec.Output(start.Add(time.Duration(i)*20*time.Millisecond), []byte(strings.Repeat("line of text ", 8)+"\r\n"))
 	}
 	rec.Finish(start.Add(10*time.Second), 0)
@@ -491,13 +491,13 @@ func TestUnknownReasonIsNotAnErrorAndSizesAreAuthoritative(t *testing.T) {
 		}
 	}
 	f.SetRecorded(true)
-	f.SetMaxBatch(65536)
+	f.SetMaxBatch(frame.MaxFrame)
 	f.SetWindow(4096)
 	r, err := c.Open(context.Background(), OpenRequest{RunKey: "sized"})
-	if err != nil || r.MaxBatchBytes != 65536 || r.WindowBytes != 4096 {
+	if err != nil || r.MaxBatchBytes != frame.MaxFrame || r.WindowBytes != 4096 {
 		t.Errorf("server sizes not used: %+v %v", r, err)
 	}
-	for _, bad := range [][2]int{{0, 262144}, {1 << 20, 0}, {4<<20 + 1, 262144}, {1 << 20, 1<<20 + 1}, {-1, 10}} {
+	for _, bad := range [][2]int{{0, 262144}, {frame.MaxFrame - 1, 262144}, {1 << 20, 0}, {4<<20 + 1, 262144}, {1 << 20, 1<<20 + 1}, {-1, 10}} {
 		f.SetMaxBatch(bad[0])
 		f.SetWindow(bad[1])
 		if _, err := c.Open(context.Background(), OpenRequest{RunKey: "bad"}); err == nil {

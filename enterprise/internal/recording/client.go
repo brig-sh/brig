@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/brig-sh/brig/enterprise/internal/recording/frame"
 )
 
 const (
@@ -181,9 +183,12 @@ func (c *Client) Open(ctx context.Context, req OpenRequest) (OpenResponse, error
 	// The server's batch and window sizes are authoritative: the server decodes
 	// each batch with a window of exactly window_bytes and bounds it by
 	// max_batch_bytes, so a client that substituted its own values would send
-	// batches the server cannot decode or refuses. A value of 0 or past the
-	// ceilings below cannot be right, so the run goes unrecorded instead.
-	if r.MaxBatchBytes <= 0 || r.MaxBatchBytes > maxBatchCeil || r.WindowBytes <= 0 || r.WindowBytes > maxWindow {
+	// batches the server cannot decode or refuses. A batch size that cannot hold
+	// one whole frame (frame.MaxFrame) would make the first full frame a fatal
+	// error that deletes the spool, so it is refused here, before any spool
+	// exists. A value of 0 or past the ceilings below cannot be right either, so
+	// the run goes unrecorded instead.
+	if r.MaxBatchBytes < frame.MaxFrame || r.MaxBatchBytes > maxBatchCeil || r.WindowBytes <= 0 || r.WindowBytes > maxWindow {
 		return OpenResponse{}, errors.New("recording: open answered with batch or window sizes this brig refuses")
 	}
 	return r, nil

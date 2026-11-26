@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brig-sh/brig/enterprise/internal/recording/frame"
 	"github.com/brig-sh/brig/enterprise/internal/recording/recordingtest"
 )
 
@@ -275,7 +276,7 @@ func TestADrainCutByItsDeadlineSavesWhatTheServerTookAndAContinuationStartsThere
 	f := newFake(t)
 	clk := newClock()
 	f.SetClock(clk.Now)
-	f.SetMaxBatch(4096)
+	f.SetMaxBatch(frame.MaxFrame + 1000)
 	c := &Client{Base: f.URL(), Token: "tok-secret", HTTP: &http.Client{Transport: &cutAfter{next: f.Client().Transport, ok: 2}}, UserAgent: "brig-test"}
 	dir := t.TempDir()
 	p := beginParams(f, dir)
@@ -285,7 +286,7 @@ func TestADrainCutByItsDeadlineSavesWhatTheServerTookAndAContinuationStartsThere
 	if err != nil || s == nil {
 		t.Fatalf("begin: %v %v", s, err)
 	}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 3000; i++ {
 		at := clk.Now()
 		s.rec.Output(at, []byte(strings.Repeat("a line of output ", 8)+"\r\n"))
 		s.rec.Output(at.Add(20*time.Millisecond), nil)
@@ -334,7 +335,7 @@ func TestADrainCutByItsDeadlineSavesWhatTheServerTookAndAContinuationStartsThere
 // part way leaves the position in the meta file.
 func TestAFlushSavesProgressAsItAdvances(t *testing.T) {
 	f := newFake(t)
-	f.SetMaxBatch(4096)
+	f.SetMaxBatch(frame.MaxFrame + 1000)
 	dir := t.TempDir()
 	// A run whose uploads never get through leaves the whole spool behind.
 	hold := &Client{Base: f.URL(), Token: "tok-secret", HTTP: &http.Client{Transport: &cutAfter{next: f.Client().Transport, ok: 0}}, UserAgent: "brig-test"}
@@ -344,7 +345,7 @@ func TestAFlushSavesProgressAsItAdvances(t *testing.T) {
 	if err != nil || s == nil {
 		t.Fatalf("begin: %v %v", s, err)
 	}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 3000; i++ {
 		at := time.Now()
 		s.rec.Output(at, []byte(strings.Repeat("a line of output ", 8)+"\r\n"))
 		s.rec.Output(at.Add(20*time.Millisecond), nil)
