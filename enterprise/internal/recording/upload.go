@@ -195,6 +195,16 @@ type offsetReply struct {
 	Error      string `json:"error"`
 }
 
+// decodeReply reads the deployment's JSON reply. It reports false for a 200
+// whose body is empty or is not JSON, which the deployment did not send: a proxy
+// or a captive portal answered. The caller treats that as no answer, not as
+// success. The body of any other status may be anything; its status decides.
+func decodeReply(st int, b []byte) (offsetReply, bool) {
+	var r offsetReply
+	err := json.Unmarshal(b, &r)
+	return r, err == nil || st != http.StatusOK
+}
+
 // send delivers one batch, retrying as the contract says. On return Offset is
 // the server's position.
 func (u *Uploader) send(ctx context.Context, batch []byte) error {
@@ -222,8 +232,16 @@ func (u *Uploader) send(ctx context.Context, batch []byte) error {
 			backoff = min(backoff*2, backoffMax)
 			continue
 		}
-		var r offsetReply
-		_ = json.Unmarshal(b, &r)
+		r, ok := decodeReply(st, b)
+		if !ok {
+			// A 200 that is not the deployment's reply, such as a proxy's or
+			// a captive portal's page: the batch was not taken.
+			if err := u.sleep(ctx, backoff); err != nil {
+				return err
+			}
+			backoff = min(backoff*2, backoffMax)
+			continue
+		}
 		switch {
 		case st == http.StatusUnauthorized, st == http.StatusForbidden:
 			return ErrAuth
@@ -348,8 +366,14 @@ func (u *Uploader) Keepalive(ctx context.Context) error {
 			backoff = min(backoff*2, backoffMax)
 			continue
 		}
-		var r offsetReply
-		_ = json.Unmarshal(b, &r)
+		r, ok := decodeReply(st, b)
+		if !ok {
+			if err := u.sleep(ctx, backoff); err != nil {
+				return err
+			}
+			backoff = min(backoff*2, backoffMax)
+			continue
+		}
 		switch {
 		case st == http.StatusUnauthorized, st == http.StatusForbidden:
 			return ErrAuth
@@ -402,8 +426,10 @@ func (u *Uploader) Probe(ctx context.Context) error {
 	if err != nil {
 		return errProbe
 	}
-	var r offsetReply
-	_ = json.Unmarshal(b, &r)
+	r, ok := decodeReply(st, b)
+	if !ok {
+		return errProbe
+	}
 	switch {
 	case st == http.StatusUnauthorized, st == http.StatusForbidden:
 		return ErrAuth
@@ -466,8 +492,15 @@ func (u *Uploader) Close(ctx context.Context, req CloseRequest) error {
 			attempt--
 			continue
 		}
-		var r offsetReply
-		_ = json.Unmarshal(b, &r)
+		r, ok := decodeReply(st, b)
+		if !ok {
+			if err := u.sleep(ctx, backoff); err != nil {
+				return err
+			}
+			backoff = min(backoff*2, backoffMax)
+			attempt--
+			continue
+		}
 		switch {
 		case st == http.StatusOK:
 			return nil
