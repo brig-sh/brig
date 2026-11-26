@@ -84,13 +84,17 @@
 //
 // The login stored now need not be the one that recorded a spool. A flush never
 // begins with an open request. It first sends an empty keepalive for the
-// recording id in the meta file, with the current token. A 200 or a 409
+// recording id in the meta file, with the current token. A 200 whose body is not
+// JSON is a proxy's or a captive portal's page and is no answer: the batch,
+// keepalive and close calls wait and send again, and the check leaves the spool
+// for a later flush. A 200 or a 409
 // offset_mismatch says the recording is this login's and open: the flush sends
 // from the deployment's offset. A 409 recording_closed says it is this login's
 // and ended: only then does the flush continue the run in a new recording. A 404
 // says it is not this login's: nothing is sent, nothing is opened and the spool
 // stays. A spool is removed once it is older than MaxSpoolAge only for a reason a
-// later sign-in does not fix: the 404, or a meta file that cannot be used. A
+// later sign-in does not fix: the 404, a meta file that cannot be used, or an offset
+// the deployment names outside the spool. A
 // spool that only has no usable login now stays however old it is. A run removes
 // its meta file before its spool, so a meta file whose spool is gone is not a
 // recording being tidied: the flush removes it and counts it as removed without
