@@ -153,10 +153,11 @@ store](#session-recording).
 Brig Enterprise records the terminal output of a run when all of these are
 true:
 
-- You signed in with `brig login` to the deployment, and the token has not
-  expired. The deployment is `BRIG_NOFIRE_URL`, else `https://my.nofire.ai`,
-  as for `brig login` with no argument. A token you stored for another
-  deployment does not count.
+- You signed in with `brig login` to the deployment. If the token has expired,
+  Brig signs you in again before the command starts (see [An expired
+  sign-in](#an-expired-sign-in)). The deployment is `BRIG_NOFIRE_URL`, else
+  `https://my.nofire.ai`, as for `brig login` with no argument. A token you
+  stored for another deployment does not count.
 - The runtime is hull. With nerdctl nothing is recorded, and `BRIG_RUNTIME`
   can select it. Only `brig run` and `brig sh` are recorded, and not under
   `--json`, with `--detach`, or for a GUI agent. `brig exec` hands over no <!-- retired-ok -->
@@ -186,16 +187,48 @@ in to, such as one `BRIG_NOFIRE_URL` names, `--json`, `brig exec` and <!-- retir
 unrecorded.
 
 If any of these fails, or the deployment is down, the run goes on as it always
-does, with no message and no delay beyond the timeout. Two cases print one
-line to stderr at the start of a terminal run on hull. A trust-store variable
+does, with no message and no delay beyond the timeout. Three cases print
+lines to stderr at the start of a terminal run on hull. A trust-store variable
 that was not accepted: `brig: could not check whether this run is recorded:
 SSL_CERT_FILE is set and was not accepted when you signed in. Run `brig login`
 to accept it`, which names the variable and never its value. A keychain that
 does not answer within 3 seconds, such as a locked one waiting on an unlock
 prompt: `brig: could not read your login within 3 seconds, so this run is not
-recorded`. A run never needs the deployment to start. Brig Community records
+recorded`. A sign-in that expired: see below. A run never needs the deployment to start. Brig Community records
 nothing. `brig recordings flush` waits up to 30 seconds for the keychain,
 because you asked for it and an unlock prompt can need a password.
+
+### An expired sign-in
+
+A token has a lifetime, and Brig has no refresh token. When a run could be
+recorded, and you have a stored token for the deployment that has expired,
+Brig pauses before the command starts and signs you in again, with the same
+sign-in `brig login` runs. First it prints:
+
+```text
+brig: your sign-in to https://my.nofire.ai expired. Signing you in again so this run can be recorded
+```
+
+Then it behaves as `brig login` with no argument does. It picks the browser or
+the device flow for this host, asks the same questions about a deployment from
+`BRIG_NOFIRE_URL` and about `SSL_CERT_FILE` or `SSL_CERT_DIR`, stores the token
+in your keychain with the default lifetime, and revokes the expired one. The
+run then goes on as a signed-in run does.
+
+If the sign-in fails, times out, or you press Ctrl-C, Brig prints one line and
+the run goes on unrecorded:
+
+```text
+brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in
+```
+
+Ctrl-C ends the sign-in and nothing else. It does not end Brig, and the command
+does not receive it. While a question waits for your answer, Ctrl-C takes effect
+once you answer. Brig does not pause or sign you in for a run that cannot be
+recorded: a pipe or a file for stdin or stdout, two terminals, a runtime other
+than hull, `--json`, `--detach`, or `brig exec`. <!-- retired-ok -->
+
+### The line a recorded run prints
 
 At the start of a recorded run, Brig prints this line to stderr:
 
