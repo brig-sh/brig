@@ -148,6 +148,44 @@ func TestARunWhoseRecordingWasRefusedSaysSo(t *testing.T) {
 	}
 }
 
+// A recording the deployment refuses for good while the run goes on is stopped
+// at once: the spool is removed and nothing more of the run's output is written
+// to disk. The closing line says the recording stopped, as for a run the
+// deployment stops recording.
+func TestARecordingRefusedMidRunStopsSpoolingAtOnce(t *testing.T) {
+	r := newRun(t)
+	r.say("one\r\n")
+	r.mustTick()
+	r.say("two\r\n")
+	r.f.FailNextPuts(422)
+	ticks := make(chan time.Time, 1)
+	ticks <- time.Now()
+	done := make(chan struct{})
+	go func() { r.s.liveLoop(context.Background(), ticks); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the live loop kept going after a 422")
+	}
+	if files := r.dirFiles(); len(files) != 0 {
+		t.Errorf("files left after the refusal: %v", files)
+	}
+	size := r.s.rec.Size()
+	r.say("three\r\n")
+	r.say("four\r\n")
+	if got := r.s.rec.Size(); got != size {
+		t.Errorf("the spool grew from %d to %d bytes after the refusal", size, got)
+	}
+	r.end()
+	got := r.notice.String()
+	if !strings.Contains(got, "brig: recording stopped before the run ended (the deployment refused the recording); output after ") {
+		t.Errorf("closing lines %q", got)
+	}
+	if strings.Contains(got, fatalNotice) || strings.Count(got, "\n") != 1 {
+		t.Errorf("closing lines %q, want the one line that says recording stopped", got)
+	}
+}
+
 // A login the deployment refuses at the end of the run has its own line, which
 // says to sign in again, and not the line that promises the next run will send.
 func TestARunWhoseLoginWasRefusedTellsThePersonToSignInAgain(t *testing.T) {

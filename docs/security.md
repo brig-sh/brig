@@ -1535,7 +1535,9 @@ Brig adds a marker, stops recording, closes the recording with the end reason
 `spool_cap`, which the deployment can show as cut short, and prints a line to
 stderr when the run ends. A write error on the spool ends the recording the
 same way, with the end reason `recorder_error`. The spool is removed when the
-deployment has the whole recording, or says not to record. What the network did
+deployment has the whole recording, or says not to record. A deployment that
+refuses the recording for good while the run goes on stops it at once: Brig
+removes the spool and writes no more of the run's output to disk. What the network did
 not take stays there until the next recorded run, or `brig recordings flush`,
 sends it. Before it sends anything, Brig asks the deployment, with the login
 stored now, whether the recording is that login's. If the deployment says it
