@@ -37,6 +37,9 @@ const (
 	ackedEvery = 2 * time.Second
 )
 
+// relayRun is ptyrelay.Run; a test replaces it.
+var relayRun = ptyrelay.Run
+
 // NewRunKey returns a random UUID (version 4) for one run.
 func NewRunKey() string {
 	var b [16]byte
@@ -335,9 +338,11 @@ func (s *Session) Run(argv, env []string) (int, error) {
 	// The relay takes SIGINT, SIGTERM and SIGHUP while the command runs and
 	// forwards them. When the command has ended it stops, and brig stays up for
 	// the drain. Signals are taken here from before the command starts, so no
-	// window is left where the default action would end brig, and what arrived
-	// while the command ran, which the relay forwarded, is dropped when it ends.
-	// A signal that was inherited as ignored stays ignored.
+	// window is left where the default action would end brig. What arrived
+	// while the command ran, which the relay forwarded, is dropped the moment
+	// the command has ended. What arrives after that, while the relay drains
+	// the output and the recording is closed, is kept and ends the drain. A
+	// signal that was inherited as ignored stays ignored.
 	sigs := make(chan os.Signal, 8)
 	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		if !signal.Ignored(sig) {
@@ -346,15 +351,16 @@ func (s *Session) Run(argv, env []string) (int, error) {
 	}
 	defer signal.Stop(sigs)
 
-	res, err := ptyrelay.Run(cmd, ptyrelay.Options{In: s.p.In, Out: s.p.Out, Err: s.p.Err, Tap: s.rec})
-	end := time.Now()
-	for drained := false; !drained; {
-		select {
-		case <-sigs:
-		default:
-			drained = true
+	res, err := relayRun(cmd, ptyrelay.Options{In: s.p.In, Out: s.p.Out, Err: s.p.Err, Tap: s.rec, Exited: func() {
+		for drained := false; !drained; {
+			select {
+			case <-sigs:
+			default:
+				drained = true
+			}
 		}
-	}
+	}})
+	end := time.Now()
 	interrupt := make(chan struct{})
 	s.interrupt = interrupt
 	stopWatch := make(chan struct{})

@@ -66,6 +66,12 @@
 // deployment did not take everything or did not confirm the close, the spool
 // and its meta file stay on the machine, on the first recording as much as on
 // a continuation.
+//
+// A SIGINT, SIGTERM or SIGHUP that reaches Brig after the command has ended, also
+// while the relay is still waiting for the last of its output, ends that wait
+// and leaves the spool for a later flush. One that came while the command ran
+// was forwarded to it by the relay and is dropped when the command ends.
+//
 // Whatever the end of the run or a flush ended with, the position the deployment
 // holds is saved in the meta file, so a later continuation in a new recording
 // starts there and no output is sent twice.
