@@ -130,7 +130,8 @@ it has no such recording. Brig then sends nothing, opens no recording, and
 leaves the files. The command counts these as `waiting for the login that
 recorded them`. A recording that stays unsent for a reason a later
 sign-in does not fix, because the deployment has no such recording for your
-login or its details file cannot be used, is removed after 30 days, and the
+login, its details file cannot be used, or the deployment names a position
+outside the recording, is removed after 30 days, and the
 command counts it as `removed unsent after 30 days`. A recording that only has
 no usable login now, because you are signed out, the login expired, a
 certificate setting was not accepted or the keychain cannot be opened, is kept

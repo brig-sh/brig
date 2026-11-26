@@ -1539,7 +1539,8 @@ stored now, whether the recording is that login's. If the deployment says it
 has no such recording, Brig sends nothing and opens no recording, so output
 recorded under one login never goes into a recording of another. A spool is
 removed after 30 days only when the deployment says the recording is not that
-login's or its details file cannot be used. A spool that only lacks a usable
+login's, its details file cannot be used, or the deployment names a position
+outside the spool. A spool that only lacks a usable
 login stays however old it is. If Brig is stopped between removing a
 recording's details file and its spool, the spool stays on disk and is never
 sent. A later flush removes it once it is 30 days old. The file with a
@@ -1550,7 +1551,10 @@ A recording id, a batch size or an offset that the deployment sends is checked
 before Brig uses it. An id must be a short token that fits one URL path
 segment. A size past a fixed limit refuses the recording. An offset outside
 what the spool holds, or an answer that claims more than Brig sent, ends the
-upload. Brig prints no text the deployment sends.
+upload. A 200 whose body is not the deployment's JSON reply, as a proxy or a
+captive portal can send, counts as no answer: Brig waits and sends again, and
+does not end the upload or remove the spool for it. Brig prints no text the
+deployment sends.
 
 Limits:
 
