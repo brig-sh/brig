@@ -52,7 +52,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -94,18 +93,22 @@ var (
 	// is one terminal: with two, the relay's single pseudo-terminal is not what
 	// the command would have had, so the run is not recorded.
 	sameTerminal = ptyrelay.SameTerminal
-	// stateDir is brig's state directory, ~/.brig.
+	// stateDir is brig's state directory, ~/.brig or BRIG_STATE_DIR.
 	stateDir = defaultStateDir
 	// notice is where the lines of a recorded run go.
 	notice io.Writer = os.Stderr
 )
 
+// defaultStateDir is brig's state directory as the rest of brig resolves it:
+// BRIG_STATE_DIR, else ~/.brig. The spool goes below it, where
+// wrap.CheckProjectState keeps every project out, so a sandbox that mounts a
+// project cannot write it.
 func defaultStateDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	dir, err := wrap.StateDir()
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".brig")
+	return dir
 }
 
 // Commands is brig recordings, for cli.Options. Telemetry does not count it:
@@ -278,7 +281,8 @@ has recording on, and it is a terminal session on hull: your stdin and stdout
 are the same terminal. Brig says so before the run starts. A run that is quiet
 stays recorded. A run whose input or output is a pipe or a file is not recorded
 and runs as it does without recording. What the network did not take while the
-run ended waits in ~/.brig/recordings until this command, or the next recorded
+run ended waits in the recordings directory of brig's state directory
+(~/.brig, or BRIG_STATE_DIR) until this command, or the next recorded
 run's upload, sends it. A later recorded run also sends what an earlier run left, in the
 background. This command also finishes a run that continued in a second
 recording.

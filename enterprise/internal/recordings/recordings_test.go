@@ -542,3 +542,40 @@ func TestAKeychainThatDoesNotAnswerLeavesTheRunUnrecordedWithOneLine(t *testing.
 		t.Errorf("a run that is not a terminal session: notice %q", h.notice)
 	}
 }
+
+// The spool goes under brig's state directory as the rest of brig resolves it:
+// BRIG_STATE_DIR when set. Nothing is written under ~/.brig then, so a project
+// that is the home directory cannot hold the spool, which the guest could write.
+func TestTheSpoolGoesUnderBRIGSTATEDIRAndNothingUnderTheHome(t *testing.T) {
+	h := newRecHost(t)
+	h.signIn(t)
+	home, state := t.TempDir(), filepath.Join(t.TempDir(), "state")
+	t.Setenv("HOME", home)
+	t.Setenv("BRIG_STATE_DIR", state)
+	stateDir = defaultStateDir
+	if got := defaultStateDir(); got != state {
+		t.Fatalf("state directory %q, want %q", got, state)
+	}
+	pipes(t)
+	relay := Attach(hullRun())
+	if relay == nil {
+		t.Fatal("not recorded")
+	}
+	for i := 0; i < 500; i++ {
+		h.srv.FailNextPuts(503) // leave the spool on disk
+	}
+	if _, err := relay([]string{"sh", "-c", "echo x"}, os.Environ()); err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(state, "recordings", "*")); len(files) != 2 {
+		t.Errorf("under the state directory: %v", files)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".brig")); !os.IsNotExist(err) {
+		t.Errorf("something was made under the home: %v", err)
+	}
+	h.srv.ClearFailures()
+	var out bytes.Buffer
+	if err := recordingsCmd(&out, []string{"flush"}); err != nil || !strings.Contains(out.String(), "1 sent and closed") {
+		t.Errorf("flush: %v %q", err, out.String())
+	}
+}
