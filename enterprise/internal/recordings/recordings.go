@@ -220,7 +220,7 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 		// person in again, so the run can be recorded.
 		return func(argv, env []string) (int, error) {
 			w := pauseWriter()
-			fmt.Fprintf(w, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded\n", d)
+			fmt.Fprintf(w, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n", d)
 			if err := signIn(w, d); err != nil {
 				return 0, declineSignIn(w)
 			}
