@@ -618,3 +618,24 @@ func TestARelayThatCannotSetUpReportsNotStartedAndTouchesNothing(t *testing.T) {
 		})
 	}
 }
+
+// The relay's wake pipes are for the relay. The command, and any other child
+// this process starts, must not inherit them.
+func TestTheCommandDoesNotInheritTheWakePipes(t *testing.T) {
+	o := newOuter(t, 24, 80)
+	tee := &safeBuf{}
+	// ls holds one or two descriptors of its own for the directory it reads, so
+	// 3 and 4 are not the relay's.
+	if _, err := run(t, o, tee, "sh", "-c", "ls /dev/fd"); err != nil {
+		t.Fatal(err)
+	}
+	fds := strings.Fields(string(stripCR(tee.Bytes())))
+	for _, fd := range fds {
+		if fd != "0" && fd != "1" && fd != "2" && fd != "3" && fd != "4" {
+			t.Errorf("the command holds descriptor %s; all of %v", fd, fds)
+		}
+	}
+	if len(fds) < 3 {
+		t.Errorf("the listing %v is not the command's descriptors", fds)
+	}
+}
