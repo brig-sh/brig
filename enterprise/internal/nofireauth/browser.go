@@ -142,7 +142,11 @@ func (f BrowserFlow) Run(ctx context.Context) (Grant, error) {
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          log.New(io.Discard, "", 0),
 	}
-	go srv.Serve(ln)
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = srv.Serve(ln)
+	}()
 	defer func() {
 		close(done)
 		// Shutdown closes the port at once and lets a handler still
@@ -152,6 +156,10 @@ func (f BrowserFlow) Run(ctx context.Context) (Grant, error) {
 		if srv.Shutdown(sctx) != nil {
 			srv.Close()
 		}
+		// A Shutdown that comes before Serve has started finds no listener to
+		// close. Serve then closes it as it returns, so wait for that: the
+		// port is closed when Run returns.
+		<-served
 	}()
 
 	fmt.Fprintf(f.Out, "Opening %s in your browser.\n", authURL)

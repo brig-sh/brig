@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -360,6 +361,31 @@ func TestCancelLeavesNothing(t *testing.T) {
 	}
 	if n := len(s.Issued()); n != 0 {
 		t.Errorf("%d tokens issued", n)
+	}
+}
+
+// A sign-in that ends the moment it starts still closes its callback port
+// before Run returns. Run starts serving on its own goroutine, so a shutdown
+// that comes before that goroutine runs has nothing to close unless Run closes
+// the listener itself.
+func TestACancelAtOnceClosesThePortBeforeRunReturns(t *testing.T) {
+	s := start(t, fakeas.Options{})
+	// One processor keeps the serving goroutine from starting until Run waits.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	for i := 0; i < 200; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		f, out := browserFlow(t, s.URL, func(string) error { return nil })
+		if _, err := f.Run(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		line, _, _ := strings.Cut(out.String(), "\n")
+		authURL := strings.TrimSuffix(strings.TrimPrefix(line, "Opening "), " in your browser.")
+		port := redirectOf(t, authURL).Port()
+		if c, err := net.DialTimeout("tcp", "127.0.0.1:"+port, time.Second); err == nil {
+			c.Close()
+			t.Fatalf("run %d: the callback port is open after Run returned", i)
+		}
 	}
 }
 
