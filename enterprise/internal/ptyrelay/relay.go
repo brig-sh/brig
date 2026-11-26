@@ -143,17 +143,24 @@ func Run(cmd *exec.Cmd, opt Options) (Result, error) {
 	// Everything that can fail is set up before the command starts, and before
 	// the person's terminal is touched, so a failure leaves nothing to undo and
 	// the caller can run the command without the relay.
-	var wakeIn, wakeOut [2]int
-	if err := unix.Pipe(wakeIn[:]); err != nil {
+	// The wake pipes are made close-on-exec, so neither the command nor any
+	// other child this process starts inherits them.
+	wakeInR, wakeInW, err := os.Pipe()
+	if err != nil {
 		tap.close(time.Now())
 		return Result{}, notStarted(err)
 	}
-	defer closeAll(wakeIn[:])
-	if err := unix.Pipe(wakeOut[:]); err != nil {
+	defer wakeInR.Close()
+	defer wakeInW.Close()
+	wakeOutR, wakeOutW, err := os.Pipe()
+	if err != nil {
 		tap.close(time.Now())
 		return Result{}, notStarted(err)
 	}
-	defer closeAll(wakeOut[:])
+	defer wakeOutR.Close()
+	defer wakeOutW.Close()
+	wakeIn := [2]int{int(wakeInR.Fd()), int(wakeInW.Fd())}
+	wakeOut := [2]int{int(wakeOutR.Fd()), int(wakeOutW.Fd())}
 
 	if err := cmd.Start(); err != nil {
 		tap.close(time.Now())
@@ -252,12 +259,6 @@ func finish(res Result, err error) (Result, error) {
 		return res, nil
 	}
 	return res, err
-}
-
-func closeAll(fds []int) {
-	for _, fd := range fds {
-		_ = unix.Close(fd)
-	}
 }
 
 func isTTY(fd int) bool {
