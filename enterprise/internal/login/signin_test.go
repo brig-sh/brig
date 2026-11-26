@@ -105,8 +105,11 @@ func TestSignInReplacesAnExpiredLoginWithTheFlowBrigLoginPicks(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SignIn: %v\n%s", err, out.String())
 			}
-			if !strings.Contains(stderr, "Continue logging in to "+s.URL+"? [y/N]") {
-				t.Errorf("the deployment from the environment was not confirmed: %q", stderr)
+			if !strings.Contains(out.String(), "Continue logging in to "+s.URL+"? [y/N]") {
+				t.Errorf("the deployment from the environment was not confirmed: %q", out.String())
+			}
+			if stderr != "" {
+				t.Errorf("SignIn wrote to stderr, not only to its writer: %q", stderr)
 			}
 			if (flow == "browser") != (opened == 1) {
 				t.Errorf("flow %s opened the browser %d times", flow, opened)
@@ -270,9 +273,10 @@ func TestCtrlCWhileAQuestionIsAnsweredCancelsTheSignIn(t *testing.T) {
 		_, _ = master.Write([]byte("y\n"))
 	}()
 	var err error
-	stderr := captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
-	if !strings.Contains(stderr, "[y/N]") {
-		t.Fatalf("the question was not asked: %q", stderr)
+	var out bytes.Buffer
+	captureStderr(t, func() { err = SignIn(&out, parseDeployment(t, s.URL)) })
+	if !strings.Contains(out.String(), "[y/N]") {
+		t.Fatalf("the question was not asked: %q", out.String())
 	}
 	if err == nil || err.Error() != "login cancelled" {
 		t.Fatalf("err = %v, want login cancelled", err)
@@ -285,5 +289,35 @@ func TestCtrlCWhileAQuestionIsAnsweredCancelsTheSignIn(t *testing.T) {
 	}
 	if len(s.Issued()) != 0 || m.items[s.URL].AccessToken != "old-token" {
 		t.Errorf("issued %d, stored %+v", len(s.Issued()), m.items[s.URL])
+	}
+}
+
+// SignIn prints everything to the writer it is given: the questions about the
+// environment and the note about an earlier token that could not be revoked.
+// A caller whose stderr is not a terminal hands it the terminal, so nothing is
+// written to the process's stderr.
+func TestSignInWritesQuestionsAndNotesToItsWriterAndNotToStderr(t *testing.T) {
+	m := loginHost(t)
+	s := fakeDeployment(t, fakeas.Options{RevokeStatus: http.StatusServiceUnavailable})
+	expiredLogin(m, s.URL)
+	t.Setenv(nofireauth.EnvURL, s.URL)
+	t.Setenv("SSH_CONNECTION", "1.2.3.4 1 5.6.7.8 22")
+	master := terminalStdin(t)
+	if _, err := master.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() { err = SignIn(&out, parseDeployment(t, s.URL)) })
+	if err != nil {
+		t.Fatalf("SignIn: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{"Continue logging in to " + s.URL + "? [y/N]", "brig: cannot revoke the earlier token for " + s.URL} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the writer got %q, want %q in it", out.String(), want)
+		}
+	}
+	if stderr != "" {
+		t.Errorf("stderr got %q", stderr)
 	}
 }

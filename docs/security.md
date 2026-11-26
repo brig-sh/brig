@@ -1522,7 +1522,10 @@ says the sign-in did not finish and names `brig login`, sends nothing to the
 recording routes, and the run goes unrecorded. Ctrl-C ends the sign-in only: it
 does not end Brig and the command does not receive it. A run that cannot be
 recorded for any local reason, such as a pipe, two terminals, another runtime
-or `--json`, does not pause and starts no sign-in.
+or `--json`, does not pause and starts no sign-in. The pause is always on the
+terminal the run uses: when stderr is not a terminal, everything the pause
+prints goes to stdout instead, so a redirected stderr cannot hide a sign-in
+that waits for you.
 
 **The token.** A recorded run reads the login token. One small package of
 Brig Enterprise reads it and hands it to the recorder as a value. It learns

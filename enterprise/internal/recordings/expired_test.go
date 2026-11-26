@@ -5,6 +5,7 @@ package recordings
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -200,6 +201,48 @@ func TestAnExpiredSignInOnARunThatCannotBeRecordedStartsNothing(t *testing.T) {
 			}
 			if _, err := os.Stat(h.state); !os.IsNotExist(err) {
 				t.Errorf("state dir was created: %v", err)
+			}
+		})
+	}
+}
+
+// When stderr is not a terminal, the pause would be invisible: the person
+// would see nothing while the sign-in waited for them. Every line of the pause
+// goes to the terminal the run uses, which is stdout, and none to stderr. When
+// stderr is a terminal, the lines stay on it.
+func TestThePauseGoesToTheTerminalWhenStderrIsNotOne(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		stderrTerminal bool
+	}{{"stderr is a file", false}, {"stderr is a terminal", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newRecHost(t)
+			d := h.expire(t)
+			seen := pipes(t)
+			notice = os.Stderr
+			isTerminal = func(f *os.File) bool { return f != os.Stderr || c.stderrTerminal }
+			signIn = func(out io.Writer, _ nofireauth.Deployment) error {
+				_, _ = io.WriteString(out, "SIGN-IN OUTPUT\n")
+				return errors.New("the deployment is down")
+			}
+			relay := Attach(hullRun())
+			if relay == nil {
+				t.Fatal("no relay")
+			}
+			if _, err := relay([]string{"true"}, os.Environ()); !errors.Is(err, cli.ErrRelayDeclined) {
+				t.Fatalf("relay: %v, want it to decline", err)
+			}
+			stdout, stderr := seen()
+			lines := fmt.Sprintf(pauseLine, d) + "SIGN-IN OUTPUT\n" + failedLine
+			want, wantNot := stdout, stderr
+			if c.stderrTerminal {
+				want, wantNot = stderr, stdout
+			}
+			if want != lines || wantNot != "" {
+				t.Errorf("stdout %q, stderr %q, want the lines %q on one of them and nothing on the other", stdout, stderr, lines)
+			}
+			if h.notice.Len() != 0 {
+				t.Errorf("the test notice buffer got %q", h.notice)
 			}
 		})
 	}

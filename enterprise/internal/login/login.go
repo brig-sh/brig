@@ -306,7 +306,7 @@ func loginCmd(out io.Writer, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	return runLogin(out, d, src, mode, ttl, nil)
+	return runLogin(out, os.Stderr, d, src, mode, ttl, nil)
 }
 
 // SignIn is the sign-in brig login runs, for the session recorder to run when a
@@ -333,7 +333,7 @@ func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
 	}
 	ctx, stop := heldContext()
 	defer stop()
-	return runLogin(out, d, src, "", 0, ctx)
+	return runLogin(out, out, d, src, "", 0, ctx)
 }
 
 // heldContext is a context that the first Ctrl-C cancels, and that keeps
@@ -367,8 +367,10 @@ func heldContext() (context.Context, context.CancelFunc) {
 // runLogin is the sign-in of brig login and of SignIn. held is the context of
 // a caller that keeps catching Ctrl-C until it returns, or nil for brig login,
 // which makes its own after the questions and lets a second Ctrl-C end the
-// process once the first has ended the wait.
-func runLogin(out io.Writer, d nofireauth.Deployment, src nofireauth.URLSource, mode string, ttl time.Duration, held context.Context) error {
+// process once the first has ended the wait. ask is where the questions and the
+// note about an earlier token go: brig login uses stderr, and SignIn the writer
+// its caller chose, so a run whose stderr is not a terminal still shows them.
+func runLogin(out, ask io.Writer, d nofireauth.Deployment, src nofireauth.URLSource, mode string, ttl time.Duration, held context.Context) error {
 	fmt.Fprintf(out, "Logging in to %s (%s)\n", d, src)
 	printProxy(out, d)
 	// The default deployment is the one a user gets with no setting at all, so
@@ -376,7 +378,7 @@ func runLogin(out io.Writer, d nofireauth.Deployment, src nofireauth.URLSource, 
 	// environment is confirmed. Without a terminal nobody can confirm it, so
 	// the login is refused: a script names the deployment on its own line.
 	envURL := src == nofireauth.FromEnv && d.String() != nofireauth.DefaultURL
-	trust, err := confirmEnvironment(out, "login", d, envURL)
+	trust, err := confirmEnvironment(out, ask, "login", d, envURL)
 	if err != nil {
 		return err
 	}
@@ -459,11 +461,20 @@ func runLogin(out io.Writer, d nofireauth.Deployment, src nofireauth.URLSource, 
 		// Best effort: the login itself worked. Said even under -q, since the
 		// note is about a credential that is still live.
 		if err := c.Revoke(context.Background(), m, prev.AccessToken); err != nil {
-			wrap.Stderr.Say(fmt.Sprintf("cannot revoke the earlier token for %s: %s. Revoke it from the dashboard",
+			noticesFor(ask).Say(fmt.Sprintf("cannot revoke the earlier token for %s: %s. Revoke it from the dashboard",
 				d, nofireauth.CleanLine(err.Error())))
 		}
 	}
 	return nil
+}
+
+// noticesFor is the Notices that writes to w: the shared one for the process's
+// stderr, so the spacing between warnings is kept, and a fresh one otherwise.
+func noticesFor(w io.Writer) *wrap.Notices {
+	if w == os.Stderr {
+		return wrap.Stderr
+	}
+	return &wrap.Notices{W: w}
 }
 
 // loginFailed reports an interrupt as one short line rather than as the
@@ -555,7 +566,7 @@ func logoutCmd(out io.Writer, args []string) (err error) {
 	// Logout sends the token, so a trust store from the environment is
 	// confirmed as for login: with its own CA, whoever set it can answer the
 	// revocation, keep the token live and let Brig print "Logged out".
-	if _, err := confirmEnvironment(out, "logout", d, false); err != nil {
+	if _, err := confirmEnvironment(out, os.Stderr, "logout", d, false); err != nil {
 		return err
 	}
 	store, err := openLoginStore()
@@ -658,7 +669,7 @@ func printProxy(out io.Writer, d nofireauth.Deployment) {
 // answer is yes. brig login stores them with the token, so a later recorded run
 // can tell a trust store the person accepted from one that was set since. A
 // yes accepts every variable that was named.
-func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, envURL bool) (map[string]string, error) {
+func confirmEnvironment(out, ask io.Writer, verb string, d nofireauth.Deployment, envURL bool) (map[string]string, error) {
 	var caVar string
 	trust := map[string]string{}
 	for _, v := range TrustStoreVars {
@@ -697,7 +708,7 @@ func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, env
 	if verb == "logout" {
 		question, cancelled = "Continue logging out of %s? [y/N] ", "logout cancelled. Brig sent nothing to %s, and the token is still stored here"
 	}
-	fmt.Fprintf(os.Stderr, question, d)
+	fmt.Fprintf(ask, question, d)
 	line, _ := cli.ReadAnswer(os.Stdin)
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
