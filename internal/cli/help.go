@@ -308,6 +308,7 @@ var verbUsages = map[string]string{
 	"policy":     policyUsage,
 	"network":    networkUsage,
 	"telemetry":  telemetryUsage,
+	"broker":     brokerUsage,
 	"completion": completionUsage,
 	"target":     targetUsage,
 	"config":     configUsage,

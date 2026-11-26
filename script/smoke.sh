@@ -1257,6 +1257,31 @@ out="$(env "${ep_env[@]}" "$WORK/brig-stored" info claude 2>/dev/null)"
 printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; brig-broker pid [0-9]* on 127.0.0.1:[0-9]*;.* modes endpoint' \
   && ok "brig info names the brig.internal transport and the endpoint mode" \
   || bad "brig info names the brig.internal transport and the endpoint mode -- got: $out"
+# A revoked sandbox stays without its routes: the next exec of it is refused
+# before the guest gets a token, and runs again once it is reinstated.
+env "${ep_env[@]}" "$WORK/brig" broker revoke brig-claude-code --reason "smoke revoke" > "$WORK/ep-revoke.out" 2>&1 \
+  || bad "brig broker revoke failed: $(cat "$WORK/ep-revoke.out")"
+: > "$STUB_LOG"
+env "${ep_env[@]}" "$WORK/brig-stored" sh claude true > "$WORK/ep-revoked.out" 2>&1
+rc=$?
+if [ "$rc" = 0 ]; then
+  bad "an exec of a revoked sandbox ran: $(cat "$WORK/ep-revoked.out")"
+elif ! grep -q 'revoked at .*(smoke revoke).*brig broker reinstate brig-claude-code' "$WORK/ep-revoked.out"; then
+  bad "the refusal of a revoked sandbox does not name the revocation and the fix: $(cat "$WORK/ep-revoked.out")"
+elif grep -q '^env-token:[^<]' "$STUB_LOG"; then
+  bad "a revoked sandbox's exec reached the guest with a token: $(grep '^env-token' "$STUB_LOG")"
+else
+  ok "an exec of a revoked sandbox is refused before the guest gets a token, naming how to reinstate it"
+fi
+env "${ep_env[@]}" "$WORK/brig" broker revoked 2>&1 | grep -q '^brig-claude-code  .*smoke revoke$' \
+  && ok "brig broker revoked lists the revocation" \
+  || bad "brig broker revoked lists the revocation -- got: $(env "${ep_env[@]}" "$WORK/brig" broker revoked 2>&1)"
+env "${ep_env[@]}" "$WORK/brig" broker reinstate brig-claude-code > /dev/null 2>&1
+: > "$STUB_LOG"
+env "${ep_env[@]}" "$WORK/brig-stored" sh claude true > "$WORK/ep-reinstated.out" 2>&1 \
+  && grep -q '^env-token:[^<]' "$STUB_LOG" \
+  && ok "an exec of a reinstated sandbox gets a token again" \
+  || bad "an exec of a reinstated sandbox gets a token again -- got: $(cat "$WORK/ep-reinstated.out")"
 env "${ep_env[@]}" "$WORK/brig" rm --all -y > /dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ -e "$ep_state/host/broker/broker.pid" ] || break

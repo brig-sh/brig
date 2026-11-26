@@ -121,8 +121,11 @@ func (c Client) callWithin(timeout time.Duration, method, path string, body, out
 			msg = resp.Status
 		}
 		ref := &RefusedError{Status: resp.StatusCode, Message: msg}
-		if resp.Header.Get(RefusalHeader) == RefusalCredential {
+		switch resp.Header.Get(RefusalHeader) {
+		case RefusalCredential:
 			ref.Kind = RefusalCredential
+		case RefusalRevoked:
+			ref.Kind = RefusalRevoked
 		}
 		return ref
 	}
@@ -138,7 +141,8 @@ type RefusedError struct {
 	Status  int
 	Message string
 	// Kind is "credential" for a refusal the user fixes by fixing a
-	// credential on the host, such as an expired AWS login.
+	// credential on the host, such as an expired AWS login, and "revoked"
+	// for a sandbox whose broker access is revoked.
 	Kind string
 }
 
@@ -149,6 +153,10 @@ const RefusalHeader = "X-Brig-Refusal"
 
 // RefusalCredential is the RefusalHeader value of a credential refusal.
 const RefusalCredential = "credential"
+
+// RefusalRevoked is the RefusalHeader value of a registration refused
+// because the sandbox's broker access is revoked.
+const RefusalRevoked = "revoked"
 
 func (e *RefusedError) Error() string { return "the credential broker refused: " + e.Message }
 
@@ -181,6 +189,22 @@ func (c Client) Add(s Sandbox) (AddResponse, error) {
 func (c Client) RemoveSandbox(id string) (RemoveResponse, error) {
 	var out RemoveResponse
 	err := c.call(http.MethodDelete, "/sandboxes/"+id, nil, &out)
+	return out, err
+}
+
+// Revoke removes the sandbox id, as RemoveSandbox does, and refuses every
+// registration of it until Reinstate. The revocation outlives the broker.
+func (c Client) Revoke(id string, r RevokeRequest) (RevokeResponse, error) {
+	var out RevokeResponse
+	err := c.call(http.MethodPost, "/sandboxes/"+id+"/revoke", r, &out)
+	return out, err
+}
+
+// Reinstate lifts the revocation of the sandbox id. Its next run registers
+// it again.
+func (c Client) Reinstate(id string) (ReinstateResponse, error) {
+	var out ReinstateResponse
+	err := c.call(http.MethodDelete, "/revocations/"+id, nil, &out)
 	return out, err
 }
 

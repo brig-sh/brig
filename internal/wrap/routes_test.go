@@ -483,6 +483,30 @@ func TestServeRoutesMapsCredentialRefusal(t *testing.T) {
 	}
 }
 
+// A sandbox whose broker access is revoked gets no token, and the error
+// carries the broker's words, which name the way to reinstate it.
+func TestServeRoutesRefusesARevokedSandbox(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	shortStateDir(t)
+	msg := "sandbox " + c.VMName + ": its broker access was revoked at 2026-01-02T03:04:05Z, and stays revoked " +
+		"until `brig broker reinstate " + c.VMName + "`"
+	f := &fakeBroker{registerErr: &injector.RefusedError{Status: 403, Kind: injector.RefusalRevoked, Message: msg}}
+	c.broker = f
+	err := c.serveRoutes(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "brig broker reinstate "+c.VMName) {
+		t.Fatalf("serveRoutes = %v, want the broker's refusal with the reinstate command", err)
+	}
+	var ce creds.CredentialError
+	if errors.As(err, &ce) {
+		t.Errorf("a revocation became a credential failure: %v", err)
+	}
+	if len(f.minted) != 0 {
+		t.Errorf("a revoked sandbox was minted %d tokens", len(f.minted))
+	}
+}
+
 // Each vending route is named once, with the identity the sandbox gets.
 func TestServeRoutesSaysWhoseAWSIdentity(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")

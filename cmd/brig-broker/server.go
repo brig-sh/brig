@@ -144,7 +144,10 @@ type server struct {
 	diverts map[string]*divertSandbox
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
-	vends    map[string]map[string]vendRoute
+	vends map[string]map[string]vendRoute
+	// revoked are the sandboxes whose broker access is revoked, by id, as
+	// revoked.json records them. A registration of one is refused.
+	revoked  map[string]injector.Revocation
 	stopping bool
 	stop     chan struct{}
 }
@@ -173,6 +176,10 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		}
 	}()
 	if s.lock, err = takeLock(filepath.Join(cfg.dir, injector.LockName)); err != nil {
+		return nil, err
+	}
+	// Read under the lock: the broker that held it may have written it.
+	if s.revoked, err = loadRevoked(cfg.dir); err != nil {
 		return nil, err
 	}
 	hostKey, err := loadOrCreateHostKey(filepath.Join(cfg.dir, injector.HostKeyName))
@@ -382,6 +389,8 @@ func (s *server) controlMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sandboxes", s.addSandbox)
 	mux.HandleFunc("DELETE /sandboxes/{id}", s.removeSandbox)
+	mux.HandleFunc("POST /sandboxes/{id}/revoke", s.revokeSandbox)
+	mux.HandleFunc("DELETE /revocations/{id}", s.reinstateSandbox)
 	mux.HandleFunc("POST /tokens", s.mint)
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /stop", s.stopRequest)
@@ -426,6 +435,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := broker.ValidID(req.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Refused before any check: a check of a route that vends runs aws
+	// with the host's credentials, for a sandbox that is not to have them.
+	if s.refuseRevoked(w, req.ID) {
 		return
 	}
 	sb := broker.Sandbox{ID: req.ID, Profile: req.Profile}
@@ -490,6 +504,15 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.refuseStopping(w) {
+		return
+	}
+	// Again under the lock: a revoke may have landed during the checks.
+	if rev, ok := s.revoked[req.ID]; ok {
+		if _, ok := s.sandboxes[req.ID]; !ok {
+			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
+		}
+		s.refuseRevocation(w, rev)
 		return
 	}
 	if s.sandboxes[req.ID] == string(key) {
@@ -653,6 +676,15 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	removed, remaining := s.forget(id)
+	s.mu.Unlock()
+	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
+}
+
+// forget drops the registration of sandbox id, whose tokens are refused from
+// the next request on, and reports whether it had one and how many are
+// left. s.mu is held.
+func (s *server) forget(id string) (bool, int) {
 	_, removed := s.sandboxes[id]
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
@@ -663,9 +695,29 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 		l.close()
 		delete(s.diverts, id)
 	}
-	remaining := len(s.sandboxes)
+	return removed, len(s.sandboxes)
+}
+
+// refuseRevoked answers a registration of a revoked sandbox, and reports
+// whether it did.
+func (s *server) refuseRevoked(w http.ResponseWriter, id string) bool {
+	s.mu.Lock()
+	rev, ok := s.revoked[id]
 	s.mu.Unlock()
-	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
+	if ok {
+		s.refuseRevocation(w, rev)
+	}
+	return ok
+}
+
+// refuseRevocation answers 403 with the revocation, and writes the refusal
+// to the audit log: a revoked sandbox that tries to register again is what
+// whoever revoked it wants to know about.
+func (s *server) refuseRevocation(w http.ResponseWriter, rev injector.Revocation) {
+	s.auditLog.Warn("register", "sandbox", rev.ID, "status", http.StatusForbidden, "check", "revoked",
+		"by", rev.By, "reason", rev.Reason)
+	w.Header().Set(injector.RefusalHeader, injector.RefusalRevoked)
+	http.Error(w, revokedRefusal(rev), http.StatusForbidden)
 }
 
 func (s *server) mint(w http.ResponseWriter, r *http.Request) {
@@ -701,6 +753,7 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.sandboxes {
 		ids = append(ids, id)
 	}
+	revoked := s.revocations()
 	s.mu.Unlock()
 	sort.Strings(ids)
 	pending, failing, recovering := s.creds.report()
@@ -708,6 +761,9 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 		Pending: pending, Failing: failing, Recovering: recovering}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
+	}
+	if len(revoked) > 0 {
+		st.Revoked = revoked
 	}
 	// A route that vends and a gcp route that mints are named apart: their
 	// names are the routes of one sandbox, which are unique.

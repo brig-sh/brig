@@ -604,6 +604,42 @@ one, and a run that was killed between its registration and its boot. A
 sandbox that is still running gets 404 on its routes until its next exec
 registers it again.
 
+### Revocation
+
+Removing a sandbox lasts until its next exec registers it again. To keep a
+sandbox from its routes for good, revoke it:
+
+```
+brig broker revoke brig-claude-code --reason "unexpected egress"
+brig broker revoked
+brig broker reinstate brig-claude-code
+```
+
+A revocation removes the sandbox as `brig stop` does, so its tokens are
+refused from the next request on, and records it in `revoked.json`. From
+then on the broker refuses every registration of the sandbox with 403, so
+`brig run`, `brig sh` and an exec of it fail before the guest gets a token,
+with the broker's words:
+
+```
+brig: the credential broker refuses the routes of brig-claude-code: sandbox brig-claude-code: its broker access was revoked at 2026-01-02T03:04:05Z (unexpected egress), and stays revoked until `brig broker reinstate brig-claude-code`
+```
+
+The record outlives the broker: `brig stop`, `brig rm` and a broker that
+stops when it is idle keep it, and the next broker reads it at start. Only
+`brig broker reinstate`, or the control call below, lifts it. A broker that
+cannot read `revoked.json` does not start, since reading it as empty would
+serve every sandbox it names. A sandbox with no route never registers, so a
+revocation does not stop it from running. Stop it as well to end the agent.
+
+Each revoke, reinstatement and refused registration writes an
+[audit line](#audit-line): `msg=revoke`, `msg=reinstate` and `msg=register`
+with `status=403 check=revoked`, each with the `sandbox`, and the `by` and
+`reason` of the revocation.
+
+A tool that manages the host sends the revoke on the control socket, with
+who revoked it and why, and reads the revocations back from `GET /status`.
+
 When brig's secret store does not open, Brig refuses a run with a route
 before boot, with exit `6`. A store that stops opening after the boot
 reaches the broker instead. Each route then answers 502, ending in "brig's
@@ -651,6 +687,7 @@ file is created `0600`.
 | `control.sock` | The control socket |
 | `broker.pid` | The pid of the running broker and its start time |
 | `broker.lock` | Held by the running broker. A second one exits |
+| `revoked.json` | The revoked sandboxes, with when, by whom and why. See [Revocation](#revocation) |
 | `port` | The loopback port, written by the broker at first start and bound at every start after. See [The port](#the-port) |
 | `start.lock` | Held by `brig` while it starts the broker |
 | `audit.log`, `audit.log.1` | The [audit line](#audit-line) of every request and of every diverted connection. Rotated at 64 MiB, one previous file kept |
@@ -666,10 +703,12 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. A revoked sandbox is refused with 403 and `X-Brig-Refusal: revoked`, before any route is checked. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
+| `POST /sandboxes/<id>/revoke` | `{by, reason}`, each at most 256 bytes on one line, both optional | `{removed, remaining, revocation: {id, at, by, reason}}`. Removes the sandbox as `DELETE` does and records the revocation in `revoked.json` before it answers. A sandbox revoked before keeps its first record. A record that could not be written is a 500, with the sandbox removed all the same. See [Revocation](#revocation) |
+| `DELETE /revocations/<id>` | | `{reinstated}`, false when the sandbox was not revoked |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending, revoked}`. `revoked` lists each revocation as revoke answers it. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits

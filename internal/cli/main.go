@@ -87,6 +87,9 @@ usage:
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once
+  brig broker revoke|reinstate <sandbox>         revoke a sandbox's broker
+                                                 access until it is reinstated
+  brig broker revoked                            list the revoked sandboxes
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig target ls [-f PATH]                       the targets of this repository's
@@ -487,6 +490,8 @@ func dispatch(args []string) error {
 		return secretCmd(os.Stdout, rest)
 	case "telemetry":
 		return telemetryCmd(os.Stdout, rest)
+	case "broker":
+		return brokerCmd(os.Stdout, rest)
 	case "doctor":
 		return doctorCmd(os.Stdout, rest)
 	case "report":
