@@ -217,6 +217,9 @@ line for each thing that happened:
   recorded run or `brig recordings flush` will send it``
 - `brig: recording stopped before the run ended (<reason>); output after
   <time> is not recorded`
+- `brig: this run is not recorded after all: Brig could not set up the recorder`,
+  when the recorder could not start the command. The run then goes on as an
+  unrecorded run
 - `brig: this run's recording stopped and the rest of it was not sent`, when
   the deployment refused the recording
 - `brig: the deployment refused your login, so the rest of this run's recording

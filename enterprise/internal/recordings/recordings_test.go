@@ -579,3 +579,35 @@ func TestTheSpoolGoesUnderBRIGSTATEDIRAndNothingUnderTheHome(t *testing.T) {
 		t.Errorf("flush: %v %q", err, out.String())
 	}
 }
+
+// A relay that cannot start the command, after the deployment said yes, makes
+// the run decline: the recording opened for it is closed at the deployment, no
+// spool is left, one line corrects the notice already printed, and the runtime
+// then runs the command as an unrecorded run.
+func TestARelayThatCannotStartTheCommandDeclinesAndLeavesNothing(t *testing.T) {
+	h := newRecHost(t)
+	h.signIn(t)
+	pipes(t)
+	relay := Attach(hullRun())
+	if relay == nil {
+		t.Fatal("not recorded")
+	}
+	code, err := relay([]string{"/nonexistent/brig-recorder-test"}, os.Environ())
+	if !errors.Is(err, cli.ErrRelayDeclined) || code != 0 {
+		t.Fatalf("relay = %d, %v; want it to decline", code, err)
+	}
+	want := recordedNotice + "\nbrig: this run is not recorded after all: Brig could not set up the recorder\n"
+	if h.notice.String() != want {
+		t.Errorf("lines %q, want %q", h.notice, want)
+	}
+	keys := h.srv.Keys()
+	if len(keys) != 1 {
+		t.Fatalf("recordings %v", keys)
+	}
+	if rec := h.srv.Recording(keys[0]); !rec.Closed || rec.End.EndReason != "recorder_error" {
+		t.Errorf("the recording was not closed honestly: %+v", rec.End)
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.recordingsDir(), "*")); len(left) != 0 {
+		t.Errorf("files left %v", left)
+	}
+}

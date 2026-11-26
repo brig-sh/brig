@@ -214,7 +214,10 @@ type Session struct {
 	// deployment refused the login at the end, so the spool waits for
 	// `brig login`.
 	fatal, authRefused bool
-	earlier            int
+	// notStarted: the command could not be started on the relay, so the run is
+	// not recorded after all.
+	notStarted bool
+	earlier    int
 	// earlierDropped counts earlier spools the background flush removed
 	// without sending them.
 	earlierDropped int
@@ -336,6 +339,12 @@ func (s *Session) Run(argv, env []string) (int, error) {
 	if err != nil {
 		s.rec.Abort()
 		s.finish("recorder_error", nil, "")
+		// A failure before the command started (ptyrelay.ErrNotStarted) means
+		// nothing ran and the caller can run the command without the relay. The
+		// recording opened for it is closed above and its files are removed, and
+		// the run says it is not recorded after all. A failure after the command
+		// ran cannot be undone, and is returned as it was.
+		s.notStarted = errors.Is(err, ptyrelay.ErrNotStarted)
 		s.printNotices()
 		return 0, err
 	}
@@ -615,6 +624,9 @@ func (s *Session) Notices() []string {
 		} else {
 			out = append(out, fmt.Sprintf("brig: this run's recording was interrupted and the run used %d recordings", s.meta.count()))
 		}
+	}
+	if s.notStarted {
+		out = append(out, "brig: this run is not recorded after all: Brig could not set up the recorder")
 	}
 	switch {
 	case s.authRefused:

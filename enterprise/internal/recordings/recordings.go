@@ -48,6 +48,7 @@ package recordings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -216,7 +217,14 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 			return 0, cli.ErrRelayDeclined
 		}
 		fmt.Fprintln(notice, recordedNotice)
-		return sess.Run(argv, env)
+		code, err := sess.Run(argv, env)
+		if errors.Is(err, ptyrelay.ErrNotStarted) {
+			// Nothing ran. The session closed its recording and said the run is
+			// not recorded after all, and the runtime runs the command as an
+			// unrecorded run does.
+			return 0, cli.ErrRelayDeclined
+		}
+		return code, err
 	}
 }
 

@@ -101,6 +101,15 @@
 // takes an exclusive lock on the spool directory without waiting and sends
 // nothing when another holds it.
 //
+// # A relay that cannot start
+//
+// A failure before the command has started (no pseudo-terminal, no pipe, or the
+// command cannot start, all reported as ptyrelay.ErrNotStarted) leaves nothing
+// run and the person's terminal untouched. The session closes the recording it
+// opened with the end reason recorder_error, removes its files and says the run
+// is not recorded after all, and the caller runs the command without the relay.
+// A failure after the command ran cannot be undone: it is returned as it was.
+//
 // # What the user is told
 //
 // Nothing is printed while the run goes on. When it ends, the session prints
