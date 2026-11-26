@@ -215,6 +215,81 @@ func TestCtrlCDuringSignInCancelsOnlyTheSignIn(t *testing.T) {
 	}
 }
 
+// A second Ctrl-C during the sign-in must not end Brig: SignIn keeps catching
+// Ctrl-C until it returns. The signals arrive while the y/N question waits,
+// because SignIn cannot return before it is answered. With a context that
+// stops catching after the first Ctrl-C, the second takes the default action
+// and kills this process, so the test passes only if the process survives to
+// see the error.
+func TestSignInSurvivesASecondCtrlC(t *testing.T) {
+	m := loginHost(t)
+	s := fakeDeployment(t, fakeas.Options{})
+	expiredLogin(m, s.URL)
+	t.Setenv(nofireauth.EnvURL, s.URL)
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	master := terminalStdin(t)
+	go func() {
+		for range 2 {
+			time.Sleep(300 * time.Millisecond)
+			_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		}
+		time.Sleep(300 * time.Millisecond)
+		_, _ = master.Write([]byte("y\n"))
+	}()
+	var err error
+	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if err == nil || err.Error() != "login cancelled" {
+		t.Fatalf("err = %v, want login cancelled", err)
+	}
+	if len(s.Issued()) != 0 || m.items[s.URL].AccessToken != "old-token" {
+		t.Errorf("issued %d, stored %+v", len(s.Issued()), m.items[s.URL])
+	}
+}
+
+// Ctrl-C while the y/N question waits for its answer takes effect once the
+// question is answered: even with "y", the sign-in is cancelled before the
+// keychain is opened and before the deployment is contacted.
+func TestCtrlCWhileAQuestionIsAnsweredCancelsTheSignIn(t *testing.T) {
+	m := loginHost(t)
+	s := fakeDeployment(t, fakeas.Options{})
+	expiredLogin(m, s.URL)
+	t.Setenv(nofireauth.EnvURL, s.URL)
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	opened := 0
+	inner := openLoginStore
+	openLoginStore = func() (login.Store, error) { opened++; return inner() }
+	master := terminalStdin(t)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		time.Sleep(300 * time.Millisecond)
+		_, _ = master.Write([]byte("y\n"))
+	}()
+	var err error
+	stderr := captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if !strings.Contains(stderr, "[y/N]") {
+		t.Fatalf("the question was not asked: %q", stderr)
+	}
+	if err == nil || err.Error() != "login cancelled" {
+		t.Fatalf("err = %v, want login cancelled", err)
+	}
+	if opened != 0 {
+		t.Error("the keychain was opened after the sign-in was cancelled")
+	}
+	if r := s.Requests(); len(r) != 0 {
+		t.Errorf("the deployment was contacted: %v", r)
+	}
+	if len(s.Issued()) != 0 || m.items[s.URL].AccessToken != "old-token" {
+		t.Errorf("issued %d, stored %+v", len(s.Issued()), m.items[s.URL])
+	}
+}
+
 // Brig can be started with SIGINT ignored, by a script that wants its
 // children to outlive Ctrl-C. A sign-in catches Ctrl-C while it runs and
 // ignores it again when it returns, so the command that starts next inherits
