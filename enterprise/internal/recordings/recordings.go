@@ -18,7 +18,9 @@
 //     recorded and runs as it does without recording;
 //   - the deployment resolves as brig login resolves it with no argument:
 //     BRIG_NOFIRE_URL, else the default;
-//   - the person has a stored, unexpired token for exactly that deployment;
+//   - the person has a stored, unexpired token for exactly that deployment, or
+//     a stored one that has expired, in which case the run pauses before the
+//     command starts and signs the person in again (see "An expired sign-in");
 //   - the environment sets no trust store (SSL_CERT_FILE, SSL_CERT_DIR), or each
 //     one it sets has the value the person accepted at brig login, which is
 //     stored with the token;
@@ -35,6 +37,18 @@
 // certificate authority of its choosing, whoever set the variable could read the
 // token in transit. login.AccessToken returns no token for a variable that was
 // not accepted with exactly its current value, and names the variable instead.
+//
+// # An expired sign-in
+//
+// A run that passes the rules above up to the deployment, and whose stored
+// sign-in has expired, is not run unrecorded without a word. Its relay is
+// called before the command starts, so it prints one line, runs the sign-in of
+// brig login for that deployment (login.SignIn: the same flow, the same
+// questions about a trust store, the same storage), reads the token again and
+// goes on as a signed-in run does. A sign-in that fails, times out or is ended
+// with Ctrl-C prints one line, and the run goes unrecorded. Ctrl-C ends the
+// sign-in only. A run that cannot be recorded for the local rules above never
+// pauses and never starts a sign-in.
 //
 // # The token
 //
@@ -82,10 +96,14 @@ const requestTimeout = 30 * time.Second
 // brig exec and a runtime other than hull exist for other reasons, and each
 // leaves a run unrecorded.
 var (
-	// accessToken is the token stored for a deployment, or "", and the name of
+	// accessToken is the token stored for a deployment, or "", the name of
 	// the trust-store variable that was not accepted at sign-in, if one stops it
-	// being used. It is the one call of login.AccessToken in the module.
+	// being used, and whether a stored sign-in has expired. It is the one call
+	// of login.AccessToken in the module.
 	accessToken = login.AccessToken
+	// signIn is brig login's sign-in for a deployment. It is the one way a run
+	// writes the login store, and only for a sign-in that has expired.
+	signIn = login.SignIn
 	// httpClient is the client for the deployment; nil is the standard one,
 	// which never follows a redirect.
 	httpClient *http.Client
@@ -158,8 +176,14 @@ func newClient(base, token string) *recording.Client {
 // built, so a run that fails before the exec asks the deployment nothing,
 // creates no file and prints nothing. The relay then asks the deployment. Any
 // error, timeout or "not recorded" answer makes it return cli.ErrRelayDeclined
-// before it has printed or run anything, and the run goes the way it always
-// has. So an outage at the deployment cannot stop a sandbox from running.
+// before it has run the command, and the run goes the way it always has. So an
+// outage at the deployment cannot stop a sandbox from running.
+//
+// For a stored sign-in that has expired, the relay first prints a line and
+// signs the person in again, which can take minutes and is the one thing a
+// relay does before the deployment is asked. The command has not started, so
+// the pause costs the run nothing but time. If the sign-in does not finish, the
+// relay prints one line and declines.
 func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	// Only a terminal session is recorded, and this is decided first, before
 	// the token is read or anything is printed. A run whose stdin or stdout is a
@@ -172,30 +196,69 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	if err != nil {
 		return nil
 	}
-	token, unaccepted, timedOut := accessToken(d, login.KeyringWait)
+	token, unaccepted, timedOut, expired := accessToken(d, login.KeyringWait)
 	if timedOut {
 		// The keychain did not answer, for example a locked one waiting on an
 		// unlock prompt nobody sees. Say so when the exec is about to run.
-		return func(argv, env []string) (int, error) {
-			fmt.Fprintf(notice, "brig: could not read your login within %d seconds, so this run is not recorded\n", int(login.KeyringWait/time.Second))
-			return 0, cli.ErrRelayDeclined
-		}
+		return func(argv, env []string) (int, error) { return 0, declineKeyring() }
 	}
 	if unaccepted != "" {
 		// A signed-in person whose trust store was not accepted at sign-in. The
 		// relay says so once the exec is about to run, and the run goes on.
-		return func(argv, env []string) (int, error) {
-			fmt.Fprintf(notice, "brig: could not check whether this run is recorded: %s is set and was not accepted when you signed in. Run `brig login` to accept it\n", unaccepted)
-			return 0, cli.ErrRelayDeclined
-		}
+		return func(argv, env []string) (int, error) { return 0, declineUnaccepted(unaccepted) }
 	}
-	if token == "" {
+	if token == "" && !expired {
 		return nil
 	}
 	state := stateDir()
 	if state == "" {
 		return nil
 	}
+	if expired {
+		// The sign-in ran out. Pause before the command starts and sign the
+		// person in again, so the run can be recorded.
+		return func(argv, env []string) (int, error) {
+			fmt.Fprintf(notice, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded\n", d)
+			if err := signIn(notice, d); err != nil {
+				return 0, declineSignIn()
+			}
+			tok, unaccepted, timedOut, _ := accessToken(d, login.KeyringWait)
+			switch {
+			case timedOut:
+				return 0, declineKeyring()
+			case unaccepted != "":
+				return 0, declineUnaccepted(unaccepted)
+			case tok == "":
+				return 0, declineSignIn()
+			}
+			return record(run, d, tok, state)(argv, env)
+		}
+	}
+	return record(run, d, token, state)
+}
+
+// declineSignIn is the line of a run whose sign-in did not finish, and the
+// decline that hands the run over unrecorded.
+func declineSignIn() error {
+	fmt.Fprintln(notice, "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in")
+	return cli.ErrRelayDeclined
+}
+
+// declineKeyring is the line of a run whose keychain did not answer.
+func declineKeyring() error {
+	fmt.Fprintf(notice, "brig: could not read your login within %d seconds, so this run is not recorded\n", int(login.KeyringWait/time.Second))
+	return cli.ErrRelayDeclined
+}
+
+// declineUnaccepted is the line of a run whose trust store was not accepted.
+func declineUnaccepted(v string) error {
+	fmt.Fprintf(notice, "brig: could not check whether this run is recorded: %s is set and was not accepted when you signed in. Run `brig login` to accept it\n", v)
+	return cli.ErrRelayDeclined
+}
+
+// record is the relay of a run that has a token for d: it asks the deployment
+// and records when the deployment says so.
+func record(run cli.AttachedRun, d nofireauth.Deployment, token, state string) func(argv, env []string) (int, error) {
 	host, _ := os.Hostname()
 	params := recording.Params{
 		Client: newClient(d.String(), token),
@@ -255,7 +318,7 @@ func tokenAndBlock(url string, wait time.Duration) (token, unaccepted string) {
 	if err != nil {
 		return "", ""
 	}
-	token, unaccepted, _ = accessToken(d, wait)
+	token, unaccepted, _, _ = accessToken(d, wait)
 	return token, unaccepted
 }
 
@@ -324,7 +387,7 @@ func recordingsCmd(out io.Writer, args []string) error {
 	// A trust store from the environment that was not accepted at sign-in
 	// stops the flush before it sends anything.
 	if d, _, err := nofireauth.ResolveDeployment("", os.Getenv(nofireauth.EnvURL)); err == nil {
-		if _, v, _ := accessToken(d, flushKeyringWait); v != "" {
+		if _, v, _, _ := accessToken(d, flushKeyringWait); v != "" {
 			return unacceptedFlush(v)
 		}
 	}

@@ -140,7 +140,10 @@ const KeyringWait = 3 * time.Second
 // AccessToken returns the access token stored for exactly d, and "" for it when
 // there is none, when it has expired, or when the host has no keychain. It asks
 // the keychain and nothing else: no prompt that it waits on, no network call, no
-// file written, and no detail about why there is no token.
+// file written, and no detail about why there is no token, with one exception:
+// expired is true when a login is stored for d and its time has passed. That is
+// all it says about a login that is not usable, so its one caller can sign the
+// person in again. It still returns no token then.
 //
 // It waits at most wait for the keychain. The keychain call is bound to that
 // deadline where the backend honours one, and runs in a goroutine besides, so a
@@ -154,14 +157,14 @@ const KeyringWait = 3 * time.Second
 // returns a variable's value, and it never names one for a person who has no
 // unexpired login.
 //
-// It is the one use of the login store outside brig login and brig logout,
+// It is the one read of the login store outside brig login and brig logout,
 // and the session recorder is its one caller (see the architecture tests of
 // internal/secret/login and of enterprise/internal/recordings). The recorder
 // sends the token to d and nowhere else. The token is never handed to a
 // sandbox.
-func AccessToken(d nofireauth.Deployment, wait time.Duration) (token, unaccepted string, timedOut bool) {
+func AccessToken(d nofireauth.Deployment, wait time.Duration) (token, unaccepted string, timedOut, expired bool) {
 	if d.String() == "" {
-		return "", "", false
+		return "", "", false, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
@@ -183,19 +186,22 @@ func AccessToken(d nofireauth.Deployment, wait time.Duration) (token, unaccepted
 	select {
 	case a := <-ch:
 		if a.err != nil {
-			return "", "", ctx.Err() != nil
+			return "", "", ctx.Err() != nil, false
 		}
 		t = a.t
 	case <-ctx.Done():
-		return "", "", true
+		return "", "", true, false
 	}
-	if t.AccessToken == "" || !t.ExpiresAt.After(time.Now()) {
-		return "", "", false
+	if t.AccessToken == "" {
+		return "", "", false, false
+	}
+	if !t.ExpiresAt.After(time.Now()) {
+		return "", "", false, true
 	}
 	if v := UnacceptedTrust(t.Trust, os.Getenv); v != "" {
-		return "", v, false
+		return "", v, false, false
 	}
-	return t.AccessToken, "", false
+	return t.AccessToken, "", false, false
 }
 
 // completeLogin offers brig login's flags. --ttl takes a lifetime, typed
@@ -300,6 +306,70 @@ func loginCmd(out io.Writer, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	return runLogin(out, d, src, mode, ttl, nil)
+}
+
+// SignIn is the sign-in brig login runs, for the session recorder to run when a
+// person's login has expired and the run could be recorded. It is brig login
+// with no argument and no flag: the deployment is d, which must be the one brig
+// login would resolve now (BRIG_NOFIRE_URL, else the default), the flow is the
+// one brig login picks for this host, the lifetime is the default, and the
+// questions about a deployment or a trust store from the environment are the
+// ones brig login asks, on the terminal. The token is stored as brig login
+// stores it. This is the one other way to write the login store.
+//
+// Ctrl-C ends the sign-in and nothing else. Brig catches it from before the
+// first question until SignIn returns, and a second Ctrl-C is caught too, so it
+// can neither end Brig nor reach the command that starts afterwards. Where
+// Brig was started with SIGINT ignored, it is ignored again on return. While a
+// question waits for an answer, the Ctrl-C takes effect once it is answered.
+func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
+	defer func() { err = cleanError(err) }()
+	rd, src, err := nofireauth.ResolveDeployment("", os.Getenv(nofireauth.EnvURL))
+	if err != nil {
+		return err
+	}
+	if rd.String() != d.String() {
+		return fmt.Errorf("the deployment %s is not the one brig login would use", d)
+	}
+	ctx, stop := heldContext()
+	defer stop()
+	return runLogin(out, d, src, "", 0, ctx)
+}
+
+// heldContext is a context that the first Ctrl-C cancels, and that keeps
+// catching Ctrl-C until stop is called: a later one is swallowed rather than
+// handed back to the default, which would end Brig. signal.NotifyContext
+// cannot do that, because it stops catching with the first signal. stop
+// restores what the signal was before, which is ignored if Brig inherited it
+// ignored.
+func heldContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ch:
+				cancel()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return ctx, func() {
+		signal.Stop(ch)
+		close(done)
+		cancel()
+	}
+}
+
+// runLogin is the sign-in of brig login and of SignIn. held is the context of
+// a caller that keeps catching Ctrl-C until it returns, or nil for brig login,
+// which makes its own after the questions and lets a second Ctrl-C end the
+// process once the first has ended the wait.
+func runLogin(out io.Writer, d nofireauth.Deployment, src nofireauth.URLSource, mode string, ttl time.Duration, held context.Context) error {
 	fmt.Fprintf(out, "Logging in to %s (%s)\n", d, src)
 	printProxy(out, d)
 	// The default deployment is the one a user gets with no setting at all, so
@@ -311,21 +381,28 @@ func loginCmd(out io.Writer, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	if held != nil && held.Err() != nil {
+		return errors.New("login cancelled")
+	}
 	store, err := openLoginStore()
 	if err != nil {
 		return fmt.Errorf("brig login needs a keychain to hold the token: %w", err)
 	}
 
-	ctx, stop := loginContext()
-	defer stop()
-	// The first Ctrl-C ends the wait. A token exchange or a revocation
-	// already under way still runs, for up to the 30 s request timeout, so
-	// Ctrl-C is handed back to the default once ctx is done: a second one
-	// then ends the process.
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
+	ctx := held
+	if ctx == nil {
+		var stop context.CancelFunc
+		ctx, stop = loginContext()
+		defer stop()
+		// The first Ctrl-C ends the wait. A token exchange or a revocation
+		// already under way still runs, for up to the 30 s request timeout, so
+		// Ctrl-C is handed back to the default once ctx is done: a second one
+		// then ends the process.
+		go func() {
+			<-ctx.Done()
+			stop()
+		}()
+	}
 	c := nofireauth.NewClient(d, buildinfo.Read().Version)
 	m, err := c.Discover(ctx)
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 // access is AccessToken with the run's bound, for the tests that do not
 // concern the bound.
 func access(d nofireauth.Deployment) (string, string) {
-	tok, v, _ := AccessToken(d, KeyringWait)
+	tok, v, _, _ := AccessToken(d, KeyringWait)
 	return tok, v
 }
 
@@ -104,7 +104,7 @@ func TestAccessTokenStopsWaitingForAKeychainThatDoesNotAnswer(t *testing.T) {
 	}
 	done := make(chan res, 1)
 	go func() {
-		tok, v, to := AccessToken(a, 100*time.Millisecond)
+		tok, v, to, _ := AccessToken(a, 100*time.Millisecond)
 		done <- res{tok, v, to}
 	}()
 	var r res
@@ -130,11 +130,11 @@ func TestAccessTokenStopsWaitingForAKeychainThatDoesNotAnswer(t *testing.T) {
 func TestAccessTokenIsNotATimeoutWhenTheKeychainFails(t *testing.T) {
 	m := loginHost(t)
 	a := parseDeployment(t, "https://a.example")
-	if _, _, timedOut := AccessToken(a, time.Second); timedOut {
+	if _, _, timedOut, _ := AccessToken(a, time.Second); timedOut {
 		t.Error("a missing item was a timeout")
 	}
 	openLoginStore = func() (login.Store, error) { return nil, login.ErrUnsupported }
-	if _, _, timedOut := AccessToken(a, time.Second); timedOut {
+	if _, _, timedOut, _ := AccessToken(a, time.Second); timedOut {
 		t.Error("a host with no keychain was a timeout")
 	}
 	_ = m
