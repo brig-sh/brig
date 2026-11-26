@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -420,5 +422,53 @@ func TestADeploymentThatAlternatesBetweenTwoOffsetsIsBackedOffFrom(t *testing.T)
 	}
 	if !accepted || !bytes.Equal(raw, spool) {
 		t.Errorf("the recording holds %d bytes and equals the spool: %v; the spool is %d", len(raw), bytes.Equal(raw, spool), len(spool))
+	}
+}
+
+// A deployment that answers the close with offset_mismatch naming the offset
+// the close was sent at is not going to change its answer. The eight attempts
+// back off between them, as for a transport error, instead of being made at
+// once, and the close ends with an error that keeps the spool.
+func TestACloseThatIsAnsweredWithTheSameOffsetBacksOff(t *testing.T) {
+	f := newFake(t)
+	target, _ := url.Parse(f.URL())
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	var mu sync.Mutex
+	closes := 0
+	var size int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/close") {
+			mu.Lock()
+			closes++
+			n := size
+			mu.Unlock()
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "offset_mismatch", "next_offset": n})
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Base: srv.URL, Token: "tok-secret", HTTP: srv.Client()}
+	open, err := c.Open(context.Background(), OpenRequest{RunKey: "k", Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool := spoolWith(t, "hello\r\n")
+	n, _ := (&Uploader{Spool: spool}).size()
+	mu.Lock()
+	size = n
+	mu.Unlock()
+	sl := &limitedSleeps{n: 1000}
+	u := &Uploader{C: c, RecordingID: open.RecordingID, Spool: spool, MaxBatch: open.MaxBatchBytes,
+		WindowBytes: open.WindowBytes, Sleep: sl.sleep}
+	err = u.Close(context.Background(), CloseRequest{EndReason: "exit"})
+	if err == nil || errors.Is(err, ErrFatal) {
+		t.Fatalf("Close = %v, want an error that keeps the spool", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if closes != 8 || len(sl.d) != 8 {
+		t.Errorf("%d close calls and %d waits; want 8 and 8, so no attempt is made at once", closes, len(sl.d))
 	}
 }

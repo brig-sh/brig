@@ -477,6 +477,15 @@ func (u *Uploader) Close(ctx context.Context, req CloseRequest) error {
 			if r.NextOffset < 0 || r.NextOffset > size {
 				return fmt.Errorf("%w: the deployment holds more than the spool", ErrFatal)
 			}
+			if r.NextOffset == u.Offset {
+				// It names the offset the close was sent at and still calls it a
+				// mismatch: nothing will change on a resend. Back off, as for a
+				// transport error, so the eight attempts are not made at once.
+				if err := u.sleep(ctx, backoff); err != nil {
+					return err
+				}
+				backoff = min(backoff*2, backoffMax)
+			}
 			u.Offset = r.NextOffset
 		case st == http.StatusTooManyRequests:
 			if err := u.sleep(ctx, rateLimitWait); err != nil {
