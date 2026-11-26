@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brig-sh/brig/enterprise/internal/ptyrelay"
 	"github.com/brig-sh/brig/enterprise/internal/recording/frame"
 	"github.com/brig-sh/brig/enterprise/internal/recording/recordingtest"
 )
@@ -454,6 +456,114 @@ func TestASignalDuringTheDrainEndsItAndTheRunKeepsTheCommandsStatus(t *testing.T
 		t.Errorf("the spool must stay: %v", mustGlob(t, files))
 	}
 	if !strings.Contains(notice.String(), leftoverNotice) {
+		t.Errorf("closing lines %q", notice.String())
+	}
+}
+
+// slowTap holds the first output back, so the relay waits for the tap after the
+// command has ended.
+type slowTap struct {
+	ptyrelay.Tap
+	once sync.Once
+}
+
+func (s *slowTap) Output(at time.Time, p []byte) {
+	s.once.Do(func() { time.Sleep(400 * time.Millisecond) })
+	s.Tap.Output(at, p)
+}
+
+// sessionAtItsDrain starts a run of cmd whose final drain waits on a closed
+// gate. wrap may change what the relay is given. It returns the session, a
+// channel for Run's end, the gate, the notice and the spool directory.
+func sessionAtItsDrain(t *testing.T, cmd string, wrap func(ptyrelay.Options) ptyrelay.Options) (*Session, chan struct{}, *gate, *bytes.Buffer, string) {
+	t.Helper()
+	f := newFake(t)
+	g := newGate(f.Client().Transport)
+	c := &Client{Base: f.URL(), Token: "tok-secret", HTTP: &http.Client{Transport: g}, UserAgent: "brig-test"}
+	dir := t.TempDir()
+	p := beginParams(f, dir)
+	p.Client, p.FlushEvery, p.DrainTimeout = c, time.Hour, 30*time.Second
+	in, _ := os.Open(os.DevNull)
+	out, _ := os.Create(filepath.Join(t.TempDir(), "out"))
+	p.In, p.Out = in, out
+	notice := &bytes.Buffer{}
+	p.Notice = notice
+	s, err := Begin(context.Background(), p)
+	if err != nil || s == nil {
+		t.Fatalf("begin: %v %v", s, err)
+	}
+	g.close()
+	old := relayRun
+	relayRun = func(c *exec.Cmd, o ptyrelay.Options) (ptyrelay.Result, error) { return old(c, wrap(o)) }
+	t.Cleanup(func() { relayRun = old })
+	ended := make(chan struct{})
+	go func() {
+		_, _ = s.Run([]string{"sh", "-c", cmd}, os.Environ())
+		close(ended)
+	}()
+	return s, ended, g, notice, dir
+}
+
+// A Ctrl-C that comes after the command has ended, while the relay still waits
+// for the recorder, is kept. It ends the drain, and the person does not have to
+// press it again.
+func TestASignalAfterTheCommandEndedButBeforeTheRelayReturnedEndsTheDrain(t *testing.T) {
+	_, ended, g, notice, dir := sessionAtItsDrain(t, "exit 0", func(o ptyrelay.Options) ptyrelay.Options {
+		o.Tap = &slowTap{Tap: o.Tap}
+		inner := o.Exited
+		o.Exited = func() {
+			inner()
+			_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		}
+		return o
+	})
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		close(g.open)
+		t.Fatal("a signal that came after the command ended was dropped")
+	}
+	close(g.open)
+	if n := len(mustGlob(t, filepath.Join(dir, "*"))); n != 2 {
+		t.Errorf("the spool must stay: %d files", n)
+	}
+	if !strings.Contains(notice.String(), leftoverNotice) {
+		t.Errorf("closing lines %q", notice.String())
+	}
+}
+
+// A signal that came while the command ran was forwarded to it by the relay, so
+// it does not end the drain as well.
+func TestASignalWhileTheCommandRanDoesNotEndTheDrain(t *testing.T) {
+	_, ended, g, notice, dir := sessionAtItsDrain(t, "sleep 1", func(o ptyrelay.Options) ptyrelay.Options {
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		}()
+		return o
+	})
+	select {
+	case <-g.waiting: // the command has ended and the drain is on the wire
+	case <-time.After(10 * time.Second):
+		close(g.open)
+		t.Fatal("the drain never started")
+	}
+	select {
+	case <-ended:
+		close(g.open)
+		t.Fatal("a signal sent while the command ran ended the drain")
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(g.open)
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after the drain went through")
+	}
+	if n := len(mustGlob(t, filepath.Join(dir, "*"))); n != 0 {
+		t.Errorf("the recording was sent whole, so no file stays: %d", n)
+	}
+	if notice.Len() != 0 {
 		t.Errorf("closing lines %q", notice.String())
 	}
 }

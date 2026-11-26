@@ -254,8 +254,11 @@ at that time. A run can use more than one recording.
 What the network did not take stays in that directory. The next recorded
 run sends it in the background, and so does `brig recordings flush`. When a
 run ends, Brig waits up to 5 seconds for the deployment before it leaves
-the rest on disk. Ctrl-C, or a SIGTERM or SIGHUP, during that wait ends it at
-once, leaves the rest on disk, and Brig exits with the command's own status.
+the rest on disk. Ctrl-C, or a SIGTERM or SIGHUP, that arrives after the
+command has ended, also while Brig is still reading the last of its output,
+ends the wait at once, leaves the rest on disk, and Brig exits with the
+command's own status. A signal that arrived while the command ran went to the
+command and does not end the wait.
 [Session recording](security.md#session-recording) lists
 what is captured, what leaves the machine, and the limits.
 

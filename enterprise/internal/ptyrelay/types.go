@@ -27,6 +27,12 @@ type Options struct {
 
 	// QueueBytes bounds the output waiting for the Tap. Zero means 4 MiB.
 	QueueBytes int
+
+	// Exited, when set, is called once, on the goroutine that called Run, as
+	// soon as the command has ended and before the relay drains its output. It
+	// is not called when the command was not started. A signal that reaches
+	// the process after it is one the relay did not forward.
+	Exited func()
 }
 
 // Tap observes a relayed command. at comes from time.Now, so it carries the

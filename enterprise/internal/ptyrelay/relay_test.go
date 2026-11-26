@@ -341,6 +341,32 @@ func TestSlowTapDropsInsteadOfStallingAndSaysWhere(t *testing.T) {
 	t.Logf("elapsed %v dropped %d of %d", time.Since(start), res.DroppedBytes, res.OutputBytes)
 }
 
+// Exited is called once the command has ended, before the relay has waited for a
+// slow tap, so a caller can tell a signal that came after the command from one
+// that came while it ran.
+func TestExitedIsCalledAsTheCommandEndsAndNotAfterTheTapHasFinished(t *testing.T) {
+	o := newOuter(t, 24, 80)
+	tap := &safeBuf{delay: 500 * time.Millisecond}
+	var calls int
+	var heldByTap int
+	start := time.Now()
+	var at time.Duration
+	res, err := Run(exec.Command("sh", "-c", "echo hi"), Options{In: o.slave, Out: o.slave, Tap: tap, Exited: func() {
+		calls++
+		at = time.Since(start)
+		heldByTap = len(tap.Bytes())
+	}})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	if calls != 1 {
+		t.Fatalf("Exited was called %d times, want 1", calls)
+	}
+	if heldByTap != 0 || at > 400*time.Millisecond {
+		t.Errorf("Exited came after the slow tap: %v in, tap held %d bytes", at, heldByTap)
+	}
+}
+
 func TestTapSeesInitialAndChangedSizeOnly(t *testing.T) {
 	o := newOuter(t, 30, 100)
 	tap := &safeBuf{}
@@ -605,9 +631,13 @@ func TestARelayThatCannotSetUpReportsNotStartedAndTouchesNothing(t *testing.T) {
 			if name == "a command that cannot start" {
 				c = exec.Command("/nonexistent/brig-relay")
 			}
-			_, err := Run(c, Options{In: o.slave, Out: o.slave})
+			exited := false
+			_, err := Run(c, Options{In: o.slave, Out: o.slave, Exited: func() { exited = true }})
 			if !errors.Is(err, ErrNotStarted) {
 				t.Fatalf("err = %v, want ErrNotStarted", err)
+			}
+			if exited {
+				t.Error("Exited was called for a command that never ran")
 			}
 			if _, serr := os.Stat(marker); serr == nil {
 				t.Error("the command ran")

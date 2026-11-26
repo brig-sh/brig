@@ -214,6 +214,9 @@ func Run(cmd *exec.Cmd, opt Options) (Result, error) {
 	}()
 
 	waitErr := cmd.Wait()
+	if opt.Exited != nil {
+		opt.Exited()
+	}
 	// Wake the output pump so it drains what is left and stops, then stop input.
 	_, _ = unix.Write(wakeOut[1], []byte{1})
 	<-outDone
