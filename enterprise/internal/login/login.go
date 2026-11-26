@@ -587,18 +587,22 @@ func confirmEnvironment(out io.Writer, verb string, d nofireauth.Deployment, env
 	trust := map[string]string{}
 	for _, v := range TrustStoreVars {
 		if val := os.Getenv(v); val != "" {
-			// The absolute path is what the question names and what is stored. A
-			// value that has none is not asked about.
-			canon, err := canonicalTrust(v, val)
-			if errors.Is(err, errParentElement) {
-				return nil, fmt.Errorf("Brig does not trust a certificate path with .. in it, and %s has one. Set an absolute path", v)
+			// brig login names the absolute path in its question and stores it,
+			// and does not ask about a value it cannot make one of. brig logout
+			// stores nothing and only asks, as it always has, so a value with a
+			// .. element does not keep a token the person asked to remove.
+			if verb == "login" {
+				canon, err := canonicalTrust(v, val)
+				if errors.Is(err, errParentElement) {
+					return nil, fmt.Errorf("Brig does not trust a certificate path with .. in it, and %s has one. Set an absolute path", v)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("%s is a relative path, and Brig cannot read the working directory to make it absolute. Set an absolute path", v)
+				}
+				val = canon
+				trust[v] = val
 			}
-			if err != nil {
-				return nil, fmt.Errorf("%s is a relative path, and Brig cannot read the working directory to make it absolute. Set an absolute path", v)
-			}
-			val = canon
 			fmt.Fprintf(out, "Trusting certificates from %s (from %s)\n", nofireauth.CleanLine(val), v)
-			trust[v] = val
 			if caVar == "" {
 				caVar = v
 			}
