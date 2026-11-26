@@ -8,6 +8,7 @@
 package frame
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -30,6 +31,12 @@ const (
 	// later output is still merged into it.
 	MergeWindow = 10 * time.Millisecond
 )
+
+// MaxFrame is the most bytes one frame the recorder writes can take: a
+// delta of at most ten bytes, the type, the length of a full output payload and
+// the payload. A batch must hold one whole frame, so a deployment's batch size
+// below this cannot be satisfied.
+var MaxFrame = binary.MaxVarintLen64 + 1 + len(AppendUvarint(nil, MaxOutput)) + MaxOutput
 
 // Frame is one decoded frame. DtMs is milliseconds since the previous frame.
 type Frame struct {

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/brig-sh/brig/enterprise/internal/recording/frame"
 )
 
 // hostile is a deployment that answers what its test says and records every
@@ -227,5 +229,31 @@ func TestTheSpoolIsPrivate(t *testing.T) {
 		if len(entries) != 2 {
 			t.Errorf("existing=%v: the directory holds %d entries, want the spool and its meta file", existing, len(entries))
 		}
+	}
+}
+
+// A batch size that cannot hold one maximum frame would make the first full
+// frame a fatal error that deletes the spool. Open refuses it, before any
+// spool exists; the smallest size that holds the frame is accepted.
+func TestOpenRefusesABatchSizeThatCannotHoldAFrame(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		ok   bool
+	}{
+		{65541 - 1, false}, {65541, false}, {frame.MaxFrame - 1, false}, {frame.MaxFrame, true},
+	} {
+		h := newHostile(t)
+		h.open["max_batch_bytes"] = tc.size
+		r, err := h.client().Open(context.Background(), OpenRequest{RunKey: "k"})
+		if (err == nil) != tc.ok || (tc.ok && !r.Recorded) {
+			t.Errorf("batch size %d: %+v %v, accepted %v want %v", tc.size, r, err, err == nil, tc.ok)
+		}
+	}
+	// The floor is the frame the recorder can write: a full output frame with the
+	// longest delta.
+	var raw []byte
+	raw = frame.Append(raw, 1<<63, frame.Output, make([]byte, frame.MaxOutput))
+	if len(raw) > frame.MaxFrame {
+		t.Errorf("a maximum frame is %d bytes, past the floor %d", len(raw), frame.MaxFrame)
 	}
 }
