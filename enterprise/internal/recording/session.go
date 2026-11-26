@@ -517,7 +517,9 @@ func (s *Session) save(force bool) {
 // current one. It returns nil when the new recording is open and the uploader
 // points at it, ErrAuth when the login was refused (the spool stays), the
 // context's error when ctx ended first (the spool stays, and a flush recovers),
-// and errStopped when the run is no longer recorded.
+// errGiveUp when the meta file for the new recording could not be written (the
+// uploader stays on the old recording and the spool stays), and errStopped when
+// the run is no longer recorded.
 //
 // The loop guard may put the open off. While it waits the spool keeps growing.
 // With final set, which the end of the run uses, a wait is not served: the spool
@@ -539,8 +541,16 @@ func (s *Session) recover(ctx context.Context, final bool) error {
 		var retry openRetry
 		switch {
 		case err == nil:
+			if werr := writeMeta(s.paths[1], m); werr != nil {
+				// The file on disk still names the old recording, so the
+				// uploader must not send into the new one: a later flush
+				// would send the same output again. The new recording is
+				// left to close on the server when it goes quiet. The run
+				// goes on and is not stopped; live upload ends and the spool
+				// stays for a flush.
+				return fmt.Errorf("%w: the meta file could not be written: %v", errGiveUp, werr)
+			}
 			s.meta = m
-			_ = writeMeta(s.paths[1], s.meta)
 			s.up.Switch(resp.RecordingID, m.SpoolBase, m.Prefix, resp.MaxBatchBytes, resp.WindowBytes)
 			s.savedAcked, s.savedAt = m.SpoolBase, s.now()
 			s.interrupted = true
