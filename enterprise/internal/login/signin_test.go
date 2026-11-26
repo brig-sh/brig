@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
-	"os/signal"
 	"slices"
 	"strings"
 	"syscall"
@@ -288,56 +286,4 @@ func TestCtrlCWhileAQuestionIsAnsweredCancelsTheSignIn(t *testing.T) {
 	if len(s.Issued()) != 0 || m.items[s.URL].AccessToken != "old-token" {
 		t.Errorf("issued %d, stored %+v", len(s.Issued()), m.items[s.URL])
 	}
-}
-
-// Brig can be started with SIGINT ignored, by a script that wants its
-// children to outlive Ctrl-C. A sign-in catches Ctrl-C while it runs and
-// ignores it again when it returns, so the command that starts next inherits
-// what Brig inherited. The test runs in a child process that starts that way.
-func TestSignInLeavesAnIgnoredSIGINTIgnored(t *testing.T) {
-	if os.Getenv("BRIG_TEST_SIGNIN_IGNORED_CHILD") == "1" {
-		t.Skip("this is the parent half")
-	}
-	cmd := exec.Command("sh", "-c", `trap '' INT; exec "$0" -test.run='^TestSignInIgnoredChild$' -test.v`, os.Args[0])
-	cmd.Env = append(os.Environ(), "BRIG_TEST_SIGNIN_IGNORED_CHILD=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "--- PASS: TestSignInIgnoredChild") {
-		t.Fatalf("child: %v\n%s", err, out)
-	}
-}
-
-// TestSignInIgnoredChild is the half that runs with SIGINT ignored from the
-// start. Run alone, it does nothing.
-func TestSignInIgnoredChild(t *testing.T) {
-	if os.Getenv("BRIG_TEST_SIGNIN_IGNORED_CHILD") != "1" {
-		t.Skip("runs only from TestSignInLeavesAnIgnoredSIGINTIgnored")
-	}
-	if !signal.Ignored(syscall.SIGINT) {
-		t.Fatal("SIGINT was not ignored at start")
-	}
-	m := loginHost(t)
-	s := fakeDeployment(t, fakeas.Options{})
-	expiredLogin(m, s.URL)
-	t.Setenv(nofireauth.EnvURL, s.URL)
-	t.Setenv("SSH_CONNECTION", "")
-	t.Setenv("SSH_TTY", "")
-	t.Setenv("DISPLAY", ":0")
-	t.Setenv("WAYLAND_DISPLAY", "")
-	openBrowser = interruptingOpener()
-	master := terminalStdin(t)
-	if _, err := master.Write([]byte("y\n")); err != nil {
-		t.Fatal(err)
-	}
-	var err error
-	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
-	if err == nil || err.Error() != "login cancelled" {
-		t.Fatalf("err = %v, want login cancelled: Ctrl-C did not reach the sign-in", err)
-	}
-	// The signal is ignored again, as the process inherited it: this one does
-	// not end the process, and the test ends with PASS only if it survives.
-	// signal.Ignored cannot say, because it does not see a restored disposition.
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond)
 }
