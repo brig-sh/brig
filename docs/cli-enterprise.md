@@ -231,15 +231,16 @@ line for each thing that happened:
 - `brig: removed <n> earlier recordings that were more than 30 days old and
   could not be sent`
 
-Brig writes the output to a file under `~/.brig/recordings` as the run goes,
-and uploads it to the deployment in batches. While a recording is open and
+Brig writes the output to a file under `recordings` in the state directory
+(`~/.brig`, or `BRIG_STATE_DIR`) as the run goes, and uploads it to the
+deployment in batches. While a recording is open and
 quiet, Brig sends an empty batch every 45 seconds so the deployment does not
 close it. The deployment closes a recording that hears nothing for 2
 minutes. A recorder that was cut off for longer, because the machine slept or
 the network was down, continues in a new recording, with the terminal's size
 at that time. A run can use more than one recording.
 
-What the network did not take stays in `~/.brig/recordings`. The next recorded
+What the network did not take stays in that directory. The next recorded
 run sends it in the background, and so does `brig recordings flush`. When a
 run ends, Brig waits up to 5 seconds for the deployment before it leaves
 the rest on disk. [Session recording](security.md#session-recording) lists

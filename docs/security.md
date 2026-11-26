@@ -1520,8 +1520,10 @@ locked keychain that shows an unlock prompt nobody sees cannot hold a run. On
 timeout the run goes on unrecorded, with one line on stderr that says so.
 `brig recordings flush` waits up to 30 seconds.
 
-**The spool.** Brig writes what it captures to `~/.brig/recordings` as the run
-goes, and uploads it from there. The spool directory is 0700 and its files are
+**The spool.** Brig writes what it captures to `recordings` in the state
+directory (`~/.brig`, or `BRIG_STATE_DIR`) as the run goes, and uploads it from
+there. The state directory is the one Brig keeps out of every project, so a
+sandbox that mounts a project cannot write the spool. The spool directory is 0700 and its files are
 0600. Brig does not encrypt the spool. Anyone who can read your home as you can
 read it. A spool holds at most 512 MiB. The limit counts all the output of a
 run. A run that writes more is recorded only up to the limit, and the rest is

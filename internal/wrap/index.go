@@ -148,6 +148,11 @@ func stateDir() (string, error) {
 	return filepath.Join(home, ".brig"), nil
 }
 
+// StateDir is brig's state directory: BRIG_STATE_DIR, else ~/.brig. It is the
+// directory CheckProjectState keeps out of every project, so what lives under
+// it is not reachable from a sandbox.
+func StateDir() (string, error) { return stateDir() }
+
 // indexPath is stateDir/name, for one of brig's small bookkeeping files.
 func indexPath(name string) (string, error) {
 	dir, err := stateDir()
