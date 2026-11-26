@@ -1515,7 +1515,10 @@ recorder cannot open the login store. The token still never reaches a
 sandbox. The token is not in the argv or the environment of the recorded
 command, in the spool, or in anything Brig prints. A recording is sent only to
 the deployment the token was stored for, and Brig does not follow a redirect
-from it.
+from it. A run waits at most 3 seconds for the keychain to give up the login, so a
+locked keychain that shows an unlock prompt nobody sees cannot hold a run. On
+timeout the run goes on unrecorded, with one line on stderr that says so.
+`brig recordings flush` waits up to 30 seconds.
 
 **The spool.** Brig writes what it captures to `~/.brig/recordings` as the run
 goes, and uploads it from there. The spool directory is 0700 and its files are

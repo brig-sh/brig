@@ -39,18 +39,18 @@ type logins struct {
 
 // token answers as login.AccessToken does for a stored, unexpired login, with
 // the rule that decides on the trust store taken from the login package.
-func (l *logins) token(d nofireauth.Deployment) (string, string) {
+func (l *logins) token(d nofireauth.Deployment, _ time.Duration) (string, string, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.asked = append(l.asked, d.String())
 	tok := l.items[d.String()]
 	if tok == "" {
-		return "", ""
+		return "", "", false
 	}
 	if v := login.UnacceptedTrust(l.trust[d.String()], os.Getenv); v != "" {
-		return "", v
+		return "", v, false
 	}
-	return tok, ""
+	return tok, "", false
 }
 
 // recHost wires the gate to a fake deployment, an in-memory login store and a
@@ -118,7 +118,7 @@ func TestGateWithoutALoginTouchesNothing(t *testing.T) {
 	cases := map[string]func(h *recHost){
 		"no token": func(h *recHost) {},
 		"a token the store reads as unusable": func(h *recHost) {
-			accessToken = func(nofireauth.Deployment) (string, string) { return "", "" }
+			accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool) { return "", "", false }
 		},
 	}
 	for name, setup := range cases {
@@ -508,5 +508,37 @@ func TestTokenForSpoolSaysWhetherTheURLCouldEverHaveAToken(t *testing.T) {
 	}
 	if tok, usable := tokenForSpool(h.srv.URL()); tok != recToken || !usable {
 		t.Errorf("a signed-in deployment: %q, %v", tok, usable)
+	}
+}
+
+// A keychain that does not answer within the bound makes the run go on
+// unrecorded, with one line that says why, printed when the exec is about to
+// run. The deployment is asked nothing. A run that is not a terminal session
+// gets no line.
+func TestAKeychainThatDoesNotAnswerLeavesTheRunUnrecordedWithOneLine(t *testing.T) {
+	h := newRecHost(t)
+	h.signIn(t)
+	accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool) { return "", "", true }
+	relay := Attach(hullRun())
+	if relay == nil {
+		t.Fatal("no relay, so no line")
+	}
+	if h.notice.Len() != 0 {
+		t.Errorf("printed before the exec: %q", h.notice)
+	}
+	if _, err := relay([]string{"sh", "-c", "echo must-not-run"}, os.Environ()); !errors.Is(err, cli.ErrRelayDeclined) {
+		t.Errorf("relay err = %v, want it to decline", err)
+	}
+	if want := "brig: could not read your login within 3 seconds, so this run is not recorded\n"; h.notice.String() != want {
+		t.Errorf("line %q, want %q", h.notice, want)
+	}
+	if h.srv.Requests() != 0 {
+		t.Errorf("%d requests", h.srv.Requests())
+	}
+
+	h.notice.Reset()
+	isTerminal = func(*os.File) bool { return false }
+	if Attach(hullRun()) != nil || h.notice.Len() != 0 {
+		t.Errorf("a run that is not a terminal session: notice %q", h.notice)
 	}
 }

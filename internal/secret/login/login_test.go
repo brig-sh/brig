@@ -1,6 +1,7 @@
 package login
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -175,5 +176,36 @@ func TestTheAcceptedTrustStoreIsStoredWithTheToken(t *testing.T) {
 	got, err = s.Load(url)
 	if err != nil || got.Trust != nil {
 		t.Fatalf("an older item loaded as %+v, %v; want no trust", got, err)
+	}
+}
+
+// ctxFake is a keyring whose WithContext records the context it was bound to.
+type ctxFake struct {
+	*fake
+	bound context.Context
+}
+
+func (c *ctxFake) WithContext(ctx context.Context) keyring.Store {
+	return &ctxFake{fake: c.fake, bound: ctx}
+}
+
+// WithContext binds each call of a store whose backend takes a context, and
+// returns any other store as it is.
+func TestWithContextBindsABackendThatTakesAContext(t *testing.T) {
+	type key struct{}
+	ctx := context.WithValue(context.Background(), key{}, 1)
+	f := &fake{items: map[string][]byte{}}
+	cf := &ctxFake{fake: f}
+	s := store{k: cf}
+	got, ok := WithContext(ctx, s).(store)
+	if !ok {
+		t.Fatalf("not a login store")
+	}
+	if b, ok := got.k.(*ctxFake); !ok || b.bound != ctx {
+		t.Errorf("the backend was not bound to the context: %#v", got.k)
+	}
+	plain := store{k: f}
+	if g := WithContext(ctx, plain); g != Store(plain) {
+		t.Error("a backend with no context was changed")
 	}
 }

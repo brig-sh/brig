@@ -11,6 +11,7 @@
 package login
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -72,6 +73,19 @@ func Open() (Store, error) {
 		return nil, fmt.Errorf("%w: %v", keyring.ErrUnsupported, err)
 	}
 	return store{k}, nil
+}
+
+// WithContext returns s with each keychain call bound to ctx, where the
+// backend honours one: the Secret Service backend stops waiting on an unlock
+// prompt and the macOS backend stops its security(1) process. A store whose
+// backend takes no context is returned as it is.
+func WithContext(ctx context.Context, s Store) Store {
+	if st, ok := s.(store); ok {
+		if c, ok := st.k.(keyring.ContextStore); ok {
+			return store{c.WithContext(ctx)}
+		}
+	}
+	return s
 }
 
 // Account is the keychain account of a deployment: a hash, so the account

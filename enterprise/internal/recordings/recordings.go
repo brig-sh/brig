@@ -68,6 +68,11 @@ import (
 // recordedNotice is the one line a recorded run prints before it starts.
 const recordedNotice = "brig: this run is recorded for your organization"
 
+// flushKeyringWait is how long brig recordings flush waits for the keychain to
+// give up a login. The person asked for the flush and a locked keychain can ask
+// for a password, so it waits longer than a run does.
+const flushKeyringWait = 30 * time.Second
+
 // requestTimeout is the whole of one request to the deployment.
 const requestTimeout = 30 * time.Second
 
@@ -138,8 +143,10 @@ func newClient(base, token string) *recording.Client {
 }
 
 // Attach is cli.Options.Attach. It decides from what is on this machine
-// whether this run may be recorded, and touches neither the network nor the
-// disk to do so. It returns nil for a run that cannot be.
+// whether this run may be recorded. It touches neither the network nor the
+// disk. It reads the login from the keychain, which it waits for at most
+// login.KeyringWait, and a keychain that does not answer in that time leaves the
+// run unrecorded with one line. It returns nil for a run that cannot be.
 //
 // The relay it returns is called by the runtime once the exec's command is
 // built, so a run that fails before the exec asks the deployment nothing,
@@ -159,7 +166,15 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	if err != nil {
 		return nil
 	}
-	token, unaccepted := accessToken(d)
+	token, unaccepted, timedOut := accessToken(d, login.KeyringWait)
+	if timedOut {
+		// The keychain did not answer, for example a locked one waiting on an
+		// unlock prompt nobody sees. Say so when the exec is about to run.
+		return func(argv, env []string) (int, error) {
+			fmt.Fprintf(notice, "brig: could not read your login within %d seconds, so this run is not recorded\n", int(login.KeyringWait/time.Second))
+			return 0, cli.ErrRelayDeclined
+		}
+	}
 	if unaccepted != "" {
 		// A signed-in person whose trust store was not accepted at sign-in. The
 		// relay says so once the exec is about to run, and the run goes on.
@@ -206,7 +221,7 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 // A URL that does not parse, or that names a deployment the person never
 // signed in to, has no token, so nothing is sent to it.
 func tokenForURL(url string) string {
-	tok, _ := tokenAndBlock(url)
+	tok, _ := tokenAndBlock(url, login.KeyringWait)
 	return tok
 }
 
@@ -221,12 +236,14 @@ func tokenForSpool(url string) (string, bool) {
 
 // tokenAndBlock is tokenForURL, and the name of the trust-store variable that
 // was not accepted at sign-in when that is why there is no token.
-func tokenAndBlock(url string) (token, unaccepted string) {
+// It waits at most wait for the keychain.
+func tokenAndBlock(url string, wait time.Duration) (token, unaccepted string) {
 	d, err := nofireauth.ParseDeployment(url)
 	if err != nil {
 		return "", ""
 	}
-	return accessToken(d)
+	token, unaccepted, _ = accessToken(d, wait)
+	return token, unaccepted
 }
 
 // clientForURL builds the client for the deployment URL a spool names.
@@ -293,7 +310,7 @@ func recordingsCmd(out io.Writer, args []string) error {
 	// A trust store from the environment that was not accepted at sign-in
 	// stops the flush before it sends anything.
 	if d, _, err := nofireauth.ResolveDeployment("", os.Getenv(nofireauth.EnvURL)); err == nil {
-		if _, v := accessToken(d); v != "" {
+		if _, v, _ := accessToken(d, flushKeyringWait); v != "" {
 			return unacceptedFlush(v)
 		}
 	}
@@ -306,7 +323,7 @@ func recordingsCmd(out io.Writer, args []string) error {
 		if _, err := nofireauth.ParseDeployment(url); err != nil {
 			return "", false
 		}
-		tok, v := tokenAndBlock(url)
+		tok, v := tokenAndBlock(url, flushKeyringWait)
 		if v != "" && blocked == "" {
 			blocked = v
 		}

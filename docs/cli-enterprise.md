@@ -178,12 +178,16 @@ true:
   deployment once, with a 3 second timeout.
 
 If any of these fails, or the deployment is down, the run goes on as it always
-does, with no message and no delay beyond the timeout. The one exception is a
-signed-in terminal run on hull with a trust-store variable that was not
-accepted. It prints one line to stderr at its start: `brig: could not check
-whether this run is recorded: SSL_CERT_FILE is set and was not accepted when
-you signed in. Run `brig login` to accept it`. It names the variable and never its value. A run never needs
-the deployment to start. Brig Community records nothing.
+does, with no message and no delay beyond the timeout. Two cases print one
+line to stderr at the start of a terminal run on hull. A trust-store variable
+that was not accepted: `brig: could not check whether this run is recorded:
+SSL_CERT_FILE is set and was not accepted when you signed in. Run `brig login`
+to accept it`, which names the variable and never its value. A keychain that
+does not answer within 3 seconds, such as a locked one waiting on an unlock
+prompt: `brig: could not read your login within 3 seconds, so this run is not
+recorded`. A run never needs the deployment to start. Brig Community records
+nothing. `brig recordings flush` waits up to 30 seconds for the keychain,
+because you asked for it and an unlock prompt can need a password.
 
 At the start of a recorded run, Brig prints this line to stderr:
 
