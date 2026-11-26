@@ -1106,6 +1106,11 @@ func flushOne(ctx context.Context, base string, token TokenFunc, newClient func(
 		}
 	case errors.Is(perr, ErrNotOwner):
 		return unsendable(outNotOurs)
+	case errors.Is(perr, ErrFatal):
+		// The deployment names an offset outside the spool. One answer does
+		// not delete the spool, but it is not retried for ever either: it
+		// goes once it is old enough, like any other spool that cannot be sent.
+		return unsendable(outPending)
 	case errors.Is(perr, ErrAuth):
 		return outAuth, ErrAuth
 	default:

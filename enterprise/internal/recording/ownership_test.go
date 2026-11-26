@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -464,4 +465,41 @@ func mustGlob(t *testing.T, pattern string) []string {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// A deployment that names an offset outside the spool when it is asked about the
+// recording does not make the flush retry the spool for ever: the spool is kept
+// for 30 days, as for any spool that cannot be sent, and then removed.
+func TestAFlushRemovesASpoolWhoseDeploymentNamesAnOffsetOutsideItAfterThirtyDays(t *testing.T) {
+	r, _ := leftoverRun(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"offset_mismatch","next_offset":1099511627776}`))
+	}))
+	t.Cleanup(srv.Close)
+	flush := func() FlushResult {
+		old := flushClock
+		flushClock = r.clk.Now
+		defer func() { flushClock = old }()
+		res, err := Flush(context.Background(), r.dir, func(string) (string, bool) { return "tok-secret", true },
+			func(url, tok string) *Client { return &Client{Base: srv.URL, Token: tok, HTTP: srv.Client()} })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	age := func(d time.Duration) {
+		old := r.clk.Now().Add(-d)
+		for _, p := range r.dirFiles() {
+			_ = os.Chtimes(p, old, old)
+		}
+	}
+	age(29 * 24 * time.Hour)
+	if res := flush(); res.Pending != 1 || res.Expired != 0 || res.Dropped != 0 || len(r.dirFiles()) != 2 {
+		t.Errorf("29 days: %+v files %v, want the spool kept", res, r.dirFiles())
+	}
+	age(31 * 24 * time.Hour)
+	if res := flush(); res.Expired != 1 || len(r.dirFiles()) != 0 {
+		t.Errorf("31 days: %+v files %v, want it removed as expired", res, r.dirFiles())
+	}
 }

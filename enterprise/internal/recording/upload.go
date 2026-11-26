@@ -418,7 +418,8 @@ var errProbe = errors.New("recording: the ownership check was not answered")
 // returns nil when it is, with Offset set to the position the deployment holds
 // (a 409 offset_mismatch names it); ErrRecordingClosed when the recording is
 // this login's and ended; ErrNotOwner when the deployment answers 404; ErrAuth
-// for 401 or 403; and errProbe for anything else, without retrying.
+// for 401 or 403; ErrFatal when it names an offset outside the spool; and
+// errProbe for anything else, without retrying.
 func (u *Uploader) Probe(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, OpenTimeout)
 	defer cancel()
@@ -445,7 +446,13 @@ func (u *Uploader) Probe(ctx context.Context) error {
 	default:
 		return errProbe
 	}
-	if u.resync(r.NextOffset) != nil {
+	if err := u.resync(r.NextOffset); err != nil {
+		if errors.Is(err, ErrFatal) {
+			// The deployment names an offset outside the spool. A later
+			// request may be answered differently, so this is not "pending
+			// for good" and not a reason to delete on one answer.
+			return err
+		}
 		return errProbe
 	}
 	return nil
