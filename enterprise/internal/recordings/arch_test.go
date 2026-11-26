@@ -32,6 +32,21 @@ const (
 // caller, in any other verb or in the recorder, would be a second place a
 // token could be read and sent from.
 func TestOnlyTheRecordingsGlueCallsAccessToken(t *testing.T) {
+	onlyRecordingsGlueCalls(t, "AccessToken", "the accessToken seam")
+}
+
+// Only the non-test files of this package call login.SignIn, once. SignIn is
+// the one other way to write the login store, so a second caller would be a
+// second place that could replace a person's token.
+func TestOnlyTheRecordingsGlueCallsSignIn(t *testing.T) {
+	onlyRecordingsGlueCalls(t, "SignIn", "the signIn seam")
+}
+
+// onlyRecordingsGlueCalls walks the non-test files of enterprise/ and fails
+// unless the only references to the exported name of the login package are one
+// in enterprise/internal/recordings.
+func onlyRecordingsGlueCalls(t *testing.T, name, seam string) {
+	t.Helper()
 	root := filepath.Join("..", "..") // enterprise/
 	calls := 0
 	err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
@@ -48,12 +63,12 @@ func TestOnlyTheRecordingsGlueCallsAccessToken(t *testing.T) {
 			return nil
 		}
 		dir := filepath.Dir(path)
-		// The accessor is defined in the login package; its own code is the
+		// The name is defined in the login package; its own code is the
 		// verbs' and not a caller of the exported function.
 		if dir == filepath.Join(root, "internal", "login") {
 			return nil
 		}
-		n, err := accessTokenReferences(path)
+		n, err := loginReferences(path, name)
 		if err != nil {
 			return err
 		}
@@ -62,7 +77,7 @@ func TestOnlyTheRecordingsGlueCallsAccessToken(t *testing.T) {
 			return nil
 		}
 		if n > 0 {
-			t.Errorf("%s calls login.AccessToken; only the non-test files of enterprise/internal/recordings may", path)
+			t.Errorf("%s calls login.%s; only the non-test files of enterprise/internal/recordings may", path, name)
 		}
 		return nil
 	})
@@ -70,14 +85,14 @@ func TestOnlyTheRecordingsGlueCallsAccessToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if calls != 1 {
-		t.Errorf("enterprise/internal/recordings refers to login.AccessToken %d times, want exactly once (the accessToken seam)", calls)
+		t.Errorf("enterprise/internal/recordings refers to login.%s %d times, want exactly once (%s)", name, calls, seam)
 	}
 }
 
-// accessTokenReferences counts the references in file to AccessToken of the
-// login package, under whatever name the file imports it, and reports a dot
-// import of it as a reference, since that hides the name.
-func accessTokenReferences(file string) (int, error) {
+// loginReferences counts the references in file to name of the login package,
+// under whatever name the file imports it, and reports a dot import of it as a
+// reference, since that hides the name.
+func loginReferences(file, name string) (int, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return 0, err
@@ -102,7 +117,7 @@ func accessTokenReferences(file string) (int, error) {
 		return n, nil
 	}
 	ast.Inspect(f, func(node ast.Node) bool {
-		if sel, ok := node.(*ast.SelectorExpr); ok && sel.Sel.Name == "AccessToken" {
+		if sel, ok := node.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
 			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
 				n++
 			}
