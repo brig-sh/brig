@@ -515,6 +515,9 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// which the runtime has been told a network, so it is the one point at
 	// which the record can say which one the sandbox has.
 	c.recordPosture()
+	// What booted, and under which check and policies, for `brig ls`. Only
+	// here, for the reason the posture above is recorded only here.
+	c.recordBoot()
 	// The share is bound now and cannot be changed on a live sandbox, so this
 	// is the moment the path becomes a fact about the instance. Recorded before
 	// the readiness wait for that reason: a sandbox that boots and never answers
@@ -983,6 +986,7 @@ func (c *Config) Remove() error {
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	ForgetBoot(c.VMName)
 	// And the approval of a target's session. A session removed and run again
 	// is a new session, and you approve it again. Dropped whether or not the
 	// runtime removed the sandbox: an approval is never worth keeping by

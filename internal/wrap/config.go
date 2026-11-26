@@ -221,6 +221,9 @@ type Config struct {
 	// verified (#234).
 	bundleRef    string
 	bundleDigest string
+	// imageCheck is what the guest image check of this run found, nil when
+	// none ran. The boot record reads it; see recordBoot.
+	imageCheck *verify.Result
 	// bundleRecord is the BRIG_BOOT_ASSETS directory when it holds the Linux
 	// runtime bundle's record. The record, not the boot bundle's signature,
 	// vouches for the files there, so verifyBootAssets leaves the signature

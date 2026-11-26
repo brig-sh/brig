@@ -102,6 +102,7 @@ func (c *Config) verifyImage() error {
 // not be the same bytes -- the limitation documented in docs/security.md.
 func (c *Config) verifyTag() error {
 	res := checkTag(c.VerifyPolicy, c.Image)
+	c.imageCheck = &res
 
 	switch res.Outcome {
 	case verify.Verified:
@@ -162,6 +163,7 @@ func (c *Config) verifyDigest() error {
 	// "no local copy" and raises no mismatch.
 	local, _ := c.Runtime.LocalDigest(c.Image)
 	res := checkDigest(c.VerifyPolicy, c.Image, local)
+	c.imageCheck = &res
 
 	switch res.Outcome {
 	case verify.Verified, verify.NotOurs:

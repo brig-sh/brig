@@ -1140,6 +1140,9 @@ If you publish signed images yourself, point `BRIG_VERIFY_REGISTRY`,
 `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER` at your own registry and
 workflow.
 
+`brig --json ls` keeps, for each sandbox, the digest it booted, the mode, the
+outcome and the trust policy of the check. See [`brig ls`](cli.md#brig-ls).
+
 ### Digest pinning
 
 Brig boots the bytes that cosign checked. Before the check, Brig resolves

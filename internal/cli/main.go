@@ -2344,6 +2344,7 @@ func pruneSessionIndex(kind string, list []runtime.Instance) {
 	live = append(live, wrap.SandboxesOfOtherRuntimes(kind)...)
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
+	wrap.PruneBoots(live)
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
@@ -2385,7 +2386,9 @@ func stateCell(r sandboxRow) string {
 // sits once beside the list rather than on every row -- it is the same runtime
 // for all of them -- and image is left out, unlike #7's sketch: it is not in
 // hand for a listing and loading every profile to fill it would make ls pay for
-// a column a reader can get from `brig info`. See sandboxListData.
+// a column a reader can get from `brig info`. What a sandbox actually booted
+// is a different fact, recorded at its boot, and each sandbox's boot carries
+// it. See sandboxListData.
 type sandboxListJSON struct {
 	Runtime   sandboxRuntimeJSON `json:"runtime"`
 	Sandboxes []sandboxJSON      `json:"sandboxes"`
@@ -2418,6 +2421,10 @@ type sandboxJSON struct {
 	// RecordedRuntime is the runtime the session is recorded on, set only
 	// when it is not the runtime that listed it. state is then other-runtime.
 	RecordedRuntime string `json:"recordedRuntime,omitempty"`
+	// Boot is what the sandbox was last booted with: the image digest, the
+	// signature decision and the policies bound. Omitted for a sandbox booted
+	// by a release that kept no record. See wrap.BootRecord.
+	Boot *wrap.BootRecord `json:"boot,omitempty"`
 }
 
 // sandboxProjectJSON is the session of a Brigfile target a sandbox carries.
@@ -2440,8 +2447,12 @@ func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
 	if rt != nil {
 		out.Runtime = sandboxRuntimeJSON{Kind: rt.Kind(), Bin: rt.Bin(), Available: true}
 	}
+	boots := wrap.BootRecords()
 	for _, r := range rows {
 		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace, RecordedRuntime: r.runtime}
+		if b, ok := boots[r.name]; ok {
+			s.Boot = &b
+		}
 		if r.projectSandbox {
 			s.Project = &sandboxProjectJSON{}
 			if ps := r.project; ps != nil {
@@ -2779,6 +2790,7 @@ func forgetSession(cfg *wrap.Config, ref, command string, dryRun bool, forgetPro
 		return fmt.Errorf("brig could not forget the session of %s: %w", ref, err)
 	}
 	runtime.ForgetBootedNet(cfg.VMName)
+	wrap.ForgetBoot(cfg.VMName)
 	wrap.ForgetSlugClaim(cfg.VMName)
 	warnf("%s", notes(notice.New("forgot "+ref+", which "+other.Recorded+" booted; no sandbox was touched"), stays))
 	return nil
@@ -2871,6 +2883,7 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 						"but brig could not forget its session: %w", ref, err)
 				}
 				runtime.ForgetBootedNet(cfg.VMName)
+				wrap.ForgetBoot(cfg.VMName)
 				wrap.ForgetSlugClaim(cfg.VMName)
 				if forgot {
 					for _, n := range stays {
@@ -3083,6 +3096,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		wrap.ForgetSlugClaim(inst.Name)
 		runtime.ForgetPublications(inst.Name)
 		runtime.ForgetBootedNet(inst.Name)
+		wrap.ForgetBoot(inst.Name)
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue
@@ -3136,6 +3150,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	// given a port and never booted, and for the network each one booted on.
 	runtime.PrunePublications(live)
 	runtime.PruneBootedNets(live)
+	wrap.PruneBoots(live)
 	return nil
 }
 
