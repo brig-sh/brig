@@ -46,8 +46,9 @@
 // brig login for that deployment (login.SignIn: the same flow, the same
 // questions about a trust store, the same storage), reads the token again and
 // goes on as a signed-in run does. A sign-in that fails, times out or is ended
-// with Ctrl-C prints one line, and the run goes unrecorded. Ctrl-C ends the
-// sign-in only. A run that cannot be recorded for the local rules above never
+// with Ctrl-C prints one line, and the run goes unrecorded. Everything the
+// pause prints goes to stderr, or to stdout when stderr is not a terminal, so
+// the person always sees it. Ctrl-C ends the sign-in only. A run that cannot be recorded for the local rules above never
 // pauses and never starts a sign-in.
 //
 // # The token
@@ -200,12 +201,12 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	if timedOut {
 		// The keychain did not answer, for example a locked one waiting on an
 		// unlock prompt nobody sees. Say so when the exec is about to run.
-		return func(argv, env []string) (int, error) { return 0, declineKeyring() }
+		return func(argv, env []string) (int, error) { return 0, declineKeyring(notice) }
 	}
 	if unaccepted != "" {
 		// A signed-in person whose trust store was not accepted at sign-in. The
 		// relay says so once the exec is about to run, and the run goes on.
-		return func(argv, env []string) (int, error) { return 0, declineUnaccepted(unaccepted) }
+		return func(argv, env []string) (int, error) { return 0, declineUnaccepted(notice, unaccepted) }
 	}
 	if token == "" && !expired {
 		return nil
@@ -218,18 +219,19 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 		// The sign-in ran out. Pause before the command starts and sign the
 		// person in again, so the run can be recorded.
 		return func(argv, env []string) (int, error) {
-			fmt.Fprintf(notice, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded\n", d)
-			if err := signIn(notice, d); err != nil {
-				return 0, declineSignIn()
+			w := pauseWriter()
+			fmt.Fprintf(w, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded\n", d)
+			if err := signIn(w, d); err != nil {
+				return 0, declineSignIn(w)
 			}
 			tok, unaccepted, timedOut, _ := accessToken(d, login.KeyringWait)
 			switch {
 			case timedOut:
-				return 0, declineKeyring()
+				return 0, declineKeyring(w)
 			case unaccepted != "":
-				return 0, declineUnaccepted(unaccepted)
+				return 0, declineUnaccepted(w, unaccepted)
 			case tok == "":
-				return 0, declineSignIn()
+				return 0, declineSignIn(w)
 			}
 			return record(run, d, tok, state)(argv, env)
 		}
@@ -237,22 +239,35 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	return record(run, d, token, state)
 }
 
+// pauseWriter is where the pause for an expired sign-in prints: the lines of
+// the pause, everything the sign-in prints and asks, and the line when it did
+// not finish. It is notice, except when notice is a file that is not a
+// terminal, such as stderr sent to /dev/null or a log. The person must see the
+// pause, so it goes to stdout then, which Attach checked is the terminal the
+// run uses.
+func pauseWriter() io.Writer {
+	if f, ok := notice.(*os.File); ok && !isTerminal(f) {
+		return os.Stdout
+	}
+	return notice
+}
+
 // declineSignIn is the line of a run whose sign-in did not finish, and the
 // decline that hands the run over unrecorded.
-func declineSignIn() error {
-	fmt.Fprintln(notice, "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in")
+func declineSignIn(w io.Writer) error {
+	fmt.Fprintln(w, "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in")
 	return cli.ErrRelayDeclined
 }
 
 // declineKeyring is the line of a run whose keychain did not answer.
-func declineKeyring() error {
-	fmt.Fprintf(notice, "brig: could not read your login within %d seconds, so this run is not recorded\n", int(login.KeyringWait/time.Second))
+func declineKeyring(w io.Writer) error {
+	fmt.Fprintf(w, "brig: could not read your login within %d seconds, so this run is not recorded\n", int(login.KeyringWait/time.Second))
 	return cli.ErrRelayDeclined
 }
 
 // declineUnaccepted is the line of a run whose trust store was not accepted.
-func declineUnaccepted(v string) error {
-	fmt.Fprintf(notice, "brig: could not check whether this run is recorded: %s is set and was not accepted when you signed in. Run `brig login` to accept it\n", v)
+func declineUnaccepted(w io.Writer, v string) error {
+	fmt.Fprintf(w, "brig: could not check whether this run is recorded: %s is set and was not accepted when you signed in. Run `brig login` to accept it\n", v)
 	return cli.ErrRelayDeclined
 }
 

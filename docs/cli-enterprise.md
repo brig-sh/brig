@@ -222,6 +222,10 @@ the run goes on unrecorded:
 brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in
 ```
 
+These lines, the sign-in's own output and its questions go to stderr. When
+stderr is not a terminal, for example with `2>/dev/null` or `2>err.log`, they go
+to the terminal the run uses instead, so the pause is always on your screen.
+
 Ctrl-C ends the sign-in and nothing else. It does not end Brig, and the command
 does not receive it. While a question waits for your answer, Ctrl-C takes effect
 once you answer. Brig does not pause or sign you in for a run that cannot be
