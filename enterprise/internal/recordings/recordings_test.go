@@ -34,23 +34,28 @@ type logins struct {
 	items map[string]string
 	// trust is what the person accepted at login for each deployment.
 	trust map[string]map[string]string
-	asked []string
+	// expired marks the deployments whose stored login has run out.
+	expired map[string]bool
+	asked   []string
 }
 
 // token answers as login.AccessToken does for a stored, unexpired login, with
 // the rule that decides on the trust store taken from the login package.
-func (l *logins) token(d nofireauth.Deployment, _ time.Duration) (string, string, bool) {
+func (l *logins) token(d nofireauth.Deployment, _ time.Duration) (string, string, bool, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.asked = append(l.asked, d.String())
 	tok := l.items[d.String()]
 	if tok == "" {
-		return "", "", false
+		return "", "", false, false
+	}
+	if l.expired[d.String()] {
+		return "", "", false, true
 	}
 	if v := login.UnacceptedTrust(l.trust[d.String()], os.Getenv); v != "" {
-		return "", v, false
+		return "", v, false, false
 	}
-	return tok, "", false
+	return tok, "", false, false
 }
 
 // recHost wires the gate to a fake deployment, an in-memory login store and a
@@ -64,12 +69,16 @@ type recHost struct {
 
 func newRecHost(t *testing.T) *recHost {
 	t.Helper()
-	h := &recHost{srv: recordingtest.New(t, recToken), logins: &logins{items: map[string]string{}, trust: map[string]map[string]string{}},
+	h := &recHost{srv: recordingtest.New(t, recToken), logins: &logins{items: map[string]string{}, trust: map[string]map[string]string{}, expired: map[string]bool{}},
 		state: filepath.Join(t.TempDir(), "state"), notice: &bytes.Buffer{}}
 	t.Setenv(nofireauth.EnvURL, h.srv.URL())
 	t.Setenv("SSL_CERT_FILE", "")
 	t.Setenv("SSL_CERT_DIR", "")
-	oldTok, oldH, oldS, oldN, oldT, oldSame := accessToken, httpClient, stateDir, notice, isTerminal, sameTerminal
+	oldTok, oldH, oldS, oldN, oldT, oldSame, oldSign := accessToken, httpClient, stateDir, notice, isTerminal, sameTerminal, signIn
+	signIn = func(io.Writer, nofireauth.Deployment) error {
+		t.Error("a sign-in was started")
+		return errors.New("unexpected sign-in")
+	}
 	isTerminal = func(*os.File) bool { return true }
 	sameTerminal = func(a, b *os.File) bool { return true }
 	accessToken = h.logins.token
@@ -77,7 +86,7 @@ func newRecHost(t *testing.T) *recHost {
 	stateDir = func() string { return h.state }
 	notice = h.notice
 	t.Cleanup(func() {
-		accessToken, httpClient, stateDir, notice, isTerminal, sameTerminal = oldTok, oldH, oldS, oldN, oldT, oldSame
+		accessToken, httpClient, stateDir, notice, isTerminal, sameTerminal, signIn = oldTok, oldH, oldS, oldN, oldT, oldSame, oldSign
 	})
 	return h
 }
@@ -118,7 +127,7 @@ func TestGateWithoutALoginTouchesNothing(t *testing.T) {
 	cases := map[string]func(h *recHost){
 		"no token": func(h *recHost) {},
 		"a token the store reads as unusable": func(h *recHost) {
-			accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool) { return "", "", false }
+			accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool, bool) { return "", "", false, false }
 		},
 	}
 	for name, setup := range cases {
@@ -518,7 +527,7 @@ func TestTokenForSpoolSaysWhetherTheURLCouldEverHaveAToken(t *testing.T) {
 func TestAKeychainThatDoesNotAnswerLeavesTheRunUnrecordedWithOneLine(t *testing.T) {
 	h := newRecHost(t)
 	h.signIn(t)
-	accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool) { return "", "", true }
+	accessToken = func(nofireauth.Deployment, time.Duration) (string, string, bool, bool) { return "", "", true, false }
 	relay := Attach(hullRun())
 	if relay == nil {
 		t.Fatal("no relay, so no line")

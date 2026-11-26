@@ -98,8 +98,11 @@ func TestOnlyTheLoginStoreNamesItsService(t *testing.T) {
 // and none of the code that starts a run in the core, can open it. That file
 // serves two callers: the login verbs, and the session recorder through
 // login.AccessToken, which returns the stored token of one deployment, or the
-// name of the environment variable that stops it being used, and does nothing
-// else. The recorder is the one place that reads the token during a
+// name of the environment variable that stops it being used, or that the
+// stored login has expired, and does nothing else. The recorder also starts
+// login.SignIn, which is brig login's own sign-in, for a deployment whose
+// login expired, and the code that writes the store is the same code. The
+// recorder is the one place that reads the token during a
 // run. The tests of enterprise/internal/recordings pin that it is the only
 // caller of the accessor and that the recorder itself cannot import the store.
 func TestOnlyTheLoginVerbReachesTheLoginStore(t *testing.T) {
