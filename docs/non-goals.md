@@ -78,7 +78,9 @@ recording](cli-enterprise.md#session-recording), which your organization
 turns on at the deployment. A run whose input or output is not a terminal, or
 whose stdin and stdout are different terminals, is not recorded and runs
 exactly as it does without recording, and so is a run on a runtime other than
-hull. Brig Community has no account. `brig run`, `brig sh` and every other verb
+hull. A run that could be recorded, with an expired sign-in, pauses before the
+command starts and signs you in again, and runs unrecorded if you do not
+finish. Brig Community has no account. `brig run`, `brig sh` and every other verb
 work without an account.
 
 Every piece of state a run needs is still on your disk:

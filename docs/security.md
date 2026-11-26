@@ -1509,8 +1509,26 @@ names the variable, never its value, and says that `brig login` accepts it. A
 run that is not a terminal session, and a person who is not signed in, get no
 line.
 
+**An expired sign-in.** The token has a lifetime and there is no refresh
+token. A terminal run on hull whose stored token for the deployment has expired
+pauses before the command starts, prints a line that names the deployment, and
+runs the sign-in `brig login` runs, in the same code: the same flow, the same
+questions about a deployment from `BRIG_NOFIRE_URL` and about a trust store from
+the environment, the same storage and the default lifetime. That sign-in is the
+one other place Brig writes the login store, and it writes it only for the
+deployment whose token expired. If it succeeds, the run goes on as a signed-in
+run does. If it fails, times out or you press Ctrl-C, Brig prints one line that
+says the sign-in did not finish and names `brig login`, sends nothing to the
+recording routes, and the run goes unrecorded. Ctrl-C ends the sign-in only: it
+does not end Brig and the command does not receive it, and a signal Brig
+inherited as ignored is ignored again afterwards. A run that cannot be recorded
+for any local reason, such as a pipe, two terminals, another runtime or
+`--json`, does not pause and starts no sign-in.
+
 **The token.** A recorded run reads the login token. One small package of
-Brig Enterprise reads it and hands it to the recorder as a value. The
+Brig Enterprise reads it and hands it to the recorder as a value. It learns
+that a stored token has expired and nothing else about a login it cannot use.
+The
 recorder cannot open the login store. The token still never reaches a
 sandbox. The token is not in the argv or the environment of the recorded
 command, in the spool, or in anything Brig prints. A recording is sent only to
@@ -1565,8 +1583,9 @@ Limits:
   not tamper-proof evidence of what happened.
 - A run is recorded only when these hold: it is a terminal session, which is
   `brig run` or `brig sh` on hull with your stdin and stdout on the same
-  terminal; you are signed in to the deployment; and no trust-store variable
-  was left unaccepted. These are not recorded: a run whose stdin or stdout is a
+  terminal; you are signed in to the deployment, or your sign-in expired and
+  you finish the sign-in Brig starts; and no trust-store variable was left
+  unaccepted. These are not recorded: a run whose stdin or stdout is a
   pipe or a file, or whose stdin and stdout are different terminals; a run on a
   runtime other than hull, which `BRIG_RUNTIME` can select; a run under
   `--json`, with `--detach`, or for a GUI agent; `brig exec`, which hands over <!-- retired-ok -->
