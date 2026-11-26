@@ -1521,7 +1521,9 @@ run does. If it fails, times out or you press Ctrl-C, Brig prints one line that
 says the sign-in did not finish and names `brig login`, sends nothing to the
 recording routes, and the run goes unrecorded. Ctrl-C ends the sign-in only: it
 does not end Brig and the command does not receive it. The line says that Ctrl-C
-runs the command without recording. A run that cannot be
+runs the command without recording. The sign-in waits at most 30 seconds for each
+keychain call, and Ctrl-C ends the wait. A token that is not stored by then is
+revoked, and the sign-in has failed. A run that cannot be
 recorded for any local reason, such as a pipe, two terminals, another runtime
 or `--json`, does not pause and starts no sign-in. The pause is always on the
 terminal the run uses: when stderr is not a terminal, everything the pause

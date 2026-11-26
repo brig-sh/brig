@@ -5,6 +5,7 @@ package login
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -319,5 +320,113 @@ func TestSignInWritesQuestionsAndNotesToItsWriterAndNotToStderr(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("stderr got %q", stderr)
+	}
+}
+
+// slowStore blocks a keychain call until the test releases it, as a keychain
+// does that waits on an unlock prompt nobody sees. Its backend takes no
+// context, so only the bound SignIn puts around the call can end the wait.
+type slowStore struct {
+	*memLogins
+	blockSave bool
+	release   chan struct{}
+}
+
+func (s *slowStore) Save(t login.Token) error {
+	if s.blockSave {
+		<-s.release
+	}
+	return s.memLogins.Save(t)
+}
+
+// signInHost sets up an expired login, a device flow and the answer to the
+// question about a deployment from the environment.
+func signInHost(t *testing.T) (*memLogins, *fakeas.Server) {
+	t.Helper()
+	m := loginHost(t)
+	s := fakeDeployment(t, fakeas.Options{})
+	expiredLogin(m, s.URL)
+	t.Setenv(nofireauth.EnvURL, s.URL)
+	t.Setenv("SSH_CONNECTION", "1.2.3.4 1 5.6.7.8 22")
+	master := terminalStdin(t)
+	if _, err := master.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	return m, s
+}
+
+// A keychain that does not finish the save does not hold the sign-in for ever:
+// the sign-in fails after the bound, the token the deployment issued is
+// revoked, and nothing waits on the keychain.
+func TestSignInEndsWhenTheKeychainDoesNotFinishTheSave(t *testing.T) {
+	m, s := signInHost(t)
+	st := &slowStore{memLogins: m, blockSave: true, release: make(chan struct{})}
+	t.Cleanup(func() { close(st.release) })
+	openLoginStore = func() (login.Store, error) { return st, nil }
+	old := signInKeychainWait
+	signInKeychainWait = 300 * time.Millisecond
+	t.Cleanup(func() { signInKeychainWait = old })
+
+	var err error
+	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if err == nil || !strings.Contains(err.Error(), "cannot store the token") || !strings.Contains(err.Error(), "did not answer") || !strings.Contains(err.Error(), "Brig revoked the token") {
+		t.Fatalf("err = %v, want the keychain not answering, and the token revoked", err)
+	}
+	issued := s.Issued()
+	if len(issued) != 1 || !slices.Contains(s.Revoked(), issued[0]) {
+		t.Errorf("issued %v, revoked %v; want the new token revoked", issued, s.Revoked())
+	}
+}
+
+// Ctrl-C while the keychain blocks on the save ends the sign-in at once, and
+// revokes the token, instead of being caught and dropped.
+func TestCtrlCEndsASignInThatWaitsOnTheKeychain(t *testing.T) {
+	m, s := signInHost(t)
+	st := &slowStore{memLogins: m, blockSave: true, release: make(chan struct{})}
+	t.Cleanup(func() { close(st.release) })
+	openLoginStore = func() (login.Store, error) { return st, nil }
+	old := signInKeychainWait
+	signInKeychainWait = 10 * time.Second
+	t.Cleanup(func() { signInKeychainWait = old })
+	openBrowser = nil
+	go func() {
+		// Once the token is issued the sign-in is in the blocked save.
+		for len(s.Issued()) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	}()
+	start := time.Now()
+	var err error
+	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if err == nil || !strings.Contains(err.Error(), "Brig revoked the token") {
+		t.Fatalf("err = %v, want the sign-in ended and the token revoked", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("the sign-in took %s after Ctrl-C", time.Since(start))
+	}
+	if issued := s.Issued(); !slices.Contains(s.Revoked(), issued[0]) {
+		t.Errorf("issued %v, revoked %v", issued, s.Revoked())
+	}
+}
+
+// A keychain that does not open ends the sign-in before the deployment is
+// contacted.
+func TestSignInEndsWhenTheKeychainDoesNotOpen(t *testing.T) {
+	_, s := signInHost(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	openLoginStore = func() (login.Store, error) { <-release; return nil, errors.New("late") }
+	old := signInKeychainWait
+	signInKeychainWait = 300 * time.Millisecond
+	t.Cleanup(func() { signInKeychainWait = old })
+	var err error
+	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("err = %v, want the keychain not answering", err)
+	}
+	if r := s.Requests(); len(r) != 0 {
+		t.Errorf("the deployment was contacted: %v", r)
 	}
 }
