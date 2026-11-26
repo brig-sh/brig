@@ -430,13 +430,20 @@ func (s *Session) abandon() {
 
 // liveLoop uploads on every tick until ctx ends or uploading stops for good: the
 // server refused the recording, the login was refused, or recording stopped.
+// A recording the server refused is stopped at once, as for an answer of
+// "recorded false": the spool is removed and nothing more is written to it.
 func (s *Session) liveLoop(ctx context.Context, ticks <-chan time.Time) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			if err := s.tick(ctx); errors.Is(err, ErrFatal) || errors.Is(err, ErrAuth) || errors.Is(err, errStopped) || errors.Is(err, errGiveUp) {
+			err := s.tick(ctx)
+			if errors.Is(err, ErrFatal) {
+				s.stop("the deployment refused the recording")
+				return
+			}
+			if errors.Is(err, ErrAuth) || errors.Is(err, errStopped) || errors.Is(err, errGiveUp) {
 				return
 			}
 		}

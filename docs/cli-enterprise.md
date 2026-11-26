@@ -223,12 +223,13 @@ line for each thing that happened:
 - ``brig: the end of this run's recording is still on this machine; the next
   recorded run or `brig recordings flush` will send it``
 - `brig: recording stopped before the run ended (<reason>); output after
-  <time> is not recorded`
+  <time> is not recorded`, also when the deployment refused the recording
+  while the run went on
 - `brig: this run is not recorded after all: Brig could not set up the recorder`,
   when the recorder could not start the command. The run then goes on as an
   unrecorded run
 - `brig: this run's recording stopped and the rest of it was not sent`, when
-  the deployment refused the recording
+  the deployment refused the recording as the run ended
 - `brig: the deployment refused your login, so the rest of this run's recording
   was not sent; sign in again with `brig login`, then run `brig recordings
   flush``, in place of the line about the next recorded run

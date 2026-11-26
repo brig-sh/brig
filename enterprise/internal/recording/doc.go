@@ -121,13 +121,14 @@
 // interrupted and continues in another, that the end of the run's recording is
 // still on this machine and will be sent by the next recorded run or by `brig
 // recordings flush`, that recording stopped and from what time the output is not
-// recorded, that the spool cap or a write error ended the recording part way
-// through the run, that the deployment refused the recording and the rest was
-// not sent,
-// that the deployment refused the login and `brig login` is needed (in place of
-// the line about the next recorded run), that the background flush sent the rest
-// of n earlier recordings, or that it removed n earlier recordings without
-// sending them.
+// recorded (which a deployment that refuses the recording while the run goes on
+// causes too: the spool is removed at once and nothing more is written), that
+// the spool cap or a write error ended the recording part way through the run,
+// that the deployment refused the recording as the run ended and the rest was
+// not sent, that the deployment refused the login and `brig login` is needed
+// (in place of the line about the next recorded run), that the background flush
+// sent the rest of n earlier recordings, or that it removed n earlier
+// recordings without sending them.
 //
 // # A deployment that does not let the upload move
 //
