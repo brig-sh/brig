@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -851,6 +852,10 @@ type flushOpts struct {
 	// stopOnAuth ends the flush at the first spool the deployment refuses the
 	// login for, instead of trying the rest.
 	stopOnAuth bool
+	// progress, when set, is called with the counts so far after each spool is
+	// settled, so a caller that stops waiting for the flush still knows what is
+	// done.
+	progress func(FlushResult)
 }
 
 // Flush ships every spool in dir that has an open recording and closes it. A
@@ -883,6 +888,9 @@ func flushDir(ctx context.Context, dir string, token TokenFunc, newClient func(u
 		return res, nil
 	}
 	res.Expired += sweepOrphans(spools)
+	if o.progress != nil {
+		o.progress(res)
+	}
 	for _, mp := range metas {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -911,6 +919,9 @@ func flushDir(ctx context.Context, dir string, token TokenFunc, newClient func(u
 			res.Expired++
 		case err != nil || out == outPending:
 			res.Pending++
+		}
+		if o.progress != nil {
+			o.progress(res)
 		}
 	}
 	return res, nil
@@ -984,6 +995,12 @@ func spoolExpired(f *os.File) bool {
 // removed without being sent, and spools removed for their age.
 type earlierResult struct{ Closed, Dropped, Expired int }
 
+// earlierWait is how long the end of a run waits for the background flush to
+// stop after it is cancelled. A flush that is still busy then, in a keychain
+// read for instance, goes on in the background, and what it finished by then is
+// reported.
+var earlierWait = 2 * time.Second
+
 func (s *Session) startEarlier() func() earlierResult {
 	if s.p.Token == nil || s.p.NewClient == nil {
 		return func() earlierResult { return earlierResult{} }
@@ -991,8 +1008,18 @@ func (s *Session) startEarlier() func() earlierResult {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan earlierResult, 1)
 	own := strings.TrimSuffix(filepath.Base(s.paths[1]), metaExt)
+	// The flush can be stuck past the wait below, in a token read that waits
+	// for the keychain, so it saves its counts as it goes and the wait returns
+	// what is done by then.
+	var mu sync.Mutex
+	var sofar earlierResult
+	progress := func(r FlushResult) {
+		mu.Lock()
+		sofar = earlierResult{r.Closed, r.Dropped, r.Expired}
+		mu.Unlock()
+	}
 	go func() {
-		res, _ := flushDir(ctx, s.p.Dir, s.p.Token, s.p.NewClient, flushOpts{skip: own, stopOnAuth: true})
+		res, _ := flushDir(ctx, s.p.Dir, s.p.Token, s.p.NewClient, flushOpts{skip: own, stopOnAuth: true, progress: progress})
 		done <- earlierResult{res.Closed, res.Dropped, res.Expired}
 	}()
 	return func() earlierResult {
@@ -1000,8 +1027,10 @@ func (s *Session) startEarlier() func() earlierResult {
 		select {
 		case n := <-done:
 			return n
-		case <-time.After(2 * time.Second):
-			return earlierResult{}
+		case <-time.After(earlierWait):
+			mu.Lock()
+			defer mu.Unlock()
+			return sofar
 		}
 	}
 }

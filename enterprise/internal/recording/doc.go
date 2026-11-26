@@ -77,7 +77,10 @@
 // with the rules of `brig recordings flush`: the same loop guard, and a refused
 // login ends it quietly. It never delays the start of the run, prints nothing
 // while the run goes on, and is cancelled when the run ends, which leaves each
-// spool as resumable as before. It skips this run's own spool and any spool a
+// spool as resumable as before. The end of the run waits 2 seconds for it to
+// stop. A flush still stuck then, in a slow keychain read for instance, goes on
+// in the background, and the run reports the recordings it had finished by then.
+// It skips this run's own spool and any spool a
 // live recorder holds, which it tells by the shared lock that a live recorder's
 // exclusive lock refuses. A run keeps that lock until it has removed its spool or
 // decided to leave it, so no other process sends a spool that is still draining.

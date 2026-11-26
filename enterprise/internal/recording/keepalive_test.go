@@ -1132,6 +1132,80 @@ func TestEndingTheRunCancelsAFlushWithoutLossOrDuplicates(t *testing.T) {
 	}
 }
 
+// A background flush that is stuck in a token read, as when the keychain is
+// slow to answer, when the run ends still reports the recordings it finished
+// before it got stuck. The wait for it does not grow.
+func TestEndingTheRunReportsWhatAStuckFlushHadFinished(t *testing.T) {
+	r1, _ := leftoverRun(t)
+	r2, _ := leftoverRun(t)
+	// Both leftovers go in one directory; each is on its own fake deployment.
+	for _, p := range r2.dirFiles() {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(r1.dir, filepath.Base(p)), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nc := func(url, tok string) *Client {
+		if url == r2.f.URL() {
+			return fakeClient(r2.f)
+		}
+		return fakeClient(r1.f)
+	}
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	token := func(string) (string, bool) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n > 1 {
+			<-release // the keychain has not answered
+		}
+		return "tok-secret", true
+	}
+	defer close(release)
+	old := earlierWait
+	earlierWait = 500 * time.Millisecond
+	defer func() { earlierWait = old }()
+
+	p := beginParams(r1.f, t.TempDir())
+	p.Dir = r1.dir
+	p.Token, p.NewClient = token, nc
+	s, err := Begin(context.Background(), p)
+	if err != nil || s == nil {
+		t.Fatalf("begin: %v %v", s, err)
+	}
+	defer func() {
+		s.rec.Abort()
+		s.rec.Close()
+	}()
+	stop := s.startEarlier()
+	// The second token read is the one that sticks, so the first spool is done.
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		mu.Lock()
+		n := calls
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the flush never reached the second spool")
+		}
+	}
+	start := time.Now()
+	got := stop()
+	if got.Closed != 1 {
+		t.Errorf("the run reported %+v, want the 1 recording the flush finished", got)
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Errorf("the end of the run waited %v", el)
+	}
+}
+
 func TestNoBackgroundFlushWhenTheOpenIsNotRecordedOrFails(t *testing.T) {
 	r, _ := leftoverRun(t)
 	puts := len(r.f.Puts())
