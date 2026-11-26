@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,7 +42,11 @@ func (g *gate) RoundTrip(r *http.Request) (*http.Response, error) {
 	g.mu.Unlock()
 	if held {
 		g.waiting <- struct{}{}
-		<-g.open
+		select {
+		case <-g.open:
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
 	}
 	return g.next.RoundTrip(r)
 }
@@ -399,4 +404,64 @@ func TestASpoolWhoseURLCanNeverHaveATokenAgesOut(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A signal that arrives after the command has ended, while Brig drains the
+// upload, ends the drain early. Brig exits with the command's own status and not
+// with the signal's, and the spool stays for a later flush.
+func TestASignalDuringTheDrainEndsItAndTheRunKeepsTheCommandsStatus(t *testing.T) {
+	f := newFake(t)
+	g := newGate(f.Client().Transport)
+	c := &Client{Base: f.URL(), Token: "tok-secret", HTTP: &http.Client{Transport: g}, UserAgent: "brig-test"}
+	dir := t.TempDir()
+	p := beginParams(f, dir)
+	p.Client, p.FlushEvery, p.DrainTimeout = c, time.Hour, 30*time.Second
+	in, _ := os.Open(os.DevNull)
+	out, _ := os.Create(filepath.Join(t.TempDir(), "out"))
+	p.In, p.Out = in, out
+	notice := &bytes.Buffer{}
+	p.Notice = notice
+	s, err := Begin(context.Background(), p)
+	if err != nil || s == nil {
+		t.Fatalf("begin: %v %v", s, err)
+	}
+	g.close() // from here the drain's first request waits
+	go func() {
+		<-g.waiting // the command has ended and the drain is on the wire
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	}()
+	type res struct {
+		code int
+		err  error
+	}
+	done := make(chan res, 1)
+	go func() {
+		code, err := s.Run([]string{"sh", "-c", "exit 7"}, os.Environ())
+		done <- res{code, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil || r.code != 7 {
+			t.Errorf("Run = %d, %v; want the command's status 7", r.code, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		close(g.open)
+		t.Fatal("a signal did not end the drain")
+	}
+	close(g.open)
+	if files := filepath.Join(dir, "*"); len(mustGlob(t, files)) != 2 {
+		t.Errorf("the spool must stay: %v", mustGlob(t, files))
+	}
+	if !strings.Contains(notice.String(), leftoverNotice) {
+		t.Errorf("closing lines %q", notice.String())
+	}
+}
+
+func mustGlob(t *testing.T, pattern string) []string {
+	t.Helper()
+	m, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

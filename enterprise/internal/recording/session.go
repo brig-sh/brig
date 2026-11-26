@@ -14,8 +14,10 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -214,6 +216,8 @@ type Session struct {
 	// deployment refused the login at the end, so the spool waits for
 	// `brig login`.
 	fatal, authRefused bool
+	// interrupt is closed when a signal arrives after the command has ended.
+	interrupt chan struct{}
 	// notStarted: the command could not be started on the relay, so the run is
 	// not recorded after all.
 	notStarted bool
@@ -327,8 +331,40 @@ func (s *Session) Run(argv, env []string) (int, error) {
 		s.liveLoop(liveCtx, ticker.C)
 	}()
 
+	// The relay takes SIGINT, SIGTERM and SIGHUP while the command runs and
+	// forwards them. When the command has ended it stops, and brig stays up for
+	// the drain. Signals are taken here from before the command starts, so no
+	// window is left where the default action would end brig, and what arrived
+	// while the command ran, which the relay forwarded, is dropped when it ends.
+	// A signal that was inherited as ignored stays ignored.
+	sigs := make(chan os.Signal, 8)
+	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(sig) {
+			signal.Notify(sigs, sig)
+		}
+	}
+	defer signal.Stop(sigs)
+
 	res, err := ptyrelay.Run(cmd, ptyrelay.Options{In: s.p.In, Out: s.p.Out, Err: s.p.Err, Tap: s.rec})
 	end := time.Now()
+	for drained := false; !drained; {
+		select {
+		case <-sigs:
+		default:
+			drained = true
+		}
+	}
+	interrupt := make(chan struct{})
+	s.interrupt = interrupt
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-sigs:
+			close(interrupt)
+		case <-stopWatch:
+		}
+	}()
 
 	stopLive()
 	<-liveDone
@@ -402,6 +438,17 @@ func (s *Session) finish(reason string, code *int, sig string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
+	// A signal that arrives after the command has ended ends the drain early.
+	// The spool stays for a later flush, with the usual closing line.
+	if s.interrupt != nil {
+		go func() {
+			select {
+			case <-s.interrupt:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 	req := CloseRequest{EndReason: reason, ExitCode: code, Signal: sig}
 	var err error
 	for {
