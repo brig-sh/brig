@@ -7,6 +7,7 @@ package ptyrelay
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,6 +23,17 @@ const (
 	drainIdle   = 50 * time.Millisecond
 	teeFlushMax = 2 * time.Second // how long close waits for a slow Tap
 )
+
+// ErrNotStarted is wrapped by every error Run returns before the command has
+// been started: no pseudo-terminal, no pipe, or the command could not start.
+// Nothing has run and the person's terminal is as it was, so the caller can run
+// the command without the relay. An error without it came after the command ran.
+var ErrNotStarted = errors.New("ptyrelay: the command was not started")
+
+func notStarted(err error) error { return fmt.Errorf("%w: %v", ErrNotStarted, err) }
+
+// openPty is OpenPty; a test replaces it.
+var openPty = OpenPty
 
 // Run starts cmd with a new pseudo-terminal as its stdin, stdout and controlling
 // terminal, and relays until cmd ends. cmd.Stdin, Stdout, Stderr and
@@ -54,9 +66,9 @@ func Run(cmd *exec.Cmd, opt Options) (Result, error) {
 		errOut = os.Stderr
 	}
 
-	master, slave, err := OpenPty()
+	master, slave, err := openPty()
 	if err != nil {
-		return Result{}, err
+		return Result{}, notStarted(err)
 	}
 	defer master.Close()
 	slaveOpen := true
@@ -127,8 +139,25 @@ func Run(cmd *exec.Cmd, opt Options) (Result, error) {
 		cmd.Stderr = errOut
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+
+	// Everything that can fail is set up before the command starts, and before
+	// the person's terminal is touched, so a failure leaves nothing to undo and
+	// the caller can run the command without the relay.
+	var wakeIn, wakeOut [2]int
+	if err := unix.Pipe(wakeIn[:]); err != nil {
+		tap.close(time.Now())
+		return Result{}, notStarted(err)
+	}
+	defer closeAll(wakeIn[:])
+	if err := unix.Pipe(wakeOut[:]); err != nil {
+		tap.close(time.Now())
+		return Result{}, notStarted(err)
+	}
+	defer closeAll(wakeOut[:])
+
 	if err := cmd.Start(); err != nil {
-		return Result{}, err
+		tap.close(time.Now())
+		return Result{}, notStarted(err)
 	}
 	_ = slave.Close()
 	slaveOpen = false
@@ -140,21 +169,6 @@ func Run(cmd *exec.Cmd, opt Options) (Result, error) {
 		}
 	}
 	defer func() { restore() }()
-
-	var wakeIn, wakeOut [2]int
-	if err := unix.Pipe(wakeIn[:]); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return Result{}, err
-	}
-	if err := unix.Pipe(wakeOut[:]); err != nil {
-		closeAll(wakeIn[:])
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return Result{}, err
-	}
-	defer closeAll(wakeIn[:])
-	defer closeAll(wakeOut[:])
 
 	var wg sync.WaitGroup
 	tee := tap

@@ -7,6 +7,7 @@ package ptyrelay
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -580,5 +581,40 @@ func TestInheritedIgnoresStayIgnoredForHangupAndInterrupt(t *testing.T) {
 	want := fmt.Sprintf("%d=true %d=true %d=false %d=false ", int(syscall.SIGHUP), int(syscall.SIGINT), int(syscall.SIGQUIT), int(syscall.SIGTERM))
 	if string(b) != want {
 		t.Errorf("during the run: %q, want %q", b, want)
+	}
+}
+
+// A failure before the command starts is reported as ErrNotStarted, leaves the
+// person's terminal as it was and runs nothing, so the caller can run the
+// command without the relay.
+func TestARelayThatCannotSetUpReportsNotStartedAndTouchesNothing(t *testing.T) {
+	o := newOuter(t, 24, 80)
+	before := o.termios(t)
+	marker := t.TempDir() + "/ran"
+	for name, setup := range map[string]func(t *testing.T){
+		"no pseudo-terminal": func(t *testing.T) {
+			old := openPty
+			openPty = func() (*os.File, *os.File, error) { return nil, nil, errors.New("injected") }
+			t.Cleanup(func() { openPty = old })
+		},
+		"a command that cannot start": func(t *testing.T) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup(t)
+			c := exec.Command("sh", "-c", "touch "+marker)
+			if name == "a command that cannot start" {
+				c = exec.Command("/nonexistent/brig-relay")
+			}
+			_, err := Run(c, Options{In: o.slave, Out: o.slave})
+			if !errors.Is(err, ErrNotStarted) {
+				t.Fatalf("err = %v, want ErrNotStarted", err)
+			}
+			if _, serr := os.Stat(marker); serr == nil {
+				t.Error("the command ran")
+			}
+			if after := o.termios(t); after != before {
+				t.Error("the person's terminal was changed")
+			}
+		})
 	}
 }
