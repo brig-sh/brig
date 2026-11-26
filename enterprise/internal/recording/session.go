@@ -373,14 +373,20 @@ func (s *Session) Run(argv, env []string) (int, error) {
 	s.earlier, s.earlierDropped, s.earlierExpired = e.Closed, e.Dropped, e.Expired
 
 	if err != nil {
+		// A failure before the command started (ptyrelay.ErrNotStarted) means
+		// nothing ran and the caller can run the command without the relay.
+		// There is nothing to finish: the recording is closed with one short
+		// request, its files are removed whatever the answer, and the run
+		// says only that it is not recorded after all.
+		if errors.Is(err, ptyrelay.ErrNotStarted) {
+			s.abandon()
+			s.printNotices()
+			return 0, err
+		}
+		// A failure after the command ran cannot be undone, and is returned as
+		// it was.
 		s.rec.Abort()
 		s.finish("recorder_error", nil, "")
-		// A failure before the command started (ptyrelay.ErrNotStarted) means
-		// nothing ran and the caller can run the command without the relay. The
-		// recording opened for it is closed above and its files are removed, and
-		// the run says it is not recorded after all. A failure after the command
-		// ran cannot be undone, and is returned as it was.
-		s.notStarted = errors.Is(err, ptyrelay.ErrNotStarted)
 		s.printNotices()
 		return 0, err
 	}
@@ -403,6 +409,23 @@ func (s *Session) Run(argv, env []string) (int, error) {
 	s.finish(reason, code, sig)
 	s.printNotices()
 	return res.ExitCode, nil
+}
+
+// abandon ends a run the relay never started. It asks the deployment to close
+// the recording once, within OpenTimeout, and removes the meta file and the
+// spool whatever the answer: no command ran, so the spool holds at most the
+// first size frame and nothing is worth sending later.
+func (s *Session) abandon() {
+	s.notStarted = true
+	s.rec.Abort()
+	if !s.stopped {
+		ctx, cancel := context.WithTimeout(context.Background(), OpenTimeout)
+		_, _, _ = s.p.Client.closeRecording(ctx, s.up.RecordingID, CloseRequest{EndReason: "recorder_error"})
+		cancel()
+		s.remove()
+	}
+	_ = s.up.Spool.Close()
+	s.rec.Close()
 }
 
 // liveLoop uploads on every tick until ctx ends or uploading stops for good: the
