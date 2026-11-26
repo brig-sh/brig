@@ -621,22 +621,63 @@ func TestARelayThatCannotSetUpReportsNotStartedAndTouchesNothing(t *testing.T) {
 
 // The relay's wake pipes are for the relay. The command, and any other child
 // this process starts, must not inherit them.
+//
+// The test process can itself hold descriptors that every child inherits (a CI
+// runner passes some down). So the test does not name descriptor numbers. It
+// lists the descriptors of the same command started without the relay, and
+// requires the relay's command to hold nothing beyond that. A descriptor that
+// is inheritable is opened first, so the case holds on any machine.
 func TestTheCommandDoesNotInheritTheWakePipes(t *testing.T) {
+	// F_DUPFD returns a descriptor that is not close-on-exec, above any number
+	// the command or ls opens for itself.
+	inherited, err := unix.FcntlInt(0, unix.F_DUPFD, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(inherited)
+	if flags, err := unix.FcntlInt(uintptr(inherited), unix.F_GETFD, 0); err != nil || flags&unix.FD_CLOEXEC != 0 {
+		t.Fatalf("descriptor %d should be inheritable: flags %d, err %v", inherited, flags, err)
+	}
+
+	list := func(out []byte) map[string]bool {
+		set := map[string]bool{}
+		for _, fd := range strings.Fields(string(out)) {
+			set[fd] = true
+		}
+		return set
+	}
+
+	// The baseline: any child of this process, with no relay.
+	baseOut, err := exec.Command("sh", "-c", "ls /dev/fd").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := list(baseOut)
+	if !base[fmt.Sprint(inherited)] {
+		t.Fatalf("the baseline child does not hold the inherited descriptor %d: %v", inherited, base)
+	}
+
 	o := newOuter(t, 24, 80)
 	tee := &safeBuf{}
-	// ls holds one or two descriptors of its own for the directory it reads, so
-	// 3 and 4 are not the relay's.
 	if _, err := run(t, o, tee, "sh", "-c", "ls /dev/fd"); err != nil {
 		t.Fatal(err)
 	}
-	fds := strings.Fields(string(stripCR(tee.Bytes())))
-	for _, fd := range fds {
-		if fd != "0" && fd != "1" && fd != "2" && fd != "3" && fd != "4" {
-			t.Errorf("the command holds descriptor %s; all of %v", fd, fds)
+	got := list(stripCR(tee.Bytes()))
+	if len(got) < 3 {
+		t.Errorf("the listing %v is not the command's descriptors", got)
+	}
+	// 0, 1 and 2 are the pty here and pipes or files in the baseline, but they
+	// are always there. ls's own directory descriptor is the lowest free number
+	// in both, so it is in the baseline too. A leaked descriptor either is
+	// outside the baseline or pushes ls's directory descriptor outside it, and
+	// either way the set differs.
+	for fd := range got {
+		if fd != "0" && fd != "1" && fd != "2" && !base[fd] {
+			t.Errorf("the command holds descriptor %s that a child without the relay does not; relay %v, baseline %v", fd, got, base)
 		}
 	}
-	if len(fds) < 3 {
-		t.Errorf("the listing %v is not the command's descriptors", fds)
+	if len(got) > len(base) {
+		t.Errorf("the command holds %d descriptors, a child without the relay %d; relay %v, baseline %v", len(got), len(base), got, base)
 	}
 }
 
