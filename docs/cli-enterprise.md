@@ -229,6 +229,11 @@ These lines, the sign-in's own output and its questions go to stderr. When
 stderr is not a terminal, for example with `2>/dev/null` or `2>err.log`, they go
 to the terminal the run uses instead, so the pause is always on your screen.
 
+If another terminal with the same expired login signs in first, this sign-in
+finds the stored token no longer expired and returns at once, or, if the other
+sign-in finishes while this one is under way, keeps the stored token and
+revokes the one it obtained. Both runs then use the stored token.
+
 The sign-in waits at most 30 seconds for each keychain call, and Ctrl-C ends a
 wait on the keychain. If the keychain does not store the new token in time, the
 sign-in fails and Brig revokes the token the deployment issued.

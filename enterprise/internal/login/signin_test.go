@@ -430,3 +430,73 @@ func TestSignInEndsWhenTheKeychainDoesNotOpen(t *testing.T) {
 		t.Errorf("the deployment was contacted: %v", r)
 	}
 }
+
+// freshLogin is a login that another run stored a moment ago.
+func freshLogin(url string) login.Token {
+	return login.Token{URL: url, AccessToken: "other-run-token", ExpiresAt: time.Now().Add(24 * time.Hour)}
+}
+
+// Another run with the same expired login may sign in while this one waits at
+// a question. When this one gets to the keychain, the stored login is no longer
+// expired, so it returns at once: no request is sent, nothing is stored or
+// revoked.
+func TestSignInReturnsAtOnceWhenAnotherRunAlreadySignedIn(t *testing.T) {
+	m, s := signInHost(t)
+	inner := openLoginStore
+	openLoginStore = func() (login.Store, error) {
+		m.items[s.URL] = freshLogin(s.URL) // the other run, while the question waited
+		return inner()
+	}
+	var err error
+	captureStderr(t, func() { err = SignIn(io.Discard, parseDeployment(t, s.URL)) })
+	if err != nil {
+		t.Fatalf("SignIn: %v", err)
+	}
+	if r := s.Requests(); len(r) != 0 {
+		t.Errorf("requests %v", r)
+	}
+	if got := m.items[s.URL].AccessToken; got != "other-run-token" || len(s.Revoked()) != 0 {
+		t.Errorf("stored %q, revoked %v; want the other run's login kept and nothing revoked", got, s.Revoked())
+	}
+}
+
+// racingStore lets another run sign in between this sign-in's first read of the
+// login and its save.
+type racingStore struct {
+	*memLogins
+	loads int
+}
+
+func (r *racingStore) Load(url string) (login.Token, error) {
+	r.loads++
+	if r.loads == 2 {
+		r.memLogins.items[url] = freshLogin(url)
+	}
+	return r.memLogins.Load(url)
+}
+
+// Another run signs in while this one's flow is under way. This one must not
+// replace that login, and must not revoke it, which would end that run's
+// uploads: it revokes its own token and returns success, so both runs use the
+// stored token.
+func TestSignInKeepsALoginAnotherRunStoredAndRevokesItsOwnToken(t *testing.T) {
+	m, s := signInHost(t)
+	r := &racingStore{memLogins: m}
+	openLoginStore = func() (login.Store, error) { return r, nil }
+	var err error
+	var out bytes.Buffer
+	captureStderr(t, func() { err = SignIn(&out, parseDeployment(t, s.URL)) })
+	if err != nil {
+		t.Fatalf("SignIn: %v\n%s", err, out.String())
+	}
+	issued := s.Issued()
+	if len(issued) != 1 {
+		t.Fatalf("issued %v", issued)
+	}
+	if got := m.items[s.URL].AccessToken; got != "other-run-token" {
+		t.Errorf("stored %q, want the other run's token kept", got)
+	}
+	if !slices.Equal(s.Revoked(), []string{issued[0]}) {
+		t.Errorf("revoked %v, want only this sign-in's own token %q", s.Revoked(), issued[0])
+	}
+}
