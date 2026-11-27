@@ -793,6 +793,96 @@ func TestRequestAllowMissIsRefusedBeforeResolve(t *testing.T) {
 	}
 }
 
+// gitTokenAuth is the basic auth git sends on a github-token route.
+func gitTokenAuth(r *rig, sandbox, route string) http.Header {
+	req := http.Request{Header: http.Header{}}
+	req.SetBasicAuth("x-access-token", r.mint(sandbox, route))
+	return req.Header
+}
+
+// Ignoring case must not let a repository through that differs from the
+// listed one in anything but case.
+func TestRequestAllowReposRefusesAnotherRepoInAnyCase(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL,
+		&v1alpha1.RequestAllow{Repos: []string{"Example/lib"}})})
+	for _, tc := range []struct{ path, repo string }{
+		{"/example/other.git/info/refs", "example/other"},
+		{"/EXAMPLE/Other.git/info/refs", "EXAMPLE/Other"},
+		{"/examples/lib.git/info/refs", "examples/lib"},
+	} {
+		resp, body := r.do("GET", "/brig-a/r/github"+tc.path, gitTokenAuth(r, "brig-a", "github"), "")
+		wantStatus(t, resp, http.StatusForbidden)
+		want := "brig broker refused this request\n" +
+			"policy:  test-github\n" +
+			"route:   github\n" +
+			"rule:    spec.routes[github].request.allow.repos\n" +
+			`reason:  repo "` + tc.repo + `" is not in the allow list [Example/lib]` + "\n" +
+			"sandbox: brig-a\n"
+		if body != want {
+			t.Errorf("%s: body\n%s\nwant\n%s", tc.path, body, want)
+		}
+		wantAudit(t, r.lastAudit(), "status=403", "rule=spec.routes[github].request.allow.repos", "check=request.allow.")
+	}
+	if n := up.count(); n != 0 {
+		t.Fatalf("the upstream saw %d requests", n)
+	}
+	if res, _ := r.creds.counts(); res != 0 {
+		t.Fatalf("Resolve ran %d times before a refusal", res)
+	}
+}
+
+// repos ignores ASCII case alone. The Kelvin sign folds to k and the long s
+// to s under Unicode, so a path with either must never reach the match: a
+// route with repos refuses every character outside ASCII first.
+func TestRequestAllowReposFoldsNoUnicodeCase(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL,
+		&v1alpha1.RequestAllow{Repos: []string{"example/kit", "example/sit"}})})
+	for _, p := range []string{
+		"/example/%E2%84%AAit.git/info/refs",
+		"/example/%C5%BFit.git/info/refs",
+	} {
+		resp, _ := r.do("GET", "/brig-a/r/github"+p, gitTokenAuth(r, "brig-a", "github"), "")
+		wantStatus(t, resp, http.StatusBadRequest)
+		wantAudit(t, r.lastAudit(), "check=path")
+	}
+	if n := up.count(); n != 0 {
+		t.Fatalf("the upstream saw %d requests", n)
+	}
+	if res, _ := r.creds.counts(); res != 0 {
+		t.Fatalf("Resolve ran %d times before a refusal", res)
+	}
+}
+
+// go lowers module paths while a GitHub owner is often mixed case, and
+// GitHub takes both spellings for one repository. The broker forwards the
+// path as the guest sent it.
+func TestRequestAllowReposMatchesWithoutASCIICase(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL,
+		&v1alpha1.RequestAllow{Repos: []string{"Example/*"}})})
+	resp, _ := r.do("GET", "/brig-a/r/github/example/private-lib.git/info/refs?service=git-upload-pack",
+		gitTokenAuth(r, "brig-a", "github"), "")
+	wantStatus(t, resp, http.StatusOK)
+	got := up.last(t)
+	if got.path != "/example/private-lib.git/info/refs" || got.rawQuery != "service=git-upload-pack" {
+		t.Errorf("upstream got %s?%s", got.path, got.rawQuery)
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+fakeGHToken))
+	if got.header.Get("Authorization") != want {
+		t.Errorf("upstream Authorization = %q, want basic auth with the real token", got.header.Get("Authorization"))
+	}
+	resp, _ = r.do("POST", "/brig-a/r/github/EXAMPLE/Private-Lib.git/git-upload-pack", gitTokenAuth(r, "brig-a", "github"), "")
+	wantStatus(t, resp, http.StatusOK)
+	if got := up.last(t).path; got != "/EXAMPLE/Private-Lib.git/git-upload-pack" {
+		t.Errorf("upstream path %q", got)
+	}
+	if n := up.count(); n != 2 {
+		t.Fatalf("the upstream saw %d requests, want 2", n)
+	}
+}
+
 func TestGitRouteTakesTheTokenAsBasicPassword(t *testing.T) {
 	up := newUpstream(t, nil)
 	r := newRig(t, up, claudeRoutes(t, up))

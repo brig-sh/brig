@@ -367,7 +367,7 @@ type RequestAllow struct {
 	// Each starts with a slash.
 	Paths []string `json:"paths,omitempty"`
 	// Repos is optional, and only the github-token preset takes it. It lists
-	// owner/name globs.
+	// owner/name globs, matched without ASCII case, as GitHub matches names.
 	Repos []string `json:"repos,omitempty"`
 	// GraphQL is optional, and only the github-api preset takes it. It
 	// limits a request to /api/graphql by the operation it carries.
