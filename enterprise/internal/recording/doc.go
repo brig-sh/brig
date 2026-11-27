@@ -131,7 +131,10 @@
 // still on this machine and will be sent by the next recorded run or by `brig
 // recordings flush`, that recording stopped and from what time the output is not
 // recorded (which a deployment that refuses the recording while the run goes on
-// causes too: the spool is removed at once and nothing more is written), that
+// causes too: the spool is removed at once and nothing more is written; a spool
+// Brig cannot send, with an invalid frame or a frame larger than the
+// deployment's batch size, ends the recording the same way and the line says
+// so), that
 // the spool cap or a write error ended the recording part way through the run,
 // that the deployment refused the recording as the run ended and the rest was
 // not sent, that the deployment refused the login and `brig login` is needed
