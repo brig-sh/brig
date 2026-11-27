@@ -27,9 +27,11 @@
 //   - the deployment answers, within 3 seconds, that this run is recorded.
 //
 // Any other outcome is a run that goes the way it always has, with nothing
-// printed, except one: a signed-in person whose trust store was not accepted
-// gets one line at the start of the run. A run cannot ask a question, so it
-// takes only the choices a person already made at brig login.
+// printed, except two: a signed-in person whose trust store was not accepted
+// gets one line at the start of the run, and a person whose sign-in expired
+// gets the pause below. Only that pause asks a question, the ones brig login
+// asks, because it is the sign-in. Every other run takes only the choices a
+// person already made at brig login.
 // BRIG_NOFIRE_URL can therefore pick among the deployments the person signed in
 // to, each of which brig login confirmed. It cannot make a run send a token to a
 // host the token was not stored for. A trust store from the environment is
