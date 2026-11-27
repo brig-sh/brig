@@ -70,6 +70,12 @@ type callback struct {
 	reply chan bool
 }
 
+// listenLoopback opens the callback port. A test replaces it to watch the
+// listener close.
+var listenLoopback = func() (net.Listener, error) {
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
 // Run signs in and returns the grant. It listens on 127.0.0.1 only, so no
 // other host can deliver a code, and it serves only /callback. A callback
 // with the wrong state is answered and ignored: another local process cannot
@@ -107,7 +113,7 @@ func (f BrowserFlow) Run(ctx context.Context) (Grant, error) {
 	}
 	sum := sha256.Sum256([]byte(verifier))
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := listenLoopback()
 	if err != nil {
 		return Grant{}, fmt.Errorf("cannot listen on 127.0.0.1 for the browser: %w. Run brig login --device instead", err)
 	}
