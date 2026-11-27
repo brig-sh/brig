@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brig-sh/brig/enterprise/internal/nofireauth"
@@ -344,7 +345,8 @@ func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
 // then: signal.Notify clears the runtime's record that it was ignored, and
 // signal.Stop does not set it back, so stop calls signal.Ignore. Without that,
 // signal.Ignored would answer false for the rest of the process and the
-// recorder would forward Ctrl-C to the command.
+// recorder would forward Ctrl-C to the command. stop may be called more than
+// once, as a context.CancelFunc may: later calls do nothing.
 func heldContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wasIgnored := signal.Ignored(os.Interrupt)
@@ -361,13 +363,16 @@ func heldContext() (context.Context, context.CancelFunc) {
 			}
 		}
 	}()
+	var once sync.Once
 	return ctx, func() {
-		signal.Stop(ch)
-		if wasIgnored {
-			signal.Ignore(os.Interrupt)
-		}
-		close(done)
-		cancel()
+		once.Do(func() {
+			signal.Stop(ch)
+			if wasIgnored {
+				signal.Ignore(os.Interrupt)
+			}
+			close(done)
+			cancel()
+		})
 	}
 }
 

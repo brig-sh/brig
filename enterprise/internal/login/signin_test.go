@@ -536,3 +536,14 @@ func TestHeldContextIgnoredChild(t *testing.T) {
 		t.Error("SIGINT is no longer ignored after the sign-in's context stopped")
 	}
 }
+
+// The stop function of heldContext is a context.CancelFunc, so a second call
+// does nothing. It used to close a channel twice and panic.
+func TestHeldContextStopMayBeCalledTwice(t *testing.T) {
+	ctx, stop := heldContext()
+	stop()
+	stop()
+	if ctx.Err() == nil {
+		t.Fatal("the context is not cancelled after stop")
+	}
+}
