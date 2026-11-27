@@ -3,10 +3,13 @@ package profile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"sigs.k8s.io/yaml"
 )
@@ -126,6 +129,9 @@ func Read(path string) (Profile, error) {
 // would otherwise decode into nothing and silently forward no credentials,
 // which looks exactly like a broken sandbox.
 func Parse(blob []byte) (Profile, error) {
+	if err := CheckSchemaVersion(blob); err != nil {
+		return Profile{}, err
+	}
 	var p Profile
 	if err := yaml.UnmarshalStrict(blob, &p); err != nil {
 		return Profile{}, removedKeyHint(err, blob)
@@ -134,6 +140,74 @@ func Parse(blob []byte) (Profile, error) {
 		return Profile{}, err
 	}
 	return p, p.Validate()
+}
+
+// CheckSchemaVersion refuses a file that names a schemaVersion this brig does
+// not read, and it runs before the strict decoder for a reason: a file written
+// for a newer brig carries fields this one has never heard of, so the strict
+// decoder would blame the first of them -- `unknown field "future"` -- and the
+// version, which is the actual cause, would never be named. The reader would
+// learn that the schema had changed from an error about a field.
+//
+// The probe is deliberately small. It may say one thing, that the file names a
+// version this brig does not read, and anything it cannot make out -- YAML that
+// does not parse, a document that is not a mapping, a key given twice -- it
+// leaves to the strict decoder, which owns every other error. That way the
+// reader gets the real problem, not a version message for a file with no
+// readable version in it. It finds the key the way the decoder does, at the top
+// level and with the case folded, so the two cannot disagree about whether a
+// file named one.
+//
+// Parse calls it. It is exported for the reader that decodes a profile strictly
+// before it calls Parse, the Brigfile's, which would otherwise blame the field
+// of a newer brig's file and not the version.
+func CheckSchemaVersion(blob []byte) error {
+	if !couldNameSchemaVersion(blob) {
+		return nil
+	}
+	var probe struct {
+		SchemaVersion json.RawMessage `json:"schemaVersion"`
+	}
+	if yaml.Unmarshal(blob, &probe) != nil || probe.SchemaVersion == nil {
+		return nil
+	}
+	// Not a Go integer type on the field: a YAML null, a string, a bool and a
+	// fraction would each get the decoder's remark about types, and the reader
+	// needs to be shown what a version looks like.
+	n, err := strconv.ParseInt(string(bytes.TrimSpace(probe.SchemaVersion)), 10, 64)
+	if err != nil || n < 1 {
+		return errors.New("schemaVersion must be a whole number of 1 or more, as in schemaVersion: 1")
+	}
+	if n != CurrentSchemaVersion {
+		// Only a version above this one can get here while this brig reads
+		// version 1, which is why the message says newer. A brig that stops
+		// reading an old version needs its own sentence for that.
+		return fmt.Errorf("schemaVersion %d is not supported: this brig reads schemaVersion %d, "+
+			"so the file was written for a newer brig", n, CurrentSchemaVersion)
+	}
+	return nil
+}
+
+// couldNameSchemaVersion reports whether blob might hold the key, so that a
+// file that cannot is not decoded a second time. Parse runs for every profile
+// on every start of brig, and the probe costs as much as the decode it guards,
+// so without this the shipped profiles alone nearly doubled the time to load
+// them.
+//
+// It must not say no to a file that has the key, and it does not, by
+// construction. The decoder finds a key by comparing it with the case folded,
+// and a key can be written other than letter by letter in only two ways: with
+// an escape, which needs a backslash (a double-quoted YAML key, a JSON string),
+// or with a character whose case folds to an ASCII one, which is not ASCII
+// (the long s in "schemaVersion"). A blob with neither can only spell the key
+// out, in some case, and that is a substring search.
+func couldNameSchemaVersion(blob []byte) bool {
+	for _, c := range blob {
+		if c == '\\' || c >= utf8.RuneSelf {
+			return true
+		}
+	}
+	return bytes.Contains(bytes.ToLower(blob), []byte("schemaversion"))
 }
 
 // removedKeys are the profile keys v0.5.0 removed, each with what replaced it.
@@ -361,6 +435,13 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #   policy     names of policies attached to this profile inline, e.g.
 #              [no-net]. Every run carries all of them, unioned with
 #              whatever is attached separately by name
+#   schemaVersion
+#              which schema the file is written against. It is optional: a
+#              file that says nothing is read as version 1, the only one there
+#              is. brig refuses a version it does not know, and names the one
+#              it reads. Add it only when every brig that will read the file is
+#              new enough to know the key: one that predates it refuses the file
+#              for a field it does not know
 #
 # Building an image for a profile:
 # ` + BringYourOwnImageDoc + `

@@ -63,8 +63,19 @@ type Onboarding struct {
 	TrustKey [2]string `json:"trustKey,omitempty"`
 }
 
+// CurrentSchemaVersion is the schema this build reads. A file that names no
+// schemaVersion is written for it, and Parse refuses a file that names any
+// other, saying which one this brig reads (see CheckSchemaVersion).
+const CurrentSchemaVersion = 1
+
 // Profile is one sandboxed workload, as data.
 type Profile struct {
+	// SchemaVersion is the schema the file says it was written against, and 0
+	// when it says nothing. It is kept as written, not defaulted, so that
+	// showing or exporting a profile as JSON does not start putting a key in
+	// every document that the brigs which predate it refuse; Schema is the
+	// version to read the profile by.
+	SchemaVersion int `json:"schemaVersion,omitempty"`
 	// Name is the profile name, the community-images image name, and the
 	// taxonomer AgentRuntime value: one string, three uses.
 	Name string `json:"name"`
@@ -296,4 +307,14 @@ func (p *Profile) normaliseKind() error {
 	default:
 		return fmt.Errorf("unknown kind %q (agent, shell or gui)", p.Kind)
 	}
+}
+
+// Schema is the schema version to read the profile by: the one the file named,
+// or 1 for a file that named none, which is every profile written before the
+// key existed.
+func (p Profile) Schema() int {
+	if p.SchemaVersion == 0 {
+		return CurrentSchemaVersion
+	}
+	return p.SchemaVersion
 }
