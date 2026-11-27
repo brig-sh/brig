@@ -240,4 +240,9 @@ type Status struct {
 	// Vending lists "<sandbox>/<route>" of a route that vends whose last
 	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
+	// Vends describes, per sandbox id, each registered route that vends:
+	// the identity its keys come from, never a key. brig info reads its own
+	// sandbox's entry, so it names the role without decrypting the pointer.
+	// A sandbox with none is left out.
+	Vends map[string]map[string]VendInfo `json:"vends,omitempty"`
 }

@@ -103,6 +103,10 @@ func (c *Config) brokerLine() string {
 		if n := st.Placeholder[c.VMName]; n > 0 {
 			parts = append(parts, fmt.Sprintf("placeholder refusals: %d", n))
 		}
+		// The broker names the role it assumes for this sandbox, so the row
+		// shows it without decrypting the pointer. A sandbox not running
+		// has no entry, and the row names no role.
+		parts = append(parts, vendLines(st.Vends[c.VMName])...)
 	case st.PID != 0:
 		parts = append(parts, fmt.Sprintf("brig-broker pid %d is not answering on its control socket; "+
 			"see %s", st.PID, injector.LogName))
@@ -215,6 +219,10 @@ type InfoBroker struct {
 	// Placeholder is the number of this sandbox's requests the broker
 	// refused for a session token outside its carrier.
 	Placeholder int64 `json:"placeholder,omitempty"`
+	// Vends describes each of this sandbox's routes that vend, as the
+	// running broker reports it: the role and session policies, or your own
+	// identity. Empty when the sandbox is not registered.
+	Vends map[string]injector.VendInfo `json:"vends,omitempty"`
 	// KeptOnHost are the secrets the routes inject, which stay on the
 	// host.
 	KeptOnHost []string `json:"keptOnHost,omitempty"`
@@ -251,7 +259,7 @@ func (c *Config) infoBroker() *InfoBroker {
 	switch st, ok := c.routeBroker().Status(); {
 	case ok:
 		b.Running, b.PID, b.Port, b.Pending, b.Failing = true, st.PID, st.Port, st.Pending, st.Failing
-		b.Recovering, b.Placeholder = st.Recovering, st.Placeholder[c.VMName]
+		b.Recovering, b.Placeholder, b.Vends = st.Recovering, st.Placeholder[c.VMName], st.Vends[c.VMName]
 	case st.PID != 0:
 		// Alive and not answering, which the BROKER row names too. The
 		// pid tells it from no broker, which the next run starts.

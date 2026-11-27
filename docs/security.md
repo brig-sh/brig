@@ -407,7 +407,8 @@ allow. In self mode it is your whole identity in that profile: the
 sandbox can do what you can. Self mode is never a default: `brig secret
 import` refuses an import that names neither mode, or both. Each run and
 exec prints a line that names the role and its session policies, or says
-that the sandbox has your own identity.
+that the sandbox has your own identity. `brig info` names the same while
+the sandbox runs.
 
 **Credentials that win over the route.** An AWS SDK reads its environment
 and `~/.aws` before the container credential provider. A run with a route
