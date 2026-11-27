@@ -745,6 +745,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			strictErr = err
 		}
 	}
+	if err := refuseMCPServers(bound); err != nil && strictErr == nil {
+		strictErr = err
+	}
 	egress := policy.Merge(bound)
 	askedNet := network
 	if egress.Default != "" && network != NetOffline {

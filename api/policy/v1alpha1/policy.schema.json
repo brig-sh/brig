@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brig.sh/schemas/policy/v1alpha1/policy.schema.json",
+  "title": "Policy",
+  "description": "A brig policy document: egress rules, brokered routes and MCP servers. api/policy/v1alpha1 is the reader; this schema is for editors. Egress and routes are typed loosely here, and the validator is the authority on them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "brig.sh/v1alpha1"
+    },
+    "kind": {
+      "const": "Policy"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "egress": { "type": "object" },
+        "routes": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "mcp": {
+          "description": "MCP servers the guest may call through the broker. Names are unique within the policy.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/mcpServer" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "mcpServer": {
+      "description": "One MCP server behind the broker. Either a preset with a credential, or a full definition with url, credential and inject.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "tools"],
+      "properties": {
+        "name": {
+          "description": "Unique within the policy. Follows the route name grammar, and is not brig-memory.",
+          "type": "string"
+        },
+        "preset": {
+          "description": "A ready-made server. It fills transport, url and inject, so a server that names one sets none of them.",
+          "enum": ["nofire"]
+        },
+        "transport": {
+          "description": "How the broker reaches the server. Only http so far.",
+          "enum": ["http"]
+        },
+        "url": {
+          "description": "The https:// MCP endpoint, with no user name, password, query or fragment.",
+          "type": "string",
+          "pattern": "^https://[^?@#]+$"
+        },
+        "credential": {
+          "description": "The secret that inject sends upstream. It is never delivered to the guest.",
+          "type": "object"
+        },
+        "inject": {
+          "description": "How the credential reaches the upstream. Only inject.headers is accepted.",
+          "type": "object"
+        },
+        "tools": { "$ref": "#/$defs/mcpTools" }
+      },
+      "oneOf": [
+        { "required": ["preset", "credential"] },
+        { "required": ["url", "credential", "inject"] }
+      ]
+    },
+    "mcpTools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow"],
+      "properties": {
+        "allow": {
+          "description": "Tool names matched exactly, or \"*\" for every tool.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
