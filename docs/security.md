@@ -335,7 +335,8 @@ proxy (see
 [A TLS-terminating host proxy](non-goals.md#a-tls-terminating-host-proxy)).
 A [route](policies.md#routes) is the exception. There the sandbox sees a
 session token, which works through its route until it expires or the
-sandbox is stopped. On a run with a route, the guest also trusts the brig
+sandbox is stopped or [revoked](broker.md#revocation). On a run with a
+route, the guest also trusts the brig
 CA, for `brig.internal` and its subdomains. The CA's name constraint already
 allowed subdomains, so the trust boundary does not move. The `aws` route is not such an exception: its
 guest holds temporary AWS keys. See [The aws route](#the-aws-route).
@@ -434,7 +435,10 @@ the permission set's session, up to 12 hours. Revoking them revokes your own
 host session too.
 
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so it can
-fetch no more keys. A secret you import again with another role or mode
+fetch no more keys until its next exec registers it again. `brig broker
+revoke` keeps it from the route until `brig broker reinstate`: every later
+run and exec of it is refused. See [Revocation](broker.md#revocation).
+A secret you import again with another role or mode
 takes effect at the next fetch: the broker does not serve keys it fetched
 for the old secret, and fetches again. Keys already handed out stay valid
 until they expire. To cut them off sooner, change the role's policy or
@@ -446,8 +450,8 @@ hours. When `aws` can get no credentials, a new run is refused with exit
 `6`, and a request from a running guest that needs new keys gets a 502. Both
 name the fix: `aws sso login --profile <profile>`, run on the host. The
 guest keeps the keys it holds until they expire. To cut the route off
-sooner, run `aws sso logout` on the host, run `brig stop`, or revoke the
-sessions in AWS.
+sooner, run `aws sso logout` on the host, run `brig broker revoke` on the
+sandbox, or revoke the sessions in AWS.
 
 **The session token.** The guest fetches keys with its session token for the
 route. Brig mints one on every exec, and it lasts 12 hours. An agent process
@@ -567,7 +571,10 @@ hosts, it reaches no Google host directly. Brig does not check the image: a
 credential baked into it is not refused.
 
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so its
-requests get no more Google tokens. A secret you import again with another
+requests get no more Google tokens until its next exec registers it again.
+`brig broker revoke` keeps it from the route until `brig broker reinstate`:
+every later run and exec of it is refused. See
+[Revocation](broker.md#revocation). A secret you import again with another
 configuration, mode or service account takes effect at the next request.
 The guest never holds a Google token, so nothing it holds outlives the
 session token. A token the broker has minted stays valid at Google until it

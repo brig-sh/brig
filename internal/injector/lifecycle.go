@@ -453,3 +453,47 @@ func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
 }
+
+// Revoke removes the sandbox id from the broker serving dir and records its
+// revocation there, so every registration of it is refused until Reinstate.
+// It starts a broker when none is running, since only the broker writes the
+// record, and stops that broker again when no sandbox is registered.
+func Revoke(dir, id string, r RevokeRequest) (RevokeResponse, error) {
+	return withBroker(dir, func(c Client) (RevokeResponse, error) { return c.Revoke(id, r) })
+}
+
+// Reinstate lifts the revocation of the sandbox id. With no revocation file
+// in dir there is nothing to lift, and no broker is started.
+func Reinstate(dir, id string) (ReinstateResponse, error) {
+	if _, err := os.Lstat(filepath.Join(dir, RevokedName)); errors.Is(err, os.ErrNotExist) {
+		return ReinstateResponse{}, nil
+	}
+	return withBroker(dir, func(c Client) (ReinstateResponse, error) { return c.Reinstate(id) })
+}
+
+// Revocations lists the revoked sandboxes of the broker serving dir, or none
+// when no broker is running.
+func Revocations(dir string) ([]Revocation, error) {
+	if _, err := os.Lstat(filepath.Join(dir, RevokedName)); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return withBroker(dir, func(c Client) ([]Revocation, error) {
+		st, err := c.Status()
+		return st.Revoked, err
+	})
+}
+
+// withBroker runs call against the broker serving dir, starting one when
+// none is running, and then stops it when it is idle.
+func withBroker[T any](dir string, call func(Client) (T, error)) (T, error) {
+	var zero T
+	b, _, err := ensure(dir)
+	if err != nil {
+		return zero, err
+	}
+	out, err := call(b.Client)
+	if err != nil {
+		return zero, err
+	}
+	return out, stopIfIdle(b.Client)
+}

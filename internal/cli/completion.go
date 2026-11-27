@@ -131,6 +131,7 @@ func completeCmd(out io.Writer, words []string) {
 // v0.5.0 removed are not verbs at all.
 var verbs = []string{
 	"agent",
+	"broker",
 	"completion",
 	"config",
 	"doctor",
@@ -641,6 +642,11 @@ var groups = map[string][]sub{
 			},
 			operands: []operand{opAgent},
 		},
+	},
+	"broker": {
+		{name: "revoke", flags: []string{"--reason"}, values: map[string]operand{"--reason": opNothing}},
+		{name: "reinstate"},
+		{name: "revoked"},
 	},
 	"telemetry": {
 		{name: "status"},

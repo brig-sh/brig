@@ -314,6 +314,12 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		if errors.As(err, &ref) && ref.Kind == injector.RefusalCredential {
 			return creds.NewBrokerCredentialError(c.VMName, ref.Message)
 		}
+		// A revoked sandbox is not run without its routes: the agent would
+		// boot pointed at routes that refuse it. The broker's words say
+		// who revoked it and how to reinstate it.
+		if errors.As(err, &ref) && ref.Kind == injector.RefusalRevoked {
+			return fmt.Errorf("the credential broker refuses the routes of %s: %s", c.VMName, ref.Message)
+		}
 		return fmt.Errorf("could not register the routes of %s with the credential broker: %w", c.VMName, err)
 	}
 	c.sayVends(added.Vends)

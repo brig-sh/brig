@@ -54,6 +54,9 @@ const (
 	// brig.internal. Only the broker reads the key.
 	CACertName = "ca.pem"
 	CAKeyName  = "ca.key"
+	// RevokedName holds the sandboxes whose broker access is revoked. It
+	// outlives the broker, so a revocation holds until it is reinstated.
+	RevokedName = "revoked.json"
 )
 
 // TokenTTL is the lifetime of a session token minted for one exec.
@@ -206,6 +209,40 @@ type RemoveResponse struct {
 	Remaining int `json:"remaining"`
 }
 
+// RevokeRequest is the body of revoke-sandbox. Both fields are free text
+// the broker records with the revocation, and may be empty.
+type RevokeRequest struct {
+	// By names who revoked the sandbox.
+	By string `json:"by,omitempty"`
+	// Reason says why.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Revocation is a sandbox whose broker access is revoked.
+type Revocation struct {
+	ID     string    `json:"id"`
+	At     time.Time `json:"at"`
+	By     string    `json:"by,omitempty"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+// RevokeResponse is the answer to revoke-sandbox.
+type RevokeResponse struct {
+	// Removed is whether the sandbox was registered.
+	Removed bool `json:"removed"`
+	// Remaining is the number of sandboxes still registered.
+	Remaining int `json:"remaining"`
+	// Revocation is what the broker recorded. A sandbox revoked before
+	// keeps its first record.
+	Revocation Revocation `json:"revocation"`
+}
+
+// ReinstateResponse is the answer to reinstate-sandbox.
+type ReinstateResponse struct {
+	// Reinstated is whether the sandbox was revoked.
+	Reinstated bool `json:"reinstated"`
+}
+
 // StopRequest is the body of stop.
 type StopRequest struct {
 	// IfIdle stops the broker only when no sandbox is registered, so a
@@ -240,4 +277,6 @@ type Status struct {
 	// Vending lists "<sandbox>/<route>" of a route that vends whose last
 	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
+	// Revoked are the sandboxes whose broker access is revoked, by id.
+	Revoked []Revocation `json:"revoked,omitempty"`
 }

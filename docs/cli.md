@@ -1067,6 +1067,18 @@ print
 or the same for `brig logout`, and exit `1` without contacting a server or
 the keychain. `brig recordings` is not a verb of Brig Community.
 
+### `brig broker`
+
+```bash
+brig broker revoke brig-claude-code --reason "unexpected egress"
+```
+
+`brig broker revoke` drops the sandbox's route tokens and refuses every
+registration of it, so `brig run` and `brig sh` of it fail until
+`brig broker reinstate brig-claude-code`. `brig broker revoked` lists the
+revoked sandboxes. Each takes the sandbox as the SANDBOX column of `brig ls`
+names it. See [Revocation](broker.md#revocation).
+
 ### `brig telemetry`
 
 ```bash
