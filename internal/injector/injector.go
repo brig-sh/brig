@@ -240,4 +240,7 @@ type Status struct {
 	// Vending lists "<sandbox>/<route>" of a route that vends whose last
 	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
+	// Services maps each guest service with a sandbox registered for it to
+	// those sandbox ids, sorted.
+	Services map[string][]string `json:"services,omitempty"`
 }

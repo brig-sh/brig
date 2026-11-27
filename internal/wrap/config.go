@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -285,6 +286,13 @@ type Config struct {
 	// routeSetup is the sandbox setup the route modes besides endpoint asked
 	// serveRoutes for, which the boot hands the runtime. See routemode.go.
 	routeSetup []runtime.Setup
+	// services are the guest service kinds this run serves at brig.internal,
+	// from Options.services. A run with one reaches the broker there whatever
+	// its routes. See brigInternal.
+	services []string
+	// mcpEntries are the MCP servers the services add to the guest's MCP
+	// configuration. See mcpconfig.go.
+	mcpEntries []MCPEntry
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string
@@ -400,6 +408,10 @@ type Options struct {
 	Identity *Identity
 	// Target is the Brigfile target the run was resolved from, for the plan.
 	Target *Target
+	// services are the guest service kinds this run serves at brig.internal.
+	// A feature adds its kind from its own option, before Load narrows the
+	// network; none does yet, and a test sets them here.
+	services []string
 }
 
 // Load resolves the configuration for one invocation.
@@ -765,6 +777,12 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			network = NetIsolated
 		}
 	}
+	// A service takes the posture for the reason a route does: the guest
+	// reaches it on the broker's own address. An offline run stays offline,
+	// and the feature refuses it (see brigInternalRefusal).
+	if len(o.services) > 0 && network != NetOffline {
+		network = NetIsolated
+	}
 	if routesErr == nil {
 		var tokenWarnings []string
 		t, bindings, tokenWarnings = withoutGitHubToken(t, bindings, routes,
@@ -830,6 +848,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Network:        network,
+		services:       slices.Clone(o.services),
 		needMicroVM:    o.Isolation == IsolationMicroVM,
 		askedNetwork:   askedNet,
 		networkSource:  netSource,

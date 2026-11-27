@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -66,16 +69,27 @@ var beforeAdd = func() {}
 // the start lock, so another brig can stop an idle broker after ensure found
 // it.
 func Register(dir string, s Sandbox) (*Broker, error) {
+	b, added, err := register(dir, func(c Client) (AddResponse, error) { return c.Add(s) })
+	if err != nil {
+		return nil, err
+	}
+	b.Added = added
+	return b, nil
+}
+
+// register runs add against the broker serving dir, starting one when none
+// is running, and replacing one that was stopping or gone by then.
+func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddResponse, error) {
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		b, started, err := ensure(dir)
 		if err != nil {
-			return nil, err
+			return nil, AddResponse{}, err
 		}
 		beforeAdd()
-		b.Added, err = b.Client.Add(s)
+		added, err := add(b.Client)
 		if err == nil {
-			return b, nil
+			return b, added, nil
 		}
 		if !stopping(err) && !errors.Is(err, ErrNotRunning) {
 			// Nothing forgets a sandbox that was never registered, so a
@@ -85,24 +99,82 @@ func Register(dir string, s Sandbox) (*Broker, error) {
 			if started {
 				_, _ = b.Client.Stop(true)
 			}
-			return nil, err
+			return nil, AddResponse{}, err
 		}
 		last = err
 		waitExit(dir)
 	}
-	return nil, last
+	return nil, AddResponse{}, last
 }
 
-// Forget removes the sandbox id from the broker serving dir, which refuses
-// its tokens from the next request on, and stops that broker when no sandbox
-// is left. It starts nothing: with no broker running there is nothing to
-// revoke.
+// Forget removes the sandbox id from the broker serving dir, routes and
+// services alike, which refuses its tokens from the next request on, and
+// stops that broker when nothing is left. It starts nothing: with no broker
+// running there is nothing to revoke.
 //
 // It asks the control socket whatever the pid file says. A revocation that
 // trusted a pid check it got wrong would leave every token working, so only
 // a socket nobody listens on means no broker, and any other failure is
 // returned.
 func Forget(dir, id string) error {
+	c, ok := controlClient(dir)
+	if !ok {
+		return nil
+	}
+	_, remaining, err := forget(c, id)
+	if errors.Is(err, ErrNotRunning) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if remaining == 0 {
+		return stopIfIdle(c)
+	}
+	return nil
+}
+
+// forget removes the routes and the services of id. The services removal is
+// attempted whatever the routes removal answered, so a refused routes call
+// does not leave the services serving; both errors are returned.
+//
+// remaining counts routes and services together when the broker answered the
+// services removal. A broker without services answers 404 and has none to
+// revoke, so the routes answer counts.
+func forget(c Client, id string) (removed bool, remaining int, err error) {
+	r, rerr := c.RemoveSandbox(id)
+	if errors.Is(rerr, ErrNotRunning) {
+		return false, 0, rerr
+	}
+	s, serr := c.RemoveServices(id)
+	if errors.Is(serr, ErrNotRunning) {
+		return false, 0, serr
+	}
+	if notFound(serr) {
+		serr = nil
+		s = RemoveResponse{Removed: false, Remaining: r.Remaining}
+	}
+	if err := errors.Join(rerr, serr); err != nil {
+		return false, 0, err
+	}
+	return r.Removed || s.Removed, s.Remaining, nil
+}
+
+// notFound is a refusal with 404: the broker has no such endpoint, or no
+// such sandbox there.
+func notFound(err error) bool {
+	var ref *RefusedError
+	return errors.As(err, &ref) && ref.Status == http.StatusNotFound
+}
+
+// ForgetRoutes removes the routes of sandbox id from the broker serving dir
+// and keeps its services registered. An exec of a running sandbox whose
+// policy was detached calls it: its route tokens are refused, and the service
+// token of another exec's agent stays valid. It starts nothing, and stops the
+// broker when nothing is left: the broker counts routes and services in
+// remaining, and one without services has routes alone to count, so 0 is
+// idle on either.
+func ForgetRoutes(dir, id string) error {
 	c, ok := controlClient(dir)
 	if !ok {
 		return nil
@@ -120,6 +192,63 @@ func Forget(dir, id string) error {
 	return nil
 }
 
+// ForgetService removes the sandbox id from the services of kind on the
+// broker serving dir, and stops that broker when nothing is left.
+//
+// A 404 is nothing to revoke only when the broker says so: the kind is not
+// one it serves, or the sandbox is not registered for it. A broker older than
+// guest services does not have the path at all; it is asked for its status,
+// and is nothing to revoke only when it lists no registration of id for kind.
+// Any other refusal is returned, so a revocation that did not happen never
+// reads as done.
+func ForgetService(dir, kind, id string) error {
+	c, ok := controlClient(dir)
+	if !ok {
+		return nil
+	}
+	r, err := c.RemoveService(kind, id)
+	if errors.Is(err, ErrNotRunning) {
+		return nil
+	}
+	var ref *RefusedError
+	if errors.As(err, &ref) && ref.Status == http.StatusNotFound {
+		return serviceNotFound(c, ref, kind, id)
+	}
+	if err != nil {
+		return err
+	}
+	if r.Remaining == 0 {
+		return stopIfIdle(c)
+	}
+	return nil
+}
+
+// unroutedMessage is what a broker's mux answers, with 404, for a path it
+// does not have.
+const unroutedMessage = "404 page not found"
+
+// serviceNotFound is nil when the 404 ref, to the removal of id from kind,
+// leaves nothing to revoke, and ref otherwise.
+func serviceNotFound(c Client, ref *RefusedError, kind, id string) error {
+	switch ref.Message {
+	case NoServiceMessage(kind), NotRegisteredMessage(kind, id):
+		return nil
+	case unroutedMessage:
+		st, err := c.Status()
+		if errors.Is(err, ErrNotRunning) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%w; and its status: %w", ref, err)
+		}
+		if slices.Contains(st.Services[kind], id) {
+			return fmt.Errorf("%w, and lists sandbox %s for %s", ref, id, kind)
+		}
+		return nil
+	}
+	return ref
+}
+
 // ForgetAll removes every sandbox the broker serving dir has registered,
 // and stops it. It returns the ids it removed. brig rm --all calls it after
 // its own removals, for the sandboxes no runtime lists any more.
@@ -135,16 +264,36 @@ func ForgetAll(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var removed []string
+	// Status lists route sandboxes in Sandboxes; a sandbox with only a
+	// service registered is in Services alone, and would keep its service
+	// token and the broker.
+	seen := map[string]bool{}
+	var ids []string
 	for _, id := range st.Sandboxes {
-		r, err := c.RemoveSandbox(id)
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for _, list := range st.Services {
+		for _, id := range list {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	sort.Strings(ids)
+	var removed []string
+	for _, id := range ids {
+		gone, _, err := forget(c, id)
 		if errors.Is(err, ErrNotRunning) {
 			return removed, nil
 		}
 		if err != nil {
 			return removed, err
 		}
-		if r.Removed {
+		if gone {
 			removed = append(removed, id)
 		}
 	}
@@ -340,9 +489,11 @@ func recordedPort(dir string) (int, error) {
 // brokerEnv is the whole environment of the broker. HOME and USER are what
 // security(1) needs to find the login keychain. On Linux the store is the
 // Secret Service on the session bus, which DBUS_SESSION_BUS_ADDRESS and
-// XDG_RUNTIME_DIR name.
+// XDG_RUNTIME_DIR name. BRIG_STATE_DIR places what a guest service keeps,
+// which the broker must find where brig does; it names a directory, not a
+// credential.
 func brokerEnv() []string {
-	names := []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG"}
+	names := []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "BRIG_STATE_DIR"}
 	if goruntime.GOOS == "linux" {
 		names = append(names, "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")
 	}

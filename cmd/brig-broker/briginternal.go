@@ -52,8 +52,11 @@ func (a arrivalAddr) String() string { return a.prefix + a.sandbox + "/" + a.src
 type arrivedConn struct {
 	net.Conn
 	remote arrivalAddr
-	once   sync.Once
-	done   chan struct{}
+	// from is the socket the connection arrived on. Its routes' context
+	// ends the route requests served on the connection.
+	from *divertSandbox
+	once sync.Once
+	done chan struct{}
 }
 
 func (c *arrivedConn) RemoteAddr() net.Addr { return c.remote }
@@ -145,7 +148,7 @@ func (l *divertSandbox) serveInternal(client net.Conn, pre preamble, a *divertAu
 		return
 	}
 	conn := &arrivedConn{Conn: tc, remote: arrivalAddr{prefix: divertArrival, sandbox: l.id, src: pre.src},
-		done: make(chan struct{})}
+		from: l, done: make(chan struct{})}
 	if !l.srv.internal.hand(conn) {
 		a.check = "stopping"
 		_ = conn.Close()

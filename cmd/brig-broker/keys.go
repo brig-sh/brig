@@ -22,14 +22,20 @@ import (
 	"github.com/brig-sh/brig/internal/injector"
 )
 
-// hostKeySize is the length of the host key, the output size of SHA-256.
+// hostKeySize is the length of the host key and of every guest service's
+// key, the output size of SHA-256.
 const hostKeySize = 32
 
 // loadOrCreateHostKey reads the host key at path, and draws one at first
 // start. The key signs every session token, so the file is 0600, is never a
 // link, and is read by this process alone. It never goes on a command line
 // or into a log.
-func loadOrCreateHostKey(path string) ([]byte, error) {
+func loadOrCreateHostKey(path string) ([]byte, error) { return loadOrCreateKey(path, "host key") }
+
+// loadOrCreateKey reads the key at path, named what in errors, and draws
+// one at first start. Each service that signs its own tokens has a key file
+// of its own, so one service's key cannot sign another's tokens.
+func loadOrCreateKey(path, what string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		key := make([]byte, hostKeySize)
@@ -42,7 +48,7 @@ func loadOrCreateHostKey(path string) ([]byte, error) {
 		return key, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot read the host key %s: %w", path, err)
+		return nil, fmt.Errorf("cannot read the %s %s: %w", what, path, err)
 	}
 	defer func() { _ = f.Close() }()
 	if err := checkPrivate(f, path); err != nil {
@@ -53,8 +59,8 @@ func loadOrCreateHostKey(path string) ([]byte, error) {
 		return nil, err
 	}
 	if len(key) != hostKeySize {
-		return nil, fmt.Errorf("refusing the host key %s: it is %d bytes, not %d. Remove it, and the "+
-			"next start draws a new one", path, len(key), hostKeySize)
+		return nil, fmt.Errorf("refusing the %s %s: it is %d bytes, not %d. Remove it, and the "+
+			"next start draws a new one", what, path, len(key), hostKeySize)
 	}
 	return key, nil
 }

@@ -9,6 +9,7 @@ import (
 	pathpkg "path"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/runtime"
 )
@@ -37,6 +38,12 @@ var caBundleSources = []string{
 // create is written through.
 const caCreateScript = `set -e; for d in "$(dirname "$1")" "$1"; do [ ! -L "$d" ] || { echo "$d is a link" >&2; exit 1; }; done; ` +
 	`mkdir -p -m 0755 "$1"; chown root "$1"; chmod 0755 "$1"; rm -f -- "$2" "$3" "$3.new"; umask 022; set -C; : > "$2"`
+
+// guestFileCreateScript creates the file $2 empty, root's and 0644, in the
+// directory $1, root's and 0755, as caCreateScript does for the CA, with no
+// bundle beside it.
+const guestFileCreateScript = `set -e; for d in "$(dirname "$1")" "$1"; do [ ! -L "$d" ] || { echo "$d is a link" >&2; exit 1; }; done; ` +
+	`mkdir -p -m 0755 "$1"; chown root "$1"; chmod 0755 "$1"; rm -f -- "$2"; umask 022; set -C; : > "$2"`
 
 // caSizeScript exits non-zero when the file $1 is not $2 bytes. The answer is
 // its exit status: urunc's exec can drop the output of a command that exits
@@ -90,19 +97,8 @@ func (c *Config) deliverBrigCA() error {
 	if err := c.guestRoot("sh", "-c", caCreateScript, "sh", dir, injector.GuestCAPath, injector.GuestCABundlePath); err != nil {
 		return fmt.Errorf("could not create %s in the sandbox: %w", injector.GuestCAPath, err)
 	}
-	piece := len(c.brigCA)
-	if l, ok := c.Runtime.(runtime.FeedLimiter); ok && l.MaxFeed() > 0 && l.MaxFeed() < piece {
-		piece = l.MaxFeed()
-	}
-	for start := 0; start < len(c.brigCA); start += piece {
-		end := min(start+piece, len(c.brigCA))
-		if err := c.Runtime.Feed(runtime.ExecSpec{Name: c.VMName, User: guestRootUser,
-			Cmd: []string{"sh", "-c", `cat >> "$1"`, "sh", injector.GuestCAPath}, Stdin: strings.NewReader(c.brigCA[start:end])}); err != nil {
-			return fmt.Errorf("could not write %s in the sandbox: %w", injector.GuestCAPath, err)
-		}
-	}
-	if err := c.guestRoot("sh", "-c", caSizeScript, "sh", injector.GuestCAPath, fmt.Sprint(len(c.brigCA))); err != nil {
-		return fmt.Errorf("%s does not hold the %d bytes written: %w", injector.GuestCAPath, len(c.brigCA), err)
+	if err := c.feedGuestFile(injector.GuestCAPath, c.brigCA); err != nil {
+		return err
 	}
 	args := append([]string{"sh", "-c", caBundleScript, "sh", injector.GuestCABundlePath, injector.GuestCAPath},
 		caBundleSources...)
@@ -110,4 +106,64 @@ func (c *Config) deliverBrigCA() error {
 		return fmt.Errorf("could not write %s in the sandbox: %w", injector.GuestCABundlePath, err)
 	}
 	return nil
+}
+
+// feedGuestFile appends body to the guest file path, which exists, on stdin
+// and in pieces the runtime can carry, and checks that the file holds what
+// was written.
+func (c *Config) feedGuestFile(path, body string) error {
+	piece := len(body)
+	if l, ok := c.Runtime.(runtime.FeedLimiter); ok && l.MaxFeed() > 0 && l.MaxFeed() < piece {
+		piece = l.MaxFeed()
+	}
+	for start := 0; start < len(body); start += piece {
+		end := min(start+piece, len(body))
+		if err := c.Runtime.Feed(runtime.ExecSpec{Name: c.VMName, User: guestRootUser,
+			Cmd: []string{"sh", "-c", `cat >> "$1"`, "sh", path}, Stdin: strings.NewReader(body[start:end])}); err != nil {
+			return fmt.Errorf("could not write %s in the sandbox: %w", path, err)
+		}
+	}
+	if err := c.guestRoot("sh", "-c", caSizeScript, "sh", path, fmt.Sprint(len(body))); err != nil {
+		return fmt.Errorf("%s does not hold the %d bytes written: %w", path, len(body), err)
+	}
+	return nil
+}
+
+// brigInternalRefusal is why this run's guest cannot reach what, a service
+// it is handed at brig.internal, or nil. what is the feature as the user
+// knows it, with what it is serving. Read-only, so Plan can call it.
+//
+// It is the check a route in mode endpoint gets, in words of its own: that
+// one is about a policy, and this run may have none.
+func (c *Config) brigInternalRefusal(what string) error {
+	// No runtime is no run path to check, as in routeRefusal.
+	if c.Runtime == nil {
+		return nil
+	}
+	if c.Network == NetOffline {
+		return fmt.Errorf("%s is served to the guest at %s, which an offline run cannot reach; "+
+			"run with --network isolated", what, injector.BrigInternal)
+	}
+	// hull on Linux routes brig.internal only on hvi. Asked here, as brig
+	// policy check asks it, or hull refuses the boot as a policy nothing
+	// enforces, on a run that has none.
+	err := runtime.RequireGatewayMonitor(runtime.RouteModeProperty(v1alpha1.ModeEndpoint), c.Runtime,
+		c.hypervisor(), c.Network.RuntimeNet())
+	if err == nil {
+		err = c.endpointCheck()
+	}
+	if err == nil {
+		return nil
+	}
+	why := err.Error()
+	var ce *runtime.CapabilityError
+	if errors.As(err, &ce) {
+		why = ce.Why
+		if ce.Err != nil {
+			why += ": " + ce.Err.Error()
+		}
+	}
+	return fmt.Errorf("%s is served to the guest at %s, and %s cannot route it: %s; "+
+		"it runs on hull with the hvi backend (BRIG_HYPERVISOR=hvi) and on nerdctl with urunc; run there",
+		what, injector.BrigInternal, c.routePath(), why)
 }

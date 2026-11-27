@@ -147,6 +147,12 @@ type server struct {
 	vends    map[string]map[string]vendRoute
 	stopping bool
 	stop     chan struct{}
+
+	// services are the guest services the broker serves, by kind, and
+	// serviceRegs their registrations, by kind and sandbox id, under mu.
+	// See services.go.
+	services    map[string]*guestService
+	serviceRegs map[string]map[string]*serviceReg
 }
 
 // newServer takes the lock, the keys and both listeners. It returns
@@ -160,7 +166,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
-		resolve: cfg.resolve, dial: cfg.dial}
+		resolve: cfg.resolve, dial: cfg.dial, services: map[string]*guestService{},
+		serviceRegs: map[string]map[string]*serviceReg{}}
 	if s.resolve == nil {
 		s.resolve = lookupHost
 	}
@@ -271,13 +278,13 @@ func (s *server) serve(ctx context.Context) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          logger,
 	}
-	// brig.internal is the same handler, on the connections the divert
-	// sockets hand over, and so is the link-local address of the routes
-	// that vend. Each request's remote address names the socket it arrived
-	// on, and its context marks whether it came in clear text. See
-	// briginternal.go and linklocal.go.
+	// brig.internal is the same route handler, behind the guest services
+	// (services.go), on the connections the divert sockets hand over, and
+	// so is the link-local address of the routes that vend. Each request's
+	// remote address names the socket it arrived on, and its context marks
+	// whether it came in clear text. See briginternal.go and linklocal.go.
 	internal := &http.Server{
-		Handler:           s.handler,
+		Handler:           s.internalMux(),
 		ConnContext:       divertContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
@@ -382,6 +389,8 @@ func (s *server) controlMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sandboxes", s.addSandbox)
 	mux.HandleFunc("DELETE /sandboxes/{id}", s.removeSandbox)
+	mux.HandleFunc("DELETE /services/sandboxes/{id}", s.removeServices)
+	mux.HandleFunc("DELETE /services/{kind}/sandboxes/{id}", s.removeService)
 	mux.HandleFunc("POST /tokens", s.mint)
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /stop", s.stopRequest)
@@ -492,6 +501,20 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	if s.refuseStopping(w) {
 		return
 	}
+	// The routes and the guest services of a sandbox share its divert
+	// socket, which serves one brig.internal address.
+	if old := s.diverts[req.ID]; old != nil && old.internal != internal {
+		if kinds := old.serviceKinds(); len(kinds) > 0 {
+			if _, ok := s.sandboxes[req.ID]; !ok {
+				s.aws.forget(req.ID)
+				s.gcp.forget(req.ID)
+			}
+			http.Error(w, fmt.Sprintf("sandbox %s: the routes reach brig.internal at %s, and its %s at %s; "+
+				"both must name the same address", req.ID, addrName(internal), kinds[0], addrName(old.internal)),
+				http.StatusConflict)
+			return
+		}
+	}
 	if s.sandboxes[req.ID] == string(key) {
 		s.setVends(req.ID, vends)
 		reply(w, s.added(req.ID))
@@ -536,15 +559,35 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// One socket for brig.internal and every route mode besides endpoint.
 	// The socket path is the sandbox's, so the listener of a registration
-	// this one replaces goes first.
-	if old := s.diverts[req.ID]; old != nil {
+	// this one replaces goes first. A socket that guest services hold stays,
+	// at the address checked above, and only what the routes serve on it
+	// changes: closing it would cut the guest's open connections to those
+	// services on every change of routes.
+	routesHold := internal.IsValid() || len(sb.Modes) > 0
+	old := s.diverts[req.ID]
+	if old != nil && len(old.serviceKinds()) == 0 {
 		old.close()
 		delete(s.diverts, req.ID)
+		old = nil
 	}
-	// One socket for brig.internal and every route mode besides endpoint.
-	if internal.IsValid() || len(sb.Modes) > 0 {
-		l, err := s.openDivert(req.ID, internal, sb.Modes, req.Modes)
+	if old != nil || routesHold {
+		var err error
+		if old != nil {
+			// The old handlers close before the new open, as when the
+			// socket is replaced.
+			old.setRoutes(false, nil)
+			var handlers []divertHandler
+			if handlers, err = s.openHandlers(req.ID, sb.Modes, req.Modes); err == nil {
+				old.setRoutes(routesHold, handlers)
+			}
+		} else {
+			var l *divertSandbox
+			if l, err = s.openDivert(req.ID, internal, true, sb.Modes, req.Modes); err == nil {
+				s.diverts[req.ID] = l
+			}
+		}
 		if err != nil {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
@@ -555,7 +598,6 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusInternalServerError)
 			return
 		}
-		s.diverts[req.ID] = l
 	}
 	s.sandboxes[req.ID] = string(key)
 	s.setVends(req.ID, vends)
@@ -646,6 +688,14 @@ func brigInternalAddr(s string) (netip.Addr, error) {
 	return a.Unmap(), nil
 }
 
+// addrName spells a brig.internal address in a refusal.
+func addrName(a netip.Addr) string {
+	if !a.IsValid() {
+		return "none"
+	}
+	return a.String()
+}
+
 func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := broker.ValidID(id); err != nil {
@@ -660,10 +710,15 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	s.aws.forget(id)
 	s.gcp.forget(id)
 	if l := s.diverts[id]; l != nil {
-		l.close()
-		delete(s.diverts, id)
+		// A socket that guest services hold stays for them.
+		if len(l.serviceKinds()) > 0 {
+			l.setRoutes(false, nil)
+		} else {
+			l.close()
+			delete(s.diverts, id)
+		}
 	}
-	remaining := len(s.sandboxes)
+	remaining := s.registered()
 	s.mu.Unlock()
 	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})
 }
@@ -701,11 +756,12 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	for id := range s.sandboxes {
 		ids = append(ids, id)
 	}
+	services := s.serviceIDs()
 	s.mu.Unlock()
 	sort.Strings(ids)
 	pending, failing, recovering := s.creds.report()
 	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
-		Pending: pending, Failing: failing, Recovering: recovering}
+		Pending: pending, Failing: failing, Recovering: recovering, Services: services}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
@@ -718,14 +774,15 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 }
 
 // stopRequest stops the broker. With ifIdle it stops only when no sandbox
-// is registered, and from then on refuses a new one.
+// is registered, for routes or for a guest service, and from then on refuses
+// a new one.
 func (s *server) stopRequest(w http.ResponseWriter, r *http.Request) {
 	var req injector.StopRequest
 	if !decode(w, r, &req) {
 		return
 	}
 	s.mu.Lock()
-	ok := !req.IfIdle || len(s.sandboxes) == 0
+	ok := !req.IfIdle || s.registered() == 0
 	first := ok && !s.stopping
 	if ok {
 		s.stopping = true

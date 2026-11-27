@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1148,5 +1149,292 @@ func TestGuestEnvFillsRouteHost(t *testing.T) {
 	}
 	if v := vars(got)["GH_HOST"]; v.Value != "github-api.brig.internal" || v.Secret {
 		t.Errorf("GH_HOST = %+v", v)
+	}
+}
+
+// controlServer answers the control calls of a fake broker on a socket in a
+// short directory, and records "METHOD path" per request in order. answer
+// gives the status and body per request.
+func controlServer(t *testing.T, answer func(method, path string) (int, string)) (dir string, calls func() []string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, SocketName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []string
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		status, body := answer(r.Method, r.URL.Path)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return dir, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), got...)
+	}
+}
+
+func TestForgetRevokesServices(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		switch path {
+		case "/sandboxes/brig-a":
+			return 200, `{"removed":true,"remaining":1}`
+		case "/services/sandboxes/brig-a":
+			return 200, `{"removed":true,"remaining":2}`
+		}
+		return 200, `{"stopping":true}`
+	})
+	if err := Forget(dir, "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	want := "DELETE /sandboxes/brig-a|DELETE /services/sandboxes/brig-a"
+	if got := strings.Join(calls(), "|"); got != want {
+		t.Errorf("calls = %q, want %q", got, want)
+	}
+}
+
+// With only a service registered the routes answer counts nothing, and the
+// services answer decides that the broker is idle.
+func TestForgetStopsAnIdleBrokerHoldingOnlyAService(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		switch path {
+		case "/sandboxes/brig-a":
+			return 200, `{"removed":false,"remaining":0}`
+		case "/services/sandboxes/brig-a":
+			return 200, `{"removed":true,"remaining":0}`
+		}
+		return 200, `{"stopping":true}`
+	})
+	if err := Forget(dir, "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls(), "|"); !strings.HasSuffix(got, "POST /stop") {
+		t.Errorf("calls = %q, want the broker stopped", got)
+	}
+}
+
+// A service that is left keeps the broker, though no route is.
+func TestForgetKeepsABrokerThatStillServesAService(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		if path == "/sandboxes/brig-a" {
+			return 200, `{"removed":true,"remaining":0}`
+		}
+		return 200, `{"removed":true,"remaining":1}`
+	})
+	if err := Forget(dir, "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls() {
+		if c == "POST /stop" {
+			t.Error("the broker was stopped with a service still registered")
+		}
+	}
+}
+
+func TestForgetOnABrokerWithoutServices(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		switch path {
+		case "/sandboxes/brig-a":
+			return 200, `{"removed":true,"remaining":0}`
+		case "/services/sandboxes/brig-a":
+			return 404, "not found"
+		}
+		return 200, `{"stopping":true}`
+	})
+	if err := Forget(dir, "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls(), "|"); !strings.HasSuffix(got, "POST /stop") {
+		t.Errorf("calls = %q, want the idle broker stopped", got)
+	}
+}
+
+// A refused routes removal does not leave the services in place, and both
+// refusals are returned.
+func TestForgetRevokesServicesWhenTheRoutesRefuse(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		if path == "/sandboxes/brig-a" {
+			return 500, "routes broke"
+		}
+		return 500, "services broke"
+	})
+	err := Forget(dir, "brig-a")
+	if err == nil || !strings.Contains(err.Error(), "routes broke") || !strings.Contains(err.Error(), "services broke") {
+		t.Fatalf("Forget = %v, want both refusals", err)
+	}
+	if got := strings.Join(calls(), "|"); got != "DELETE /sandboxes/brig-a|DELETE /services/sandboxes/brig-a" {
+		t.Errorf("calls = %q", got)
+	}
+}
+
+// ForgetRoutes removes the routes alone. The broker counts routes and
+// services in remaining, so a service still registered keeps it running,
+// and a broker with nothing left is stopped.
+func TestForgetRoutesLeavesServices(t *testing.T) {
+	for _, c := range []struct {
+		remaining int
+		want      string
+	}{
+		{1, "DELETE /sandboxes/brig-a"},
+		{0, "DELETE /sandboxes/brig-a|POST /stop"},
+	} {
+		dir, calls := controlServer(t, func(method, path string) (int, string) {
+			if method == http.MethodDelete {
+				return 200, fmt.Sprintf(`{"removed":true,"remaining":%d}`, c.remaining)
+			}
+			return 200, `{"stopping":true}`
+		})
+		if err := ForgetRoutes(dir, "brig-a"); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(calls(), "|"); got != c.want {
+			t.Errorf("%d remaining: calls = %q, want %q", c.remaining, got, c.want)
+		}
+	}
+}
+
+// The broker's own 404s, a sandbox not registered for the kind and a kind it
+// does not serve, leave nothing to revoke.
+func TestForgetServiceTakesNotFoundAsNothing(t *testing.T) {
+	for _, body := range []string{NotRegisteredMessage("echo", "brig-a") + "\n", NoServiceMessage("echo") + "\n"} {
+		dir, calls := controlServer(t, func(method, path string) (int, string) {
+			return 404, body
+		})
+		if err := ForgetService(dir, "echo", "brig-a"); err != nil {
+			t.Fatalf("404 %q = %v, want nothing to revoke", body, err)
+		}
+		if got := strings.Join(calls(), "|"); got != "DELETE /services/echo/sandboxes/brig-a" {
+			t.Errorf("calls = %q", got)
+		}
+	}
+}
+
+// A broker older than guest services does not have the path, and answers the
+// mux's own 404. It lists no service registration, so there is nothing to
+// revoke.
+func TestForgetServiceTakesAnOlderBrokersNotFoundAsNothing(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		if path == "/status" {
+			return 200, `{"sandboxes":["brig-a"]}`
+		}
+		return 404, "404 page not found\n"
+	})
+	if err := ForgetService(dir, "echo", "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls(), "|"); got != "DELETE /services/echo/sandboxes/brig-a|GET /status" {
+		t.Errorf("calls = %q", got)
+	}
+}
+
+// A 404 the broker did not explain is not taken as nothing to revoke: a
+// broker that lists the sandbox for the kind, or that answers 404 in other
+// words, still serves the token, and so does one that answers 500.
+func TestForgetServiceFailsClosed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+		listed string
+	}{
+		{"unrouted path, sandbox listed", 404, "404 page not found\n", `{"services":{"echo":["brig-a"]}}`},
+		{"404 in other words", 404, "not found\n", `{}`},
+		{"server error", 500, "boom\n", `{}`},
+	} {
+		dir, _ := controlServer(t, func(method, path string) (int, string) {
+			if path == "/status" {
+				return 200, c.listed
+			}
+			return c.status, c.body
+		})
+		if err := ForgetService(dir, "echo", "brig-a"); err == nil {
+			t.Errorf("%s: ForgetService = nil, want an error", c.name)
+		}
+	}
+}
+
+// A kind that is not one path segment, or an id the broker would refuse, is
+// refused before any call, so the request cannot reach another path.
+func TestForgetServiceRefusesABadTarget(t *testing.T) {
+	for _, c := range []struct{ kind, id string }{
+		{"", "brig-a"}, {"a/b", "brig-a"}, {"echo", ""}, {"echo", ".."}, {"echo", "a/b"}, {"echo", "a?b"},
+	} {
+		dir, calls := controlServer(t, func(method, path string) (int, string) {
+			return 200, `{"removed":true,"remaining":1}`
+		})
+		if err := ForgetService(dir, c.kind, c.id); err == nil {
+			t.Errorf("ForgetService(%q, %q) = nil, want a refusal", c.kind, c.id)
+		}
+		if got := calls(); len(got) != 0 {
+			t.Errorf("ForgetService(%q, %q) called %q", c.kind, c.id, got)
+		}
+	}
+}
+
+func TestForgetServiceStopsAnIdleBroker(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		if method == http.MethodDelete {
+			return 200, `{"removed":true,"remaining":0}`
+		}
+		return 200, `{"stopping":true}`
+	})
+	if err := ForgetService(dir, "echo", "brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls(), "|"); got != "DELETE /services/echo/sandboxes/brig-a|POST /stop" {
+		t.Errorf("calls = %q", got)
+	}
+}
+
+// A sandbox with only a service registered is in the status under Services
+// alone. ForgetAll revokes it too, and the broker stops with it gone.
+func TestForgetAllRevokesAServiceOnlySandbox(t *testing.T) {
+	dir, calls := controlServer(t, func(method, path string) (int, string) {
+		switch {
+		case path == "/status":
+			return 200, `{"sandboxes":["brig-a"],"services":{"echo":["brig-a","brig-b"]}}`
+		case method == http.MethodDelete:
+			return 200, `{"removed":true,"remaining":0}`
+		}
+		return 200, `{"stopping":true}`
+	})
+	got, err := ForgetAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "brig-a brig-b" {
+		t.Errorf("ForgetAll removed %v, want brig-a and brig-b", got)
+	}
+	want := "GET /status|DELETE /sandboxes/brig-a|DELETE /services/sandboxes/brig-a|" +
+		"DELETE /sandboxes/brig-b|DELETE /services/sandboxes/brig-b|POST /stop"
+	if c := strings.Join(calls(), "|"); c != want {
+		t.Errorf("calls = %q, want %q", c, want)
+	}
+}
+
+// A guest service may keep its state under BRIG_STATE_DIR, which the broker
+// must find where brig does. Nothing else of brig's environment is passed.
+func TestBrokerEnvCarriesTheStateDir(t *testing.T) {
+	t.Setenv("BRIG_STATE_DIR", "/tmp/brig-state")
+	t.Setenv("BRIG_POLICY_DIR", "/tmp/brig-policies")
+	env := brokerEnv()
+	if !slices.Contains(env, "BRIG_STATE_DIR=/tmp/brig-state") {
+		t.Errorf("brokerEnv = %q, want BRIG_STATE_DIR", env)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BRIG_POLICY_DIR=") {
+			t.Errorf("brokerEnv passes %s", kv)
+		}
 	}
 }

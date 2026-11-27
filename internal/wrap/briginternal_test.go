@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -284,6 +285,8 @@ func (g *caGuest) Output(spec runtime.ExecSpec) (string, error) {
 	}
 	switch {
 	case spec.Cmd[0] == "sh" && spec.Cmd[2] == caCreateScript:
+		g.files[spec.Cmd[5]] = ""
+	case spec.Cmd[0] == "sh" && spec.Cmd[2] == guestFileCreateScript:
 		g.files[spec.Cmd[5]] = ""
 	case spec.Cmd[0] == "sh" && spec.Cmd[2] == caBundleScript:
 		g.files[spec.Cmd[4]] = "ROOTS\n" + g.files[spec.Cmd[5]]
@@ -698,5 +701,160 @@ func TestTheBrokerRowDoesNotBlameBrigInternalForALinkLocalRefusal(t *testing.T) 
 	}
 	if strings.Contains(got, "cannot route brig.internal") {
 		t.Errorf("BROKER row blames brig.internal for the link-local probe: %q", got)
+	}
+}
+
+// serviceSession loads the ubuntu profile on hvi with every directory brig
+// writes in a fresh temporary one, on rt, with o.
+func serviceSession(t *testing.T, network string, o Options, rt runtime.Runtime) *Config {
+	t.Helper()
+	isolateState(t)
+	// The divert socket of brig.internal is under the state directory, and
+	// a unix socket path fits in 103 bytes.
+	shortStateDir(t)
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	p, ok := profile.Lookup("ubuntu")
+	if !ok {
+		t.Fatal("the ubuntu profile is not loaded")
+	}
+	p.Network = network
+	if o.Workspace == "" {
+		o.Workspace = t.TempDir()
+	}
+	c, err := Load(p, o, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Verify, c.Out, c.Err, c.Progress = verify.Off, io.Discard, io.Discard, io.Discard
+	c.broker = &fakeBroker{}
+	return c
+}
+
+// A guest reaches a service on the broker's own address, which an isolated
+// sandbox is allowed and nothing else, so a run with one is moved onto the
+// isolated posture as a run with a route is. The posture asked for is kept,
+// so a later run without the service is not a posture change. An offline run
+// stays offline, and brigInternalRefusal refuses it.
+func TestARunWithAServiceIsIsolated(t *testing.T) {
+	c := serviceSession(t, "shared", Options{services: []string{"echo"}}, &hullRecorder{})
+	if c.Network != NetIsolated {
+		t.Errorf("a run with a service resolved %s, want isolated", c.Network)
+	}
+	if c.askedNetwork != NetShared {
+		t.Errorf("asked posture became %s", c.askedNetwork)
+	}
+	if !slices.Equal(c.services, []string{"echo"}) || !c.brigInternal() {
+		t.Errorf("services %v, brigInternal %v", c.services, c.brigInternal())
+	}
+	if c = serviceSession(t, "shared", Options{}, &hullRecorder{}); c.Network != NetShared || c.brigInternal() {
+		t.Errorf("a run without a service resolved %s, brigInternal %v", c.Network, c.brigInternal())
+	}
+	c = serviceSession(t, "shared", Options{Network: "offline", services: []string{"echo"}}, &hullRecorder{})
+	if c.Network != NetOffline {
+		t.Errorf("a service moved an offline run to %s", c.Network)
+	}
+}
+
+// An offline run cannot reach brig.internal, so a service is refused for it
+// in the words of the feature, which names no policy the run may not have.
+// The same run on an isolated network on hvi is served.
+func TestBrigInternalRefusalOffline(t *testing.T) {
+	c := serviceSession(t, "offline", Options{services: []string{"echo"}}, &hullRecorder{})
+	err := c.brigInternalRefusal("echo")
+	want := "echo is served to the guest at brig.internal, which an offline run cannot reach; run with --network isolated"
+	if err == nil || err.Error() != want {
+		t.Fatalf("brigInternalRefusal = %v, want %q", err, want)
+	}
+	c = serviceSession(t, "isolated", Options{services: []string{"echo"}}, &hullRecorder{})
+	if err := c.brigInternalRefusal("echo"); err != nil {
+		t.Errorf("a service on hull on hvi was refused: %v", err)
+	}
+}
+
+// hull on Linux routes brig.internal only on hvi, the one monitor urunc joins
+// to a gateway. On another, a service is refused before the boot, in its own
+// words. Left to hull, the boot refuses it as a policy nothing enforces, with
+// exit 7, for a run that has no policy.
+func TestBrigInternalRefusedOnLinuxHullOffHvi(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("brig marks a hull as the Linux one only on a Linux host")
+	}
+	for _, hv := range []string{"firecracker", "cloud-hypervisor"} {
+		t.Run(hv, func(t *testing.T) {
+			t.Setenv("BRIG_RUNTIME", "hull")
+			bin := filepath.Join(t.TempDir(), "hull")
+			script := "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'hull dev (go1.26.8, linux/amd64)'; exit 0; }\n" +
+				"echo \"instance not found: $2\" >&2\nexit 1\n"
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BRIG_RUNTIME_BIN", bin)
+			rt, err := runtime.Detect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.IsLinuxHull(rt) {
+				t.Fatal("the stub was not taken for hull on Linux")
+			}
+			c := serviceSession(t, "isolated", Options{services: []string{"echo"}}, rt)
+			t.Setenv("BRIG_HYPERVISOR", hv)
+			err = c.brigInternalRefusal("echo")
+			if err == nil {
+				t.Fatalf("a service on hull on Linux with %s was not refused", hv)
+			}
+			for _, want := range []string{"echo is served to the guest at brig.internal", "only on hvi"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), "policy") {
+				t.Errorf("the refusal talks about a policy this run does not have: %v", err)
+			}
+		})
+	}
+}
+
+// The broker refuses routes registered with no brig.internal address beside
+// a service that holds the divert socket at one. So a run with a service
+// registers its routes at the brig.internal address even when none of them
+// is in mode endpoint.
+func TestAServiceRegistersItsRoutesAtBrigInternal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	f := &fakeMode{setup: &fakeSetup{}}
+	registerRelay(t, f)
+	rec := &hullRecorder{}
+	cfg := routedConfig(t, strings.Replace(relayPolicy, "claude-relay", "brokered", 1), rec)
+	shortStateDir(t)
+	cfg.Verify = verify.Off
+	cfg.services = []string{"echo"}
+	broker := &fakeBroker{}
+	cfg.broker = broker
+	if err := cfg.EnsureRunning(creds.Set{}); err == nil || !strings.Contains(err.Error(), "not booting") {
+		t.Fatalf("the run did not reach the runtime: %v", err)
+	}
+	if len(broker.registered) != 1 || broker.registered[0].BrigInternal != "198.18.1.1" {
+		t.Fatalf("registered %+v, want the routes at the runtime's brig.internal address", broker.registered)
+	}
+	if d := rec.spec.Egress.Divert; !d.BrigInternal {
+		t.Errorf("Divert = %+v, want brig.internal", d)
+	}
+}
+
+// A run with a service and routes in no mode at brig.internal declares no
+// endpoint route, so routeRefusal does not refuse it as one when brig.internal
+// cannot be reached. That refusal is brigInternalRefusal's, in the service's
+// words.
+func TestAServiceBesideNoEndpointRouteIsNotRefusedAsAnEndpointRoute(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	registerRelay(t, &fakeMode{setup: &fakeSetup{}})
+	rec := &hullRecorder{probe: errors.New("the gateway does not answer")}
+	cfg := routedConfig(t, strings.Replace(relayPolicy, "claude-relay", "brokered", 1), rec)
+	cfg.services = []string{"echo"}
+	if err := cfg.routeRefusal(); err != nil && strings.Contains(err.Error(), "declares a route in mode endpoint") {
+		t.Errorf("routeRefusal = %v, want no endpoint route named", err)
+	}
+	if err := cfg.brigInternalRefusal("echo"); err == nil || !strings.Contains(err.Error(), "the gateway does not answer") {
+		t.Errorf("brigInternalRefusal = %v, want the probe's failure", err)
 	}
 }

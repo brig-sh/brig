@@ -80,6 +80,16 @@ func (f *fakeBroker) Forget(id string) error {
 	return nil
 }
 
+func (f *fakeBroker) ForgetRoutes(id string) error {
+	f.calls = append(f.calls, "forget routes "+id)
+	return nil
+}
+
+func (f *fakeBroker) ForgetService(kind, id string) error {
+	f.calls = append(f.calls, "forget service "+kind+" "+id)
+	return nil
+}
+
 func (f *fakeBroker) Status() (injector.Status, bool) {
 	if f.stuck {
 		return injector.Status{PID: 4242}, false
