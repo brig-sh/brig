@@ -186,6 +186,31 @@ func TestARecordingRefusedMidRunStopsSpoolingAtOnce(t *testing.T) {
 	}
 }
 
+// A recording that stops because Brig cannot send its own spool does not say
+// the deployment refused it.
+func TestARecordingStoppedByALocalFaultDoesNotBlameTheDeployment(t *testing.T) {
+	r := newRun(t)
+	r.say("one\r\n")
+	r.s.up.MaxBatch = 4 // smaller than any frame
+	ticks := make(chan time.Time, 1)
+	ticks <- time.Now()
+	done := make(chan struct{})
+	go func() { r.s.liveLoop(context.Background(), ticks); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the live loop kept going after a frame larger than the batch")
+	}
+	r.end()
+	got := r.notice.String()
+	if strings.Contains(got, "deployment refused") {
+		t.Errorf("closing lines %q blame the deployment", got)
+	}
+	if !strings.Contains(got, "recording stopped before the run ended (Brig cannot send the recording it holds)") {
+		t.Errorf("closing lines %q", got)
+	}
+}
+
 // A login the deployment refuses at the end of the run has its own line, which
 // says to sign in again, and not the line that promises the next run will send.
 func TestARunWhoseLoginWasRefusedTellsThePersonToSignInAgain(t *testing.T) {

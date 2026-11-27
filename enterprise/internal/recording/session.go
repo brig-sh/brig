@@ -447,7 +447,7 @@ func (s *Session) liveLoop(ctx context.Context, ticks <-chan time.Time) {
 		case <-ticks:
 			err := s.tick(ctx)
 			if errors.Is(err, ErrFatal) {
-				s.stop("the deployment refused the recording")
+				s.stop(fatalWords(err))
 				return
 			}
 			if errors.Is(err, ErrAuth) || errors.Is(err, errStopped) || errors.Is(err, errGiveUp) {
@@ -637,6 +637,15 @@ var errGiveUp = errors.New("recording: the deployment's answer to the open canno
 type errUnrecorded struct{ words string }
 
 func (e errUnrecorded) Error() string { return "recording: not continued: " + e.words }
+
+// fatalWords says why an ErrFatal stopped the recording. Most are the
+// deployment's refusal; a spool Brig cannot read or send is not.
+func fatalWords(err error) string {
+	if errors.Is(err, errSpoolUnsendable) {
+		return "Brig cannot send the recording it holds"
+	}
+	return "the deployment refused the recording"
+}
 
 func stopWords(err error) string {
 	var u errUnrecorded

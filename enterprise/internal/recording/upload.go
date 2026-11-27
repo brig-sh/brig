@@ -31,6 +31,10 @@ const (
 // and a retry cannot help.
 var ErrFatal = errors.New("recording: the deployment refused the recording")
 
+// errSpoolUnsendable marks an ErrFatal whose cause is on this host or in the
+// batch size, not a refusal by the deployment.
+var errSpoolUnsendable = errors.New("recording: the spool cannot be sent")
+
 // ErrRecordingClosed means the server closed the recording and this uploader
 // did not ask it to: it got no request for 2 minutes. The caller may open a new
 // recording and continue with Switch.
@@ -160,13 +164,13 @@ func (u *Uploader) Pump(ctx context.Context) error {
 		}
 		whole, ferr := frame.WholePrefix(buf)
 		if ferr != nil {
-			return fmt.Errorf("%w: the spool holds an invalid frame: %v", ErrFatal, ferr)
+			return fmt.Errorf("%w: %w: the spool holds an invalid frame: %v", ErrFatal, errSpoolUnsendable, ferr)
 		}
 		if whole == 0 {
 			if size-u.Offset > int64(u.MaxBatch) {
 				// A full batch holds no whole frame, so none ever will:
 				// the deployment's batch size is smaller than a frame.
-				return fmt.Errorf("%w: a frame is larger than the deployment's batch size", ErrFatal)
+				return fmt.Errorf("%w: %w: a frame is larger than the deployment's batch size", ErrFatal, errSpoolUnsendable)
 			}
 			return nil // a frame still being written
 		}
