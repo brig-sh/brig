@@ -308,13 +308,19 @@ func TestThePauseGoesToTheTerminalWhenStderrIsNotOne(t *testing.T) {
 	for _, c := range []struct {
 		name           string
 		stderrTerminal bool
-	}{{"stderr is a file", false}, {"stderr is a terminal", true}} {
+		stderrIsRuns   bool
+	}{
+		{"stderr is a file", false, false},
+		{"stderr is the terminal the run uses", true, true},
+		{"stderr is another terminal", true, false},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newRecHost(t)
 			d := h.expire(t)
 			seen := pipes(t)
 			notice = os.Stderr
 			isTerminal = func(f *os.File) bool { return f != os.Stderr || c.stderrTerminal }
+			sameTerminal = func(a, b *os.File) bool { return b != os.Stderr || c.stderrIsRuns }
 			signIn = func(out io.Writer, _ nofireauth.Deployment) error {
 				_, _ = io.WriteString(out, "SIGN-IN OUTPUT\n")
 				return errors.New("the deployment is down")
@@ -329,7 +335,7 @@ func TestThePauseGoesToTheTerminalWhenStderrIsNotOne(t *testing.T) {
 			stdout, stderr := seen()
 			lines := fmt.Sprintf(pauseLine, d) + "SIGN-IN OUTPUT\nbrig: the deployment is down\n" + failedLine
 			want, wantNot := stdout, stderr
-			if c.stderrTerminal {
+			if c.stderrIsRuns {
 				want, wantNot = stderr, stdout
 			}
 			if want != lines || wantNot != "" {

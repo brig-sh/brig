@@ -1537,9 +1537,9 @@ keychain call, and Ctrl-C ends the wait. A token that is not stored by then is
 revoked, and the sign-in has failed. A run that cannot be
 recorded for any local reason, such as a pipe, two terminals, another runtime
 or `--json`, does not pause and starts no sign-in. The pause is always on the
-terminal the run uses: when stderr is not a terminal, everything the pause
-prints goes to stdout instead, so a redirected stderr cannot hide a sign-in
-that waits for you.
+terminal the run uses: when stderr is not that terminal, because it is a file, a
+pipe or another terminal, everything the pause prints goes to stdout instead,
+so a redirected stderr cannot hide a sign-in that waits for you.
 
 **The token.** A recorded run reads the login token. One small package of
 Brig Enterprise reads it and hands it to the recorder as a value. It learns

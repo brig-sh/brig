@@ -243,12 +243,13 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 
 // pauseWriter is where the pause for an expired sign-in prints: the lines of
 // the pause, everything the sign-in prints and asks, and the line when it did
-// not finish. It is notice, except when notice is a file that is not a
-// terminal, such as stderr sent to /dev/null or a log. The person must see the
-// pause, so it goes to stdout then, which Attach checked is the terminal the
-// run uses.
+// not finish. It is notice, except when notice is a file that is not the
+// terminal the run uses: stderr sent to /dev/null or a log, or to another
+// terminal. The sign-in reads its answers from the run's terminal, so the
+// person must see the pause there. It goes to stdout then, which Attach checked
+// is that terminal.
 func pauseWriter() io.Writer {
-	if f, ok := notice.(*os.File); ok && !isTerminal(f) {
+	if f, ok := notice.(*os.File); ok && !(isTerminal(f) && sameTerminal(os.Stdin, f)) {
 		return os.Stdout
 	}
 	return notice
