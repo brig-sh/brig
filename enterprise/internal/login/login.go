@@ -340,10 +340,14 @@ func SignIn(out io.Writer, d nofireauth.Deployment) (err error) {
 // catching Ctrl-C until stop is called: a later one is swallowed rather than
 // handed back to the default, which would end Brig. signal.NotifyContext
 // cannot do that, because it stops catching with the first signal. stop
-// stops catching. A signal that Brig inherited as ignored stays ignored then,
-// which the Go runtime guarantees whatever this code does.
+// stops catching. A signal that Brig inherited as ignored is ignored again
+// then: signal.Notify clears the runtime's record that it was ignored, and
+// signal.Stop does not set it back, so stop calls signal.Ignore. Without that,
+// signal.Ignored would answer false for the rest of the process and the
+// recorder would forward Ctrl-C to the command.
 func heldContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
+	wasIgnored := signal.Ignored(os.Interrupt)
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
 	done := make(chan struct{})
@@ -359,6 +363,9 @@ func heldContext() (context.Context, context.CancelFunc) {
 	}()
 	return ctx, func() {
 		signal.Stop(ch)
+		if wasIgnored {
+			signal.Ignore(os.Interrupt)
+		}
 		close(done)
 		cancel()
 	}

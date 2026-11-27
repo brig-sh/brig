@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"slices"
 	"strings"
 	"syscall"
@@ -498,5 +500,39 @@ func TestSignInKeepsALoginAnotherRunStoredAndRevokesItsOwnToken(t *testing.T) {
 	}
 	if !slices.Equal(s.Revoked(), []string{issued[0]}) {
 		t.Errorf("revoked %v, want only this sign-in's own token %q", s.Revoked(), issued[0])
+	}
+}
+
+// Brig can be started with SIGINT ignored, by a script that wants its
+// children to outlive Ctrl-C. The recorder asks signal.Ignored before it
+// installs its own handler, so after a sign-in signal.Ignored must still say
+// true. signal.Notify clears the runtime's record of the inherited state, and
+// signal.Stop does not restore it. The test runs in a child process that
+// starts with SIGINT ignored.
+func TestHeldContextLeavesAnIgnoredSIGINTIgnored(t *testing.T) {
+	if os.Getenv("BRIG_TEST_HELD_IGNORED_CHILD") == "1" {
+		t.Skip("this is the parent half")
+	}
+	cmd := exec.Command("sh", "-c", `trap '' INT; exec "$0" -test.run='^TestHeldContextIgnoredChild$' -test.v`, os.Args[0])
+	cmd.Env = append(os.Environ(), "BRIG_TEST_HELD_IGNORED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestHeldContextIgnoredChild") {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+// TestHeldContextIgnoredChild is the half that runs with SIGINT ignored from
+// the start. Run alone, it does nothing.
+func TestHeldContextIgnoredChild(t *testing.T) {
+	if os.Getenv("BRIG_TEST_HELD_IGNORED_CHILD") != "1" {
+		t.Skip("runs only from TestHeldContextLeavesAnIgnoredSIGINTIgnored")
+	}
+	if !signal.Ignored(syscall.SIGINT) {
+		t.Fatal("SIGINT was not ignored at start")
+	}
+	_, stop := heldContext()
+	stop()
+	if !signal.Ignored(syscall.SIGINT) {
+		t.Error("SIGINT is no longer ignored after the sign-in's context stopped")
 	}
 }
