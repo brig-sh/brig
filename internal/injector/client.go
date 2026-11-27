@@ -245,6 +245,27 @@ func (c Client) Mint(r MintRequest) (string, error) {
 	return out.Token, nil
 }
 
+// AddMCP registers the MCP servers of s.ID, apart from its routes. The same
+// servers again keep the sandbox's MCP key, so the token of an agent already
+// running stays valid. ForgetService(dir, "mcp", id) removes them.
+func (c Client) AddMCP(s MCPSandbox) (AddResponse, error) {
+	var out AddResponse
+	err := c.call(http.MethodPost, "/mcp/sandboxes", s, &out)
+	return out, err
+}
+
+// MintMCP returns an MCP token for a sandbox registered for MCP servers.
+func (c Client) MintMCP(r MCPMintRequest) (string, error) {
+	var out MintResponse
+	if err := c.call(http.MethodPost, "/mcp/tokens", r, &out); err != nil {
+		return "", err
+	}
+	if out.Token == "" {
+		return "", errors.New("the credential broker minted an empty mcp token")
+	}
+	return out.Token, nil
+}
+
 // Status asks the broker what it serves.
 func (c Client) Status() (Status, error) {
 	var out Status

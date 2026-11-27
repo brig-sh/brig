@@ -24,6 +24,7 @@ import (
 	"github.com/brig-sh/brig/internal/broker"
 	"github.com/brig-sh/brig/internal/gcpcred"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/mcpproxy"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/renew"
 	"github.com/brig-sh/brig/internal/routemode"
@@ -153,6 +154,11 @@ type server struct {
 	// See services.go.
 	services    map[string]*guestService
 	serviceRegs map[string]map[string]*serviceReg
+
+	// mcpProxy forwards the requests of every sandbox's MCP servers, and
+	// mcpGate bounds the MCP calls in flight per sandbox. See mcp.go.
+	mcpProxy *mcpproxy.Proxy
+	mcpGate  mcpGate
 }
 
 // newServer takes the lock, the keys and both listeners. It returns
@@ -183,6 +189,12 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	hostKey, err := loadOrCreateHostKey(filepath.Join(cfg.dir, injector.HostKeyName))
+	if err != nil {
+		return nil, err
+	}
+	// The MCP key is neither the host key nor any other service's, so the
+	// MCP servers can move to their own process with no other key.
+	mcpKey, err := loadOrCreateKey(filepath.Join(cfg.dir, injector.MCPKeyName), "mcp key")
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +234,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s.creds = newCredentials(store, renewerFor)
 	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
+	s.mcpProxy = s.newMCPProxy(cfg.transport)
+	s.addService(s.mcpService(mcpKey))
 	s.handler, err = broker.New(broker.Config{
 		HostKey:      hostKey,
 		Credentials:  s.creds,
@@ -392,6 +406,8 @@ func (s *server) controlMux() http.Handler {
 	mux.HandleFunc("DELETE /services/sandboxes/{id}", s.removeServices)
 	mux.HandleFunc("DELETE /services/{kind}/sandboxes/{id}", s.removeService)
 	mux.HandleFunc("POST /tokens", s.mint)
+	mux.HandleFunc("POST /mcp/sandboxes", s.addMCP)
+	mux.HandleFunc("POST /mcp/tokens", s.mintMCP)
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /stop", s.stopRequest)
 	return mux
