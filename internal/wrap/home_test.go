@@ -600,3 +600,55 @@ func TestWarnBlockOffATerminalPrefixesEveryLine(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", errOut.String(), want)
 	}
 }
+
+// leftoverRuntime fails the boot after the sandbox was created, like
+// nerdctl does when containerd can't start the shim.
+type leftoverRuntime struct {
+	bootFailRuntime
+	present bool
+	removes int
+}
+
+func (r *leftoverRuntime) Run(runtime.RunSpec) error {
+	r.boots++
+	r.present = true
+	return errors.New("failed to start shim: invalid runtime name RUNC")
+}
+
+func (r *leftoverRuntime) Exists(string) (bool, error) { return r.present, nil }
+
+func (r *leftoverRuntime) Remove(string) error {
+	r.removes++
+	r.present = false
+	return nil
+}
+
+// A failed boot should not leave the sandbox it created. If it does, the
+// home stays too, and no later rm can tell it was ephemeral (#474).
+func TestAFailedBootRemovesTheSandboxItLeft(t *testing.T) {
+	isolateHome(t)
+	c := mustLoad(t, Options{})
+	rt := &leftoverRuntime{}
+	failBoot(t, c, rt)
+	if rt.present {
+		t.Error("a failed first boot left the sandbox the runtime created")
+	}
+	if _, err := os.Lstat(c.Workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed first boot left its home behind: %v", err)
+	}
+}
+
+// The leftover sandbox goes either way, but a home the user named stays.
+func TestAFailedBootRemovesTheSandboxButKeepsANamedHome(t *testing.T) {
+	isolateHome(t)
+	home := filepath.Join(t.TempDir(), "mine")
+	c := mustLoad(t, Options{Workspace: home})
+	rt := &leftoverRuntime{}
+	failBoot(t, c, rt)
+	if rt.present {
+		t.Error("a failed boot left the sandbox the runtime created")
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Errorf("a failed boot deleted the named home: %v", err)
+	}
+}
