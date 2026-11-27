@@ -46,7 +46,7 @@
 // brig login for that deployment (login.SignIn: the same flow, the same
 // questions about a trust store, the same storage), reads the token again and
 // goes on as a signed-in run does. A sign-in that fails, times out or is ended
-// with Ctrl-C prints one line, and the run goes unrecorded. Everything the
+// with Ctrl-C prints its error, then one line, and the run goes unrecorded. Everything the
 // pause prints goes to stderr, or to stdout when stderr is not a terminal, so
 // the person always sees it. Ctrl-C ends the sign-in only. A run that cannot be recorded for the local rules above never
 // pauses and never starts a sign-in.
@@ -184,7 +184,7 @@ func newClient(base, token string) *recording.Client {
 // signs the person in again, which can take minutes and is the one thing a
 // relay does before the deployment is asked. The command has not started, so
 // the pause costs the run nothing but time. If the sign-in does not finish, the
-// relay prints one line and declines.
+// relay prints the sign-in's error, then one line, and declines.
 func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 	// Only a terminal session is recorded, and this is decided first, before
 	// the token is read or anything is printed. A run whose stdin or stdout is a
@@ -222,7 +222,7 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 			w := pauseWriter()
 			fmt.Fprintf(w, "brig: your sign-in to %s expired. Signing you in again so this run can be recorded. Ctrl-C runs it without recording\n", d)
 			if err := signIn(w, d); err != nil {
-				return 0, declineSignIn(w)
+				return 0, declineSignIn(w, err)
 			}
 			tok, unaccepted, timedOut, _ := accessToken(d, login.KeyringWait)
 			switch {
@@ -231,7 +231,7 @@ func Attach(run cli.AttachedRun) func(argv, env []string) (int, error) {
 			case unaccepted != "":
 				return 0, declineUnaccepted(w, unaccepted)
 			case tok == "":
-				return 0, declineSignIn(w)
+				return 0, declineSignIn(w, nil)
 			}
 			return record(run, d, tok, state)(argv, env)
 		}
@@ -252,9 +252,15 @@ func pauseWriter() io.Writer {
 	return notice
 }
 
-// declineSignIn is the line of a run whose sign-in did not finish, and the
-// decline that hands the run over unrecorded.
-func declineSignIn(w io.Writer) error {
+// declineSignIn is the lines of a run whose sign-in did not finish, and the
+// decline that hands the run over unrecorded. When the sign-in returned an
+// error, its text comes first, cleaned as brig login cleans it: it can say that
+// a token the deployment issued is still valid and must be revoked from the
+// dashboard, which the person must not miss. The text holds no token.
+func declineSignIn(w io.Writer, err error) error {
+	if err != nil {
+		fmt.Fprintf(w, "brig: %s\n", nofireauth.CleanMessage(err.Error()))
+	}
 	fmt.Fprintln(w, "brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in")
 	return cli.ErrRelayDeclined
 }
