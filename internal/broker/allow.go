@@ -38,7 +38,7 @@ func allow(a *v1alpha1.RequestAllow, method, rest string) *refusal {
 		if !ok {
 			return &refusal{"repos", fmt.Sprintf("path %q names no owner/name repository", rest)}
 		}
-		if !slices.ContainsFunc(a.Repos, func(g string) bool { return match(g, repo) }) {
+		if !slices.ContainsFunc(a.Repos, func(g string) bool { return matchRepo(g, repo) }) {
 			return &refusal{"repos", fmt.Sprintf("repo %q is not in the allow list %s", repo, list(a.Repos))}
 		}
 	}
@@ -50,6 +50,19 @@ func allow(a *v1alpha1.RequestAllow, method, rest string) *refusal {
 func match(glob, s string) bool {
 	ok, err := path.Match(glob, s)
 	return err == nil && ok
+}
+
+// matchRepo applies a repos glob to an owner/name without ASCII case.
+// GitHub resolves Example/lib and example/lib to one repository, and go
+// lowers module paths, so a case-sensitive match refused go's fetch of a
+// repository the policy allows. It folds A-Z alone: Unicode folding would
+// let the Kelvin sign stand for k, and on a route with repos the path is
+// ASCII anyway, since canonical refuses the rest before allow runs. The
+// glob is folded too, so [A-Z] reads as [a-z]. graphql.repos matches the
+// same way, so the github-token and github-api presets read a glob alike.
+// Paths do not use this: an upstream may tell /v2/Items from /v2/items.
+func matchRepo(glob, repo string) bool {
+	return match(asciiLower(glob), asciiLower(repo))
 }
 
 // repoOf returns the owner/name a git smart-HTTP path is for, such as

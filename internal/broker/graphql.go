@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -227,7 +226,7 @@ func (h *Handler) confirmNodes(r *http.Request, rt *route, upstream *url.URL, va
 func (h *Handler) repoListed(r *http.Request, rt *route, upstream *url.URL, value string, s repoSeen, repos []string) (bool, error) {
 	for _, g := range repos {
 		if strings.ContainsAny(g, "*?[\\") {
-			if ok, err := path.Match(asciiLower(g), asciiLower(s.name)); err == nil && ok {
+			if matchRepo(g, s.name) {
 				return true, nil
 			}
 			continue
@@ -388,7 +387,8 @@ func (h *Handler) ask(ctx context.Context, upstream *url.URL, value, query strin
 	return nil
 }
 
-// asciiLower folds ASCII letters alone, as repos matching does in queries.
+// asciiLower folds ASCII letters alone, as repos matching does in queries
+// and in request.allow.repos (see matchRepo).
 func asciiLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {

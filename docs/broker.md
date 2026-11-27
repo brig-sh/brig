@@ -509,7 +509,7 @@ set must match.
 | --- | --- |
 | `methods` | The request method |
 | `paths` | `<rest>`, without the query. `*` does not match a `/` |
-| `repos` | The `owner/name` that the first two segments of `<rest>` name, with a `.git` suffix removed. A path with fewer than two segments is refused |
+| `repos` | The `owner/name` that the first two segments of `<rest>` name, with a `.git` suffix removed, without ASCII case, as `graphql.repos` is matched. A path with fewer than two segments is refused |
 | `graphql` | The GraphQL operation in the body of a request to `/api/graphql`, on the `github-api` preset alone. See [GraphQL requests](#graphql-requests) |
 
 On a route with `services` each service has its own lists, and the route has

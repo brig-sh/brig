@@ -346,7 +346,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
-| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
+| `request.allow.repos` | no | `owner/name` globs, matched without ASCII case, as GitHub matches names. The glob is lowered too, so `[A-Z]` reads as `[a-z]`. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
 | `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
 | `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
 | `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field, and the repository of each node ID a mutation names (both repositories of a pull request), must match. With it, `queries` may list only `repository` and `rateLimit` |
@@ -547,6 +547,10 @@ The git rewrites of a preset follow its upstream. `github-token` with
 all a GitHub Enterprise host needs. To keep the `github.com` forms on a
 route with another upstream, such as a mirror, write `guest.git.insteadOf`
 out.
+
+`request.allow.repos` ignores ASCII case, as GitHub does. On an upstream
+that tells names apart by case, such as a mirror, a glob also covers each
+name that differs from it only in case.
 
 A policy that a Brigfile holds is limited further. See
 [What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
