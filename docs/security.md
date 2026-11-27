@@ -1489,7 +1489,7 @@ the host. If `BRIG_NOFIRE_URL` names a deployment you did not sign in to, Brig
 finds no token for it and sends nothing. If `SSL_CERT_FILE` or `SSL_CERT_DIR`
 is set and was not accepted when you signed in with the same value, Brig does
 not record, because with a CA of its own whoever set the variable could read
-the token, and a run cannot ask you as `brig login` does. When `brig login`
+the token, and a run cannot ask you as `brig login` does, except in the pause for an expired sign-in, described below. When `brig login`
 asks about the variable and you answer yes, Brig stores the variable's name and
 value, made an absolute path against the directory you ran it in, in the same
 keychain item as the token. `brig logout` removes them with it, and the next
@@ -1514,8 +1514,13 @@ token. A terminal run on hull whose stored token for the deployment has expired
 pauses before the command starts, prints a line that names the deployment, and
 runs the sign-in `brig login` runs, in the same code: the same flow, the same
 questions about a deployment from `BRIG_NOFIRE_URL` and about a trust store from
-the environment, the same storage and the default lifetime. That sign-in is the
-one other place Brig writes the login store, and it writes it only for the
+the environment, the same storage and the default lifetime. This pause is the
+one place a run asks about a trust store from the environment: the sign-in
+prints "Trusting certificates from" with the path and asks the question
+`brig login` asks. A yes accepts that value and stores it with the new token,
+and the sign-in trusts it. An answer other than yes ends the sign-in, and the
+run goes unrecorded. That sign-in is the one other place Brig writes the login
+store, and it writes it only for the
 deployment whose token expired. If it succeeds, the run goes on as a signed-in
 run does. If it fails, times out or you press Ctrl-C, Brig prints one line that
 says the sign-in did not finish and names `brig login`, sends nothing to the
