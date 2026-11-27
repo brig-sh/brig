@@ -532,3 +532,36 @@ func TestAgentArgsAddsTheMCPConfigForClaudeCodeOnly(t *testing.T) {
 		})
 	}
 }
+
+// A run whose policy attaches an MCP server has the MCP configuration from
+// the moment it loads, so Claude Code is started with --mcp-config once,
+// naming it, and the arguments a target's approval covers, taken before the
+// boot, are the ones it is started with.
+func TestAgentArgsPassOneMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(dir, "ws"))
+	t.Setenv("BRIG_POLICY_DIR", filepath.Join(dir, "policies"))
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: nofire}\nspec:\n  mcp:\n" +
+		"    - name: nofire\n      preset: nofire\n      credential: {secretRef: {name: nofire-token}}\n" +
+		"      tools: {allow: [search]}\n"
+	if err := os.MkdirAll(filepath.Join(dir, "policies"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policies", "nofire.yaml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	p.Policy = []string{"nofire"}
+	cfg, err := wrap.Load(p, wrap.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := agentArgs(cfg, p, []string{"fix it"})
+	if want := []string{"--mcp-config=/brig/mcp/mcp.json", "fix it"}; !slices.Equal(got, want) {
+		t.Errorf("agentArgs = %q, want %q", got, want)
+	}
+}

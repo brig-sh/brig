@@ -522,6 +522,16 @@ secret and the git URLs that the route takes over.
 A policy in your own policy directory is held to neither rule. There you can
 put a mirror in front of `github.com`.
 
+A repository policy names a secret in your store, never its source, and it
+may not choose where an MCP server sends that secret:
+
+| Field | Why it is refused |
+| --- | --- |
+| an MCP server without `preset`, or `url` or `inject` beside one | It would choose where one of your secrets goes. A repository policy may attach an MCP server only through a preset, such as `preset: nofire`, whose address is fixed. A policy in your own policy directory is not limited this way |
+
+A repository policy may still name any secret in your store. The plan and
+the approval show the name of each, with the server it goes to.
+
 ## Where Brig looks
 
 Inside a Git checkout, Brig reads the `Brigfile` at the top of the

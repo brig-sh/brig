@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -723,5 +724,109 @@ func TestPlanNamesTheBackendThatBoots(t *testing.T) {
 	c.Runtime = nil
 	if got := c.planBackend(); got != "vz" {
 		t.Errorf("a runtime that cannot name it reports what was asked: got %q", got)
+	}
+}
+
+// twoMCPServers declares the NOFire AI server through its preset with one
+// tool, and another server by URL with every tool, each reading its own
+// secret.
+const twoMCPServers = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata: {name: nofire}
+spec:
+  mcp:
+    - name: nofire
+      preset: nofire
+      credential: {secretRef: {name: nofire-mcp}}
+      tools: {allow: [search, fetch]}
+    - name: other
+      transport: http
+      url: https://mcp.example.com/mcp
+      credential: {secretRef: {name: other-mcp}}
+      inject: {headers: {set: [{name: Authorization, value: "Bearer {value}"}]}}
+      tools: {allow: ["*"]}
+`
+
+// An MCP server sends one of your secrets to its URL, so the plan names
+// each server, where it sends, which secret, which tools and from which
+// policy, under a BROKER row that a run with no route still has. "*" reads
+// as every tool rather than a tool named *.
+func TestPlanListsMCPServers(t *testing.T) {
+	p, home := mcpSession(t, twoMCPServers)
+	c := loadMCP(t, p, Options{Workspace: home}, nil)
+	var out bytes.Buffer
+	c.Out = &out
+	d := c.Plan()
+	c.PrintPlan(d)
+	text := out.String()
+	for _, want := range []string{
+		"mcp nofire to https://mcp.nofire.ai/mcp with your secret nofire-mcp, tools search, fetch, from nofire",
+		"mcp other to https://mcp.example.com/mcp with your secret other-mcp, all tools (*), from nofire",
+		"kept on the host: nofire-mcp, other-mcp",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the plan does not say %q:\n%s", want, text)
+		}
+	}
+	if !strings.Contains(text, "\nBROKER") {
+		t.Errorf("a run with MCP servers and no route has no BROKER row:\n%s", text)
+	}
+	want := []PlanMCP{
+		{Name: "nofire", Policy: "nofire", Preset: "nofire", URL: "https://mcp.nofire.ai/mcp",
+			Secrets: []string{"nofire-mcp"}, Tools: []string{"search", "fetch"}},
+		{Name: "other", Policy: "nofire", URL: "https://mcp.example.com/mcp",
+			Secrets: []string{"other-mcp"}, Tools: []string{"*"}},
+	}
+	if !reflect.DeepEqual(d.MCP, want) {
+		t.Errorf("the plan's MCP servers are\n%+v\nwant\n%+v", d.MCP, want)
+	}
+
+	// On a target, each server says which file of the repository declared it.
+	digestHost(t)
+	tc := approvalConfig(t, mustPolicy(t, nofireMCP))
+	out.Reset()
+	tc.Out = &out
+	tc.PrintPlan(tc.Plan())
+	if want := "mcp nofire to https://mcp.nofire.ai/mcp with your secret nofire-token, tools search, " +
+		"from brigfile nofire (file:.brig/nofire.yaml)"; !strings.Contains(out.String(), want) {
+		t.Errorf("the plan of a target does not say %q:\n%s", want, out.String())
+	}
+}
+
+// A run with MCP servers and no route has the BROKER row of its own, which
+// says it serves no route and names the secrets it keeps on the host, and
+// no route modes, which are the routes'.
+func TestPlanBrokerRowOfAnMCPOnlyRun(t *testing.T) {
+	digestHost(t)
+	d := approvalConfig(t, mustPolicy(t, nofireMCP)).Plan()
+	if d.Broker == nil {
+		t.Fatal("a run with MCP servers and no route has no broker in its plan")
+	}
+	if len(d.Broker.Routes) != 0 || !reflect.DeepEqual(d.Broker.KeptOnHost, []string{"nofire-token"}) {
+		t.Errorf("the broker of the plan is %+v, want no route and nofire-token kept on the host", d.Broker)
+	}
+	var out bytes.Buffer
+	c := approvalConfig(t, mustPolicy(t, nofireMCP))
+	c.Out = &out
+	c.PrintPlan(c.Plan())
+	var row string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(line, "BROKER") {
+			row = line
+		}
+	}
+	if !strings.Contains(row, "no routes") || !strings.Contains(row, "kept on the host: nofire-token") ||
+		strings.Contains(row, "modes") {
+		t.Errorf("the BROKER row of an MCP-only run is %q", row)
+	}
+}
+
+// A run with no MCP server has no mcp field in its plan, so its digest is
+// what it was.
+func TestPlanWithoutMCPHasNoMCPField(t *testing.T) {
+	digestHost(t)
+	d := approvalConfig(t, routePolicy("gh", "https://api.github.com", "gh-token")).Plan()
+	if blob, _ := json.Marshal(d); strings.Contains(string(blob), `"mcp"`) {
+		t.Errorf("the plan of a run with no MCP server has an mcp field:\n%s", blob)
 	}
 }

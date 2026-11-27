@@ -647,6 +647,7 @@ file is created `0600`.
 | File | What it holds |
 | --- | --- |
 | `hostkey` | 32 random bytes, drawn at first start. Each sandbox key is derived from it. Only the broker reads it. It is never on a command line or in a log |
+| `mcpkey` | 32 random bytes, drawn at first start. Each sandbox's MCP key is derived from it. It is not `hostkey`, so an MCP token and a route token each fail where the other is checked. Only the broker reads it |
 | `ca.pem`, `ca.key` | The brig CA of this host. See [Transports](#transports). A `ca.key` that is not the key of `ca.pem` is refused at start. Remove both, and the next start creates a new pair |
 | `control.sock` | The control socket |
 | `broker.pid` | The pid of the running broker and its start time |
@@ -671,6 +672,8 @@ underscores. 255 bytes is the longest name of a directory.
 | `DELETE /services/sandboxes/<id>` | | `{removed, remaining}`. Drops the sandbox from every guest service. Its service tokens fail from the next request on. The divert socket is closed when its routes do not hold it. Either way, the service requests in flight on it end. `remaining` counts the sandboxes registered for routes or for a service |
 | `DELETE /services/<kind>/sandboxes/<id>` | | `{removed, remaining}`. Drops the sandbox from the guest service of `kind` and keeps its other services. Its requests in flight end, though the routes keep the socket. A kind the broker does not serve, or a sandbox not registered for it, is a 404 that says which. Brig takes only those two as nothing to revoke |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
+| `POST /mcp/sandboxes` | `{id, profile, session, servers: [{policy, server}], brigInternal}` | `{divertSocket, ca}`. Registers the MCP servers of a sandbox, apart from its routes. The broker expands each server again, so a preset's `url` and `inject` come from the preset, and a server that names a different `url` or `inject` beside a preset is a 400. A sandbox with no server, a name used twice, or no `brigInternal` is a 400. The same registration again changes nothing, so the token of a running agent stays valid. Other servers under the same id, or another address, are a 409: Brig then removes the registration, which revokes the old token, and registers again. The address must be the one the sandbox's routes use |
+| `POST /mcp/tokens` | `{sandbox, session, ttlSeconds}` | `{token}`. At most 12 hours. A 404 when the sandbox has no MCP server registered |
 | `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending, services}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed. `services` maps each guest service to its sandboxes |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered for routes or for a guest service |
 
@@ -1311,6 +1314,53 @@ would keep it on the host.
 A run with a route runs isolated. A run with a route and the `offline`
 posture is refused.
 
+## MCP servers
+
+The broker also stands in front of the remote MCP servers of a sandbox. The
+guest reaches one at `https://brig.internal/<sandbox-id>/mcp/<name>`, on the
+same per-sandbox divert socket as its routes. The loopback port and
+`169.254.170.2` never serve it. The code is the `internal/mcpproxy` package,
+which does not import the broker, and the broker serves it as one of its guest
+services. For what a server
+sees and what the tool allowlist does not stop, see
+[MCP servers](security.md#mcp-servers). The policy side is
+[MCP servers](policies.md#mcp-servers).
+
+An MCP server has its own registration, its own key file, `mcpkey`, and its
+own endpoints in the [control protocol](#control-protocol). Revoking it is
+the shared revocation of every guest service.
+
+| Part | What it is |
+| --- | --- |
+| Credential | Read from Brig's store by the secret name of the server's `credential`, and held in the broker's memory. It is sent in the headers that `inject.headers` sets |
+| Token | `typ` is `brig-mcp`. A route checks for `brig-route`, so a route refuses an MCP token and MCP a route's. The sandbox key is derived by HKDF from `mcpkey`, with the info `brig-mcp:<id>:<nonce>`. The nonce is drawn at registration |
+| Revocation | `brig stop`, `brig rm` and a fresh boot remove the sandbox from the broker, routes and services together, with `DELETE /services/sandboxes/<id>`. The next exec after the MCP policy is detached removes the MCP registration alone, with `DELETE /services/mcp/sandboxes/<id>`, and keeps the routes. An exec whose policies name other servers than the registered ones removes the old registration, which revokes its token, and registers again. The next registration draws another nonce, so earlier tokens fail |
+| Delivery | `BRIG_MCP_TOKEN`, in the environment of the exec only, passed to the runtime by name. `/brig/mcp/mcp.json` names the variable and holds no token. It is not in argv and not in the guest home |
+
+A request is checked in this order, and each refusal is one line with no
+host path:
+
+1. It is not an upgrade or a `CONNECT`. If it is, 400.
+2. It arrived over `brig.internal`, on the divert socket of the sandbox in
+   its path. If not, 404.
+3. The sandbox is registered for MCP servers. If not, 404.
+4. It carries a valid MCP token of that sandbox. If not, 401.
+5. The path names a server of that sandbox. If not, 404.
+6. The body arrives within 10 seconds. If not, 400.
+7. The sandbox has fewer than 8 MCP calls in flight. If not, 503 with
+   `Retry-After: 1`.
+
+The proxy then answers a body over 1 MiB with 413, so a body that large can
+get 503 first. It decides on the JSON-RPC method, as
+[the policy page](policies.md#what-the-broker-forwards) lists. It sets the
+headers of the server and sends `Accept-Encoding: identity`, and answers 502
+to a response with any other `Content-Encoding`, because it cannot filter
+one it cannot read. It filters `tools/list` in a JSON or an event-stream
+response, and drops a message that has both a `method` and an `id`, a
+request from the server to the agent. It replaces the credential in a
+response with `[redacted]`, in each of the spellings a JSON string can give it.
+A call ends after 10 minutes, an answer that is still streaming included.
+
 ## Audit line
 
 The broker writes one line per request:
@@ -1337,6 +1387,22 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `where`, `encoding` | Where a [placeholder](#placeholder-detection) was found and how it was spelled. The `path` field of that line is `[redacted]`, and so is `method` when the token was in it |
 | `placeholder` | `partial` when only the start of the body was scanned |
 | `vended` | The access key id a route that vends answered with. Never the secret key or the session token |
+
+An MCP request writes `kind=mcp` in place of `route`, with these fields:
+
+| Field | What it is |
+| --- | --- |
+| `sandbox` | The sandbox whose divert socket the request arrived on, or the one the broker recorded for it |
+| `path` | The sandbox that the request path names, cut to 64 bytes |
+| `server` | The server, from the policy, cut to 64 bytes |
+| `method` | The JSON-RPC method, cut to 64 bytes |
+| `tool` | For `tools/call`, the tool, cut to 64 bytes |
+| `verdict` | `forwarded`, `refused:tool`, `refused:method`, `refused:batch`, `refused:parse`, `refused:params`, `refused:server-request`, `refused:encoding` or `error` |
+| `status`, `dur` | As above |
+| `check` | On a request refused before the proxy: `upgrade`, `arrival`, `sandbox`, `token`, `server`, `read` or `busy` |
+
+An MCP line never holds the arguments or results of a call, a header value
+or the token.
 
 The line never holds a credential, a token, a header value or a body.
 

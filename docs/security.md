@@ -982,6 +982,8 @@ A target can ask for:
   its size and the credential bindings it names
 - policies: egress rules, and routes that send requests to an upstream the
   repository names, with a secret from your store that the repository names
+- MCP servers, through a preset, with a secret from your store that the
+  repository names
 - the arguments the agent gets
 
 A profile the repository wrote cannot name a host path, a host program, the
@@ -1060,6 +1062,11 @@ other path that boots a sandbox, refuses one.
   address of a service. The row lists the git URLs that the route takes over
   and the guest variables that it sets. Brig holds the git URLs of a
   repository's route to its upstream. It cannot do the same for a variable.
+- **A secret in your store can go to an MCP server preset.** A repository
+  policy may declare an MCP server only through a preset, so the secret goes
+  only to the preset's fixed address. It may name any secret in your store.
+  The plan shows each server with its secret and its tools, and the approval
+  covers each. Read those rows before you approve.
 - **An image named by a tag can change after you approve.** The approval
   covers the reference, not the bytes. The prompt says so when the image is a
   tag. [Image verification](#guest-images) runs at every boot, as for any
@@ -1766,6 +1773,58 @@ per guest home and per token, not per sandbox.
 The `hvi` answer changed between two measurements, and nothing in Brig
 noticed at the time. Do not treat any answer about `shared` in the table as a
 property of Brig.
+
+### MCP servers
+
+A policy can attach remote MCP servers to a `claude-code` run with
+`spec.mcp`. See [MCP servers](policies.md#mcp-servers). The broker holds the
+credential of each server and the guest holds an MCP token. The plan, and the
+approval prompt of a target, list each server with its upstream, its secret
+and its tools.
+
+What this does to the two promises:
+
+- No host directory is added to the guest. A server is reached over HTTPS at
+  `brig.internal`, and the broker holds its connection.
+- The credential of a server is never in the guest: not in the environment,
+  in argv, in `/brig/mcp/mcp.json`, in the guest home or in a response body
+  that echoes it. A profile that binds the secret of an MCP credential has
+  the binding dropped. The MCP token is a capability for the MCP servers of
+  one sandbox. It is signed with a key of its own, `mcpkey`, so it is no
+  route token, and a route token is no MCP token. It
+  lasts at most 12 hours, travels in the environment of one exec and never
+  in argv, and `brig stop`, `brig rm` and a fresh boot of the sandbox revoke
+  it. So does the next exec after the policy is detached, and an exec whose
+  policies name other servers revokes it before it registers them. See
+  [the broker](broker.md#mcp-servers).
+- A tool the policy does not name never reaches the server. `tools/call`
+  checks the tool, `tools/list` is cut down to the allowed tools, and the
+  broker refuses any method that could act around the list.
+
+What it does not do:
+
+- **The server sees whatever the agent sends it.** The broker enforces which
+  tools run. It does not read the arguments. An agent that holds a
+  credential, or that a prompt-injected page steers, can send a tool's
+  arguments to the server, and the server's answer goes back to the agent. A
+  tool that an MCP server runs on the data it is given is the server's.
+- **`"*"` allows a tool the server adds later.** `tools.allow: ["*"]` is the
+  one wildcard. It allows every tool the server has at the time of a call,
+  including a tool added after you read the list. `brig policy check` warns
+  for it. Name the tools instead.
+- **Redaction catches an echo, not an encoding.** The broker replaces the
+  credential in a response when the server echoes it back, in the spellings
+  a JSON string gives it. A server that encodes the credential on purpose,
+  such as in base64, is not caught, and it already holds the credential.
+- **A repository policy can name any secret in your store.** It can attach an
+  MCP server only through a preset, and a preset's destination is fixed, so
+  the secret goes only to that address. Which secret it names is the
+  repository's choice. The plan and the approval show the secret's name.
+  [Limits of the approval](#limits-of-the-approval) has the rest.
+- **`stdio` and OAuth MCP servers are not supported yet.** A server with
+  `transport: stdio` is refused. A server that signs in with OAuth cannot be
+  given a static token. An MCP server that you add to the guest by hand holds
+  its own credential in the guest, outside both promises.
 
 ### Terminal output
 

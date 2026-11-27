@@ -107,6 +107,7 @@ func (c *Config) Plan() PlanDocument {
 		}
 	}
 	d.Broker = c.planBroker(routeStore)
+	d.MCP = c.planMCP()
 	d.Target = c.planTarget()
 	d.Credentials = []PlanCredential{}
 	for _, p := range creds.Preview(c.Profile, c.Env, stored, os.LookupEnv, creds.Options{
@@ -212,10 +213,13 @@ type PlanDocument struct {
 	Ports   []string `json:"ports"`
 	// Policies names every policy bound to this run. NoPolicy says none is,
 	// so a reader does not have to infer it from an empty list.
-	Policies    []string         `json:"policies"`
-	NoPolicy    bool             `json:"noPolicy"`
-	Egress      *PlanEgress      `json:"egress,omitempty"`
-	Broker      *PlanBroker      `json:"broker,omitempty"`
+	Policies []string    `json:"policies"`
+	NoPolicy bool        `json:"noPolicy"`
+	Egress   *PlanEgress `json:"egress,omitempty"`
+	Broker   *PlanBroker `json:"broker,omitempty"`
+	// MCP is each MCP server the run attaches, and absent when it has none,
+	// so the plan of a run without one is unchanged.
+	MCP         []PlanMCP        `json:"mcp,omitempty"`
 	Credentials []PlanCredential `json:"credentials"`
 	// ArgvExposed names what the Info payload's field of the same name
 	// names: the values BRIG_ENV_ARGV would put on the runtime's command
@@ -304,6 +308,23 @@ type PlanRoute struct {
 	// which its name alone does not.
 	GitInsteadOf []string `json:"gitInsteadOf,omitempty"`
 	GuestEnv     []string `json:"guestEnv,omitempty"`
+}
+
+// PlanMCP is one MCP server of the run: where the broker sends its calls,
+// with which of your secrets, which tools it lets through, and from which
+// policy.
+type PlanMCP struct {
+	Name string `json:"name"`
+	// Policy is where the policy that declares the server came from, as
+	// PlanRoute.Policy.
+	Policy string `json:"policy"`
+	Preset string `json:"preset,omitempty"`
+	URL    string `json:"url"`
+	// Secrets are the names of the secrets in your store the broker reads
+	// for the server: its credential.
+	Secrets []string `json:"secrets"`
+	// Tools is tools.allow as the policy wrote it, "*" included.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // PlanTarget is the Brigfile target a plan is of: which file, which profile
@@ -442,10 +463,46 @@ func planRoutesOf(routes []v1alpha1.Route, origin func(name string) string) []Pl
 	return out
 }
 
-// planBroker is the PlanBroker of this run, or nil for a run with no route.
-// st is what the store said, which the plan lists once.
+// planMCP is every MCP server of this run, sorted by name, each with where
+// its policy came from, or nil for a run with none.
+func (c *Config) planMCP() []PlanMCP {
+	// By index, as routeOrigin: two documents from two places can carry one
+	// name. Server names are unique across the run, or c.mcp is empty, and
+	// policyDocs are the documents c.mcp was expanded from.
+	origin := map[string]string{}
+	for i, doc := range c.policyDocs {
+		from := doc.Metadata.Name
+		if i < len(c.policyOrigins) && c.policyOrigins[i] != "" {
+			from = c.policyOrigins[i]
+		}
+		for _, s := range doc.Spec.MCP {
+			origin[s.Name] = from
+		}
+	}
+	var out []PlanMCP
+	for _, e := range c.mcp {
+		m := PlanMCP{Name: e.Server.Name, Policy: origin[e.Server.Name], Preset: string(e.Server.Preset),
+			URL: e.Server.URL, Secrets: []string{}}
+		if cr := e.Server.Credential; cr != nil && cr.SecretRef.Name != "" {
+			m.Secrets = append(m.Secrets, cr.SecretRef.Name)
+		}
+		if e.Server.Tools != nil {
+			m.Tools = slices.Clone(e.Server.Tools.Allow)
+		}
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// planBroker is the PlanBroker of this run, or nil for a run with neither a
+// route nor an MCP server. st is what the store said, which the plan lists
+// once.
+//
+// A run with MCP servers and no route has one too: the broker keeps the
+// servers' secrets on the host, and the row that says so is the BROKER row.
 func (c *Config) planBroker(st routeStore) *PlanBroker {
-	if len(c.routes) == 0 && c.routesErr == nil {
+	if len(c.routes) == 0 && c.routesErr == nil && len(c.mcp) == 0 {
 		return nil
 	}
 	b := &PlanBroker{Transport: string(c.routeTransport()), Routes: []string{}, KeptOnHost: c.routeSkipped,
@@ -474,7 +531,11 @@ func (c *Config) planBrokerLine(b *PlanBroker) string {
 	if c.routesErr != nil {
 		return "refused: " + c.routesErr.Error()
 	}
-	parts := []string{fmt.Sprintf("transport %s, routes %s", b.Transport, strings.Join(b.Routes, ", "))}
+	routes := "routes " + strings.Join(b.Routes, ", ")
+	if len(b.Routes) == 0 {
+		routes = "no routes"
+	}
+	parts := []string{fmt.Sprintf("transport %s, %s", b.Transport, routes)}
 	if c.routeRefusal() != nil {
 		parts = append(parts, "refused: see REFUSED")
 	}
@@ -483,7 +544,11 @@ func (c *Config) planBrokerLine(b *PlanBroker) string {
 		st.err = errors.New(b.StoreError)
 	}
 	parts = append(parts, c.routeStoreLine(st)...)
-	parts = append(parts, c.modesLine())
+	// The modes are the routes'. An MCP server is reached at brig.internal
+	// whatever they are, and REFUSED says when it cannot be.
+	if len(b.Routes) > 0 {
+		parts = append(parts, c.modesLine())
+	}
 	return strings.Join(parts, "; ")
 }
 
@@ -645,6 +710,9 @@ func (c *Config) planRows(d PlanDocument) []envelopeRow {
 		for _, r := range d.Broker.Detail {
 			rows = append(rows, envelopeRow{"", routeText(r)})
 		}
+		for _, m := range d.MCP {
+			rows = append(rows, envelopeRow{"", mcpText(m)})
+		}
 	}
 	if len(d.Credentials) == 0 {
 		rows = append(rows, envelopeRow{"CREDENTIALS", "(none)"})
@@ -729,6 +797,24 @@ func routeText(r PlanRoute) string {
 		line += "; it sets " + strings.Join(r.GuestEnv, ", ") + " in the guest"
 	}
 	return line
+}
+
+// mcpText is one MCP server of the BROKER rows, in the words of routeText.
+func mcpText(m PlanMCP) string {
+	secrets := "no secret"
+	if len(m.Secrets) > 0 {
+		secrets = "your secret " + strings.Join(m.Secrets, ", ")
+	}
+	return fmt.Sprintf("mcp %s to %s with %s, %s, from %s", m.Name, m.URL, secrets, toolsText(m.Tools), m.Policy)
+}
+
+// toolsText is a tools.allow list for a reader. "*" is every tool, and is
+// said so, since a reader could take it for a tool named *.
+func toolsText(tools []string) string {
+	if slices.Contains(tools, v1alpha1.MCPAllTools) {
+		return "all tools (*)"
+	}
+	return "tools " + strings.Join(tools, ", ")
 }
 
 func ruleText(r policy.Rule) string {

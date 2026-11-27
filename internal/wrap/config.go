@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -267,8 +268,9 @@ type Config struct {
 	routes      []v1alpha1.Route
 	routePolicy map[string]string
 	routesErr   error
-	// routeSkipped are the secrets the routes inject, which stay on the
-	// host whether or not the profile would have delivered them.
+	// routeSkipped are the secrets the routes inject and the MCP servers'
+	// credentials name, which stay on the host whether or not the profile
+	// would have delivered them.
 	routeSkipped []string
 	// routeDecls are the profile's secret declarations before the routed
 	// ones were dropped, for the command a refusal of a missing one names.
@@ -293,6 +295,13 @@ type Config struct {
 	// mcpEntries are the MCP servers the services add to the guest's MCP
 	// configuration. See mcpconfig.go.
 	mcpEntries []MCPEntry
+	// mcp are the MCP servers of the policies bound to this run, expanded,
+	// with the policy that declares each, and mcpErr is why they could not
+	// be merged. mcpVars are what serveMCP got for this exec: the MCP token
+	// and what goes with it. See mcp.go.
+	mcp     []policy.MCPEntry
+	mcpErr  error
+	mcpVars []runtime.Var
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string
@@ -410,7 +419,8 @@ type Options struct {
 	Target *Target
 	// services are the guest service kinds this run serves at brig.internal.
 	// A feature adds its kind from its own option, before Load narrows the
-	// network; none does yet, and a test sets them here.
+	// network; MCP servers add theirs from the bound policies, and a test
+	// sets them here.
 	services []string
 }
 
@@ -745,9 +755,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			strictErr = err
 		}
 	}
-	if err := refuseMCPServers(bound); err != nil && strictErr == nil {
-		strictErr = err
-	}
 	egress := policy.Merge(bound)
 	askedNet := network
 	if egress.Default != "" && network != NetOffline {
@@ -771,11 +778,21 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			}
 		}
 	}
+	// MCP servers are a guest service, served at brig.internal, and take
+	// the posture below as every service does. A secret an MCP server's
+	// credential names stays on the host as a route's does, withheld in the
+	// same step.
+	mcp, mcpErr := policy.MCPServers(bound)
+	if mcpErr == nil && len(mcp) > 0 {
+		o.services = append(slices.Clone(o.services), mcpKind)
+	}
 	var routeSkipped []string
 	var routeDecls []profile.SecretDecl
-	if routesErr == nil && len(routes) > 0 {
+	if (routesErr == nil && len(routes) > 0) || (mcpErr == nil && len(mcp) > 0) {
 		routeDecls = t.Secrets
-		t, bindings, routeSkipped = withRoutes(t, bindings, routes)
+		brokered := brokeredSecrets(routes)
+		maps.Copy(brokered, brokeredMCPSecrets(mcp))
+		t, bindings, routeSkipped = withBrokered(t, bindings, brokered)
 		if network != NetOffline {
 			network = NetIsolated
 		}
@@ -870,6 +887,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		routesErr:      routesErr,
 		routeSkipped:   routeSkipped,
 		routeDecls:     routeDecls,
+		mcp:            mcp,
+		mcpErr:         mcpErr,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		RuntimePolicy:  runtimePolicy(env),
@@ -963,6 +982,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}
+	// The MCP configuration names its servers from the start, so the
+	// arguments a target's approval covers, taken before the boot, are the
+	// ones the agent is started with.
+	c.addMCPServers()
 	return c, nil
 }
 

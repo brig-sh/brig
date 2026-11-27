@@ -2,11 +2,14 @@ package wrap
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +41,15 @@ type fakeBroker struct {
 	// regions and vends are what Register reports of the vending routes.
 	regions map[string]string
 	vends   map[string]injector.VendInfo
+	// routesForgotten are the sandboxes whose routes alone were removed.
+	routesForgotten []string
+	// mcp are the MCP registrations it holds, by sandbox. mcpRegistered,
+	// mcpMinted and mcpForgotten are the registrations, the MCP tokens and
+	// the removals of MCP alone asked for, in order.
+	mcp           map[string]injector.MCPSandbox
+	mcpRegistered []injector.MCPSandbox
+	mcpMinted     []injector.MCPMintRequest
+	mcpForgotten  []string
 }
 
 const fakeBrokerPort = 47821
@@ -77,17 +89,61 @@ func (f *fakeBroker) Mint(r injector.MintRequest) (string, error) {
 func (f *fakeBroker) Forget(id string) error {
 	f.forgotten = append(f.forgotten, id)
 	f.calls = append(f.calls, "forget "+id)
+	delete(f.mcp, id)
 	return nil
 }
 
 func (f *fakeBroker) ForgetRoutes(id string) error {
+	f.routesForgotten = append(f.routesForgotten, id)
 	f.calls = append(f.calls, "forget routes "+id)
 	return nil
 }
 
 func (f *fakeBroker) ForgetService(kind, id string) error {
 	f.calls = append(f.calls, "forget service "+kind+" "+id)
+	if kind == "mcp" {
+		f.mcpForgotten = append(f.mcpForgotten, id)
+		delete(f.mcp, id)
+	}
 	return nil
+}
+
+// RegisterMCP refuses other servers for a sandbox it holds with 409, as the
+// broker does: the sandbox's tokens would reach them.
+func (f *fakeBroker) RegisterMCP(s injector.MCPSandbox) (injector.AddResponse, error) {
+	if f.registerErr != nil {
+		return injector.AddResponse{}, f.registerErr
+	}
+	f.calls = append(f.calls, "register mcp "+s.ID)
+	if old, ok := f.mcp[s.ID]; ok && !reflect.DeepEqual(old, s) {
+		return injector.AddResponse{}, &injector.RefusedError{Status: http.StatusConflict,
+			Message: "sandbox " + s.ID + " is registered for mcp with other settings"}
+	}
+	f.mcpRegistered = append(f.mcpRegistered, s)
+	f.running = true
+	if f.mcp == nil {
+		f.mcp = map[string]injector.MCPSandbox{}
+	}
+	f.mcp[s.ID] = s
+	var added injector.AddResponse
+	dir, err := injector.Dir()
+	if err != nil {
+		return added, err
+	}
+	if added.DivertSocket, err = injector.DivertSocket(dir, s.ID); err != nil {
+		return added, err
+	}
+	added.CA = cmp.Or(f.ca, testBrigCA())
+	return added, nil
+}
+
+// MintMCP mints only for a sandbox it holds, as the broker does.
+func (f *fakeBroker) MintMCP(r injector.MCPMintRequest) (string, error) {
+	if _, ok := f.mcp[r.Sandbox]; !ok {
+		return "", errors.New("the credential broker refused: sandbox " + r.Sandbox + " is not registered for mcp")
+	}
+	f.mcpMinted = append(f.mcpMinted, r)
+	return "mcp-token-" + r.Sandbox, nil
 }
 
 func (f *fakeBroker) Status() (injector.Status, bool) {
@@ -171,7 +227,7 @@ func TestABrokeredSecretIsNeverDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, bindings, skipped := withRoutes(p, p.Env, routes)
+	got, bindings, skipped := withBrokered(p, p.Env, brokeredSecrets(routes))
 	if !slices.Equal(skipped, []string{"claude-credentials", "gh-token"}) {
 		t.Errorf("skipped %v", skipped)
 	}
@@ -199,7 +255,7 @@ func TestABrokeredSecretIsNeverDelivered(t *testing.T) {
 	}
 	// The profile the caller holds is not changed.
 	if len(p.Files) == 0 || len(p.Volumes) == 0 {
-		t.Error("withRoutes changed the caller's profile")
+		t.Error("withBrokered changed the caller's profile")
 	}
 }
 
@@ -600,7 +656,7 @@ func TestBrokeredSecretsIncludeCertificates(t *testing.T) {
 		t.Fatalf("brokeredSecrets = %v, want %v", got, want)
 	}
 	prof := profile.Profile{Files: []profile.FileBinding{{Ref: "secrets.inv-client"}}}
-	out, _, skipped := withRoutes(prof, nil, certRoutes())
+	out, _, skipped := withBrokered(prof, nil, brokeredSecrets(certRoutes()))
 	if len(out.Files) != 0 {
 		t.Errorf("the certificate file binding stays: %+v", out.Files)
 	}
