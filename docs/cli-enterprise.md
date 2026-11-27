@@ -218,16 +218,20 @@ the device flow for this host, asks the same questions about a deployment from
 in your keychain with the default lifetime, and revokes the expired one. The
 run then goes on as a signed-in run does.
 
-If the sign-in fails, times out, or you press Ctrl-C, Brig prints one line and
-the run goes on unrecorded:
+If the sign-in fails, times out, or you press Ctrl-C, Brig prints the
+sign-in's error, cleaned as `brig login` cleans it, then one line, and the run
+goes on unrecorded. The error can say that a token is still valid and has to be
+revoked from the dashboard:
 
 ```text
+brig: cannot store the token: the keychain is locked. Brig also could not revoke it, so it stays valid until it expires: the deployment is down. Revoke it from the dashboard
 brig: the sign-in did not finish, so this run is not recorded. Run `brig login` to sign in
 ```
 
 These lines, the sign-in's own output and its questions go to stderr. When
-stderr is not a terminal, for example with `2>/dev/null` or `2>err.log`, they go
-to the terminal the run uses instead, so the pause is always on your screen.
+stderr is not the terminal the run uses, because it is a file, a pipe or another
+terminal, they go to the terminal the run uses instead, so the pause is always
+on your screen.
 
 If another terminal with the same expired login signs in first, this sign-in
 finds the stored token no longer expired and returns at once, or, if the other

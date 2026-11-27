@@ -48,9 +48,10 @@
 // brig login for that deployment (login.SignIn: the same flow, the same
 // questions about a trust store, the same storage), reads the token again and
 // goes on as a signed-in run does. A sign-in that fails, times out or is ended
-// with Ctrl-C prints its error, then one line, and the run goes unrecorded. Everything the
-// pause prints goes to stderr, or to stdout when stderr is not a terminal, so
-// the person always sees it. Ctrl-C ends the sign-in only. A run that cannot be recorded for the local rules above never
+// with Ctrl-C prints its error, then one line, and the run goes unrecorded.
+// Everything the pause prints goes to stderr, or to stdout when stderr is not
+// the terminal the run uses, so the person always sees it. Ctrl-C ends the
+// sign-in only. A run that cannot be recorded for the local rules above never
 // pauses and never starts a sign-in.
 //
 // # The token
