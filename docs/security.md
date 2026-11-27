@@ -1522,9 +1522,11 @@ and the sign-in trusts it. An answer other than yes ends the sign-in, and the
 run goes unrecorded. That sign-in is the one other place Brig writes the login
 store, and it writes it only for the
 deployment whose token expired. If it succeeds, the run goes on as a signed-in
-run does. If it fails, times out or you press Ctrl-C, Brig prints one line that
-says the sign-in did not finish and names `brig login`, sends nothing to the
-recording routes, and the run goes unrecorded. Ctrl-C ends the sign-in only: it
+run does. If it fails, times out or you press Ctrl-C, Brig prints the sign-in's error,
+cleaned as `brig login` cleans it, then one line that says the sign-in did not
+finish and names `brig login`, sends nothing to the recording routes, and the
+run goes unrecorded. The error can say that a token the deployment issued is
+still valid and must be revoked from the dashboard. Ctrl-C ends the sign-in only: it
 does not end Brig and the command does not receive it. A SIGINT that Brig
 inherited as ignored is ignored again when the sign-in ends. The line says that
 Ctrl-C runs the command without recording. Two runs with the same expired login do not

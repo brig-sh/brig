@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 	}{
 		"fails or is cancelled": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
 			return func(io.Writer, nofireauth.Deployment) error { return errors.New("login cancelled") }
-		}, last: failedLine},
+		}, last: "brig: login cancelled\n" + failedLine},
 		"finishes with no token to read": {signIn: func(*recHost) func(io.Writer, nofireauth.Deployment) error {
 			return func(io.Writer, nofireauth.Deployment) error { return nil }
 		}, last: failedLine},
@@ -188,6 +189,31 @@ func TestASignInThatDoesNotFinishLeavesTheRunUnrecordedWithOneLine(t *testing.T)
 				t.Error("the relay ran the command; the runtime does that for a declined run")
 			}
 		})
+	}
+}
+
+// A sign-in that ends with an error shows that error to the person before the
+// line that says it did not finish. One of them says a token the deployment
+// issued is still valid, and the person has to revoke it. The text is cleaned
+// as brig login cleans it, so it puts no control character on the terminal.
+func TestASignInErrorThatSaysToRevokeATokenReachesThePerson(t *testing.T) {
+	h := newRecHost(t)
+	d := h.expire(t)
+	revoke := "cannot store the token: the keychain is locked. Brig also could not revoke it, so it stays valid until it expires: the deployment is down. Revoke it from the dashboard"
+	signIn = func(io.Writer, nofireauth.Deployment) error { return errors.New(revoke + "\x1b[31m") }
+	relay := Attach(hullRun())
+	if relay == nil {
+		t.Fatal("no relay")
+	}
+	if _, err := relay([]string{"true"}, os.Environ()); !errors.Is(err, cli.ErrRelayDeclined) {
+		t.Fatalf("relay: %v, want it to decline", err)
+	}
+	want := fmt.Sprintf(pauseLine, d) + "brig: " + nofireauth.CleanMessage(revoke+"\x1b[31m") + "\n" + failedLine
+	if h.notice.String() != want {
+		t.Errorf("notice %q, want %q", h.notice, want)
+	}
+	if !strings.Contains(h.notice.String(), "Revoke it from the dashboard") || strings.ContainsRune(h.notice.String(), 0x1b) {
+		t.Errorf("notice %q: want the revoke text and no escape", h.notice)
 	}
 }
 
@@ -301,7 +327,7 @@ func TestThePauseGoesToTheTerminalWhenStderrIsNotOne(t *testing.T) {
 				t.Fatalf("relay: %v, want it to decline", err)
 			}
 			stdout, stderr := seen()
-			lines := fmt.Sprintf(pauseLine, d) + "SIGN-IN OUTPUT\n" + failedLine
+			lines := fmt.Sprintf(pauseLine, d) + "SIGN-IN OUTPUT\nbrig: the deployment is down\n" + failedLine
 			want, wantNot := stdout, stderr
 			if c.stderrTerminal {
 				want, wantNot = stderr, stdout
