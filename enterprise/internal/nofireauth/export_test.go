@@ -6,6 +6,7 @@ package nofireauth
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"net"
 	"net/http"
 )
 
@@ -18,3 +19,16 @@ func UseRoots(c *Client, roots *x509.CertPool) {
 
 // RedirectHTML is redirectHTML, for the test of its escaping.
 var RedirectHTML = redirectHTML
+
+// WatchListener makes Run listen through wrap, until the returned function runs.
+func WatchListener(wrap func(net.Listener) net.Listener) (restore func()) {
+	old := listenLoopback
+	listenLoopback = func() (net.Listener, error) {
+		ln, err := old()
+		if err != nil {
+			return nil, err
+		}
+		return wrap(ln), nil
+	}
+	return func() { listenLoopback = old }
+}

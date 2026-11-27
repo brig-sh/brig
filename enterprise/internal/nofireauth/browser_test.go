@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,28 +365,41 @@ func TestCancelLeavesNothing(t *testing.T) {
 	}
 }
 
+// slowCloseListener records when Close has finished. Close takes a moment, so
+// a Close that Run does not wait for is still running when Run returns.
+type slowCloseListener struct {
+	net.Listener
+	closed atomic.Bool
+}
+
+func (l *slowCloseListener) Close() error {
+	time.Sleep(50 * time.Millisecond)
+	err := l.Listener.Close()
+	l.closed.Store(true)
+	return err
+}
+
 // A sign-in that ends the moment it starts still closes its callback port
 // before Run returns. Run starts serving on its own goroutine, so a shutdown
-// that comes before that goroutine runs has nothing to close unless Run closes
-// the listener itself.
+// that comes before that goroutine runs has nothing to close, and Serve closes
+// the listener later as it returns. Run has to wait for that.
 func TestACancelAtOnceClosesThePortBeforeRunReturns(t *testing.T) {
 	s := start(t, fakeas.Options{})
 	// One processor keeps the serving goroutine from starting until Run waits.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	for i := 0; i < 200; i++ {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		f, out := browserFlow(t, s.URL, func(string) error { return nil })
-		if _, err := f.Run(ctx); !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v, want context.Canceled", err)
-		}
-		line, _, _ := strings.Cut(out.String(), "\n")
-		authURL := strings.TrimSuffix(strings.TrimPrefix(line, "Opening "), " in your browser.")
-		port := redirectOf(t, authURL).Port()
-		if c, err := net.DialTimeout("tcp", "127.0.0.1:"+port, time.Second); err == nil {
-			c.Close()
-			t.Fatalf("run %d: the callback port is open after Run returned", i)
-		}
+	var l *slowCloseListener
+	defer nofireauth.WatchListener(func(ln net.Listener) net.Listener {
+		l = &slowCloseListener{Listener: ln}
+		return l
+	})()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f, _ := browserFlow(t, s.URL, func(string) error { return nil })
+	if _, err := f.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if l == nil || !l.closed.Load() {
+		t.Fatal("the callback listener was not closed when Run returned")
 	}
 }
 
