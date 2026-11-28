@@ -66,7 +66,7 @@ type record struct {
 // nofire.vmi.finding and nofire.vmi.action records it writes to
 // <container-id>.warden.ndjson. A line goes as the warden wrote it.
 func WardenSource() Source {
-	return Source{Kind: KindWarden, Suffix: ".warden.ndjson", Parse: parseWarden}
+	return Source{Kind: KindWarden, Suffix: ".warden.ndjson", MaxScan: 8 << 20, Parse: parseWarden}
 }
 
 func parseWarden(line, id, sandbox string) (Event, bool) {

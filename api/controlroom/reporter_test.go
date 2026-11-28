@@ -3,6 +3,7 @@ package controlroom
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,7 @@ type fakeRoom struct {
 	events    [][]Event
 	takes     map[string]bool // kinds it stores as themselves
 	status    int
+	retry     string // Retry-After sent with status
 	seenKeys  map[string]bool
 }
 
@@ -40,6 +42,9 @@ func (f *fakeRoom) handler(t *testing.T) http.Handler {
 		}
 		f.calls = append(f.calls, r.URL.Path)
 		if f.status != 0 {
+			if f.retry != "" {
+				w.Header().Set("Retry-After", f.retry)
+			}
 			w.WriteHeader(f.status)
 			return
 		}
@@ -254,6 +259,7 @@ func TestACaptureFoundAtStartIsReadFromItsEnd(t *testing.T) {
 	f, r, dir := setup(t, KindToolCall)
 	appendLines(t, filepath.Join(dir, cid+".ndjson"), toolCall("old", "{}")+"\n")
 	const other = "fedcba9876543210"
+	r.Registry.(registry)[other] = "brig-other"
 	tick(r, 1)
 	appendLines(t, filepath.Join(dir, other+".ndjson"), toolCall("new-session", "{}")+"\n")
 	appendLines(t, filepath.Join(dir, cid+".ndjson"), toolCall("later", "{}")+"\n")
@@ -314,25 +320,140 @@ func TestStateSurvivesARestart(t *testing.T) {
 	}
 }
 
-func TestFailuresBackOffAndA429StartsOver(t *testing.T) {
+func TestFailuresBackOffAndA429WaitsAsAsked(t *testing.T) {
 	f, r, _ := setup(t)
 	f.status = 503
 	now := time.Now()
 	r.Tick(context.Background(), now)
-	if r.backoff != 2*time.Second {
+	if r.backoff != minBackoff {
 		t.Fatalf("backoff = %s", r.backoff)
 	}
 	for i := 0; i < 8; i++ {
 		now = now.Add(r.backoff)
 		r.Tick(context.Background(), now)
 	}
-	if r.backoff != 60*time.Second {
+	if r.backoff != maxBackoff {
 		t.Fatalf("backoff = %s, want the cap", r.backoff)
 	}
-	f.status = 429
+	f.status, f.retry = 429, "17"
+	now = now.Add(r.backoff)
+	r.Tick(context.Background(), now)
+	if r.backoff != 17*time.Second {
+		t.Fatalf("after a 429 with Retry-After backoff = %s", r.backoff)
+	}
+	// Without Retry-After, a 429 backs off like any failure.
+	f.retry = ""
+	now = now.Add(r.backoff)
+	r.Tick(context.Background(), now)
+	if r.backoff != 34*time.Second {
+		t.Fatalf("after a 429 without Retry-After backoff = %s", r.backoff)
+	}
+	f.status = 401
 	r.Tick(context.Background(), now.Add(r.backoff))
-	if r.backoff != 2*time.Second {
-		t.Fatalf("after 429 backoff = %s", r.backoff)
+	if r.backoff != authBackoff {
+		t.Fatalf("after a 401 backoff = %s", r.backoff)
+	}
+}
+
+func TestRetryAfterIsReadInSecondsAndAsADate(t *testing.T) {
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	for v, want := range map[string]time.Duration{
+		"": 0, "5": 5 * time.Second, "-1": 0, "soon": 0,
+		now.Add(90 * time.Second).Format(http.TimeFormat): 90 * time.Second,
+		now.Add(-time.Minute).Format(http.TimeFormat):     0,
+	} {
+		if got := retryAfter(v, now); got != want {
+			t.Errorf("retryAfter(%q) = %s, want %s", v, got, want)
+		}
+	}
+}
+
+// Only a kind's probe decides that a deployment does not take it.
+func TestRejectionsAfterTheProbeAreCountedNotRefused(t *testing.T) {
+	f, r, dir := setup(t, KindWarden)
+	path := filepath.Join(dir, cid+".warden.ndjson")
+	appendLines(t, path, finding("r0")+"\n")
+	tick(r, 1)
+	f.mu.Lock()
+	f.takes[KindWarden] = false
+	f.mu.Unlock()
+	appendLines(t, path, finding("r1")+"\n", finding("r2")+"\n")
+	tick(r, 2)
+	s := r.Stats()
+	if len(s.Refused) != 0 || s.Rejected != 2 {
+		t.Fatalf("refused = %v, rejected = %d; want none and 2", s.Refused, s.Rejected)
+	}
+	fi, _ := os.Stat(path)
+	if r.offsets[cid+".warden.ndjson"] != fi.Size() {
+		t.Fatalf("offset = %d, want past the rejected lines", r.offsets[cid+".warden.ndjson"])
+	}
+}
+
+func TestARefusedKindIsProbedAgainLater(t *testing.T) {
+	f, r, dir := setup(t)
+	appendLines(t, filepath.Join(dir, cid+".warden.ndjson"), finding("r0")+"\n", finding("r1")+"\n")
+	now := time.Now()
+	r.Tick(context.Background(), now)
+	if s := r.Stats(); len(s.Refused) != 1 {
+		t.Fatalf("refused = %v", s.Refused)
+	}
+	f.mu.Lock()
+	f.takes[KindWarden] = true
+	f.mu.Unlock()
+	r.Tick(context.Background(), now.Add(time.Minute))
+	if n := len(f.all()); n != 1 {
+		t.Fatalf("sent %d events before the re-probe, want the first probe only", n)
+	}
+	r.Tick(context.Background(), now.Add(reprobeAfter))
+	r.Tick(context.Background(), now.Add(reprobeAfter+time.Second))
+	if s := r.Stats(); len(s.Refused) != 0 || s.Accepted != 2 {
+		t.Fatalf("after the re-probe refused = %v, accepted = %d", s.Refused, s.Accepted)
+	}
+}
+
+func TestEventsOfAnUnnamedSandboxAreSkipped(t *testing.T) {
+	f, r, dir := setup(t, KindWarden)
+	const other = "fedcba9876543210"
+	noPod := `{"event.name":"nofire.vmi.finding","attributes":{"rule.id":"x"}}`
+	appendLines(t, filepath.Join(dir, other+".warden.ndjson"), noPod+"\n")
+	tick(r, 1)
+	if n := len(f.all()); n != 0 || r.Stats().Unnamed != 1 {
+		t.Fatalf("sent %d, unnamed %d; want 0 and 1", n, r.Stats().Unnamed)
+	}
+}
+
+func TestOffsetsOfRemovedFilesAreDropped(t *testing.T) {
+	_, r, dir := setup(t, KindWarden)
+	path := filepath.Join(dir, cid+".warden.ndjson")
+	appendLines(t, path, finding("r0")+"\n")
+	tick(r, 1)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	tick(r, 1)
+	if _, ok := r.offsets[cid+".warden.ndjson"]; ok {
+		t.Fatal("kept the offset of a removed file")
+	}
+}
+
+func TestACallersClientRefusesRedirects(t *testing.T) {
+	away := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the key followed a redirect: %s", r.Header.Get("X-API-Key"))
+	}))
+	defer away.Close()
+	srv := httptest.NewServer(http.RedirectHandler(away.URL, http.StatusTemporaryRedirect))
+	defer srv.Close()
+	hc := &http.Client{Timeout: time.Second}
+	c, err := NewClient(srv.URL, "k3y", hc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var se *StatusError
+	if err := c.ReportSandboxes(context.Background(), nil); !errors.As(err, &se) || se.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("err = %v, want the redirect as a status", err)
+	}
+	if hc.CheckRedirect != nil {
+		t.Fatal("changed the caller's client")
 	}
 }
 

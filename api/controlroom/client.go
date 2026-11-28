@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,6 +35,8 @@ var ErrUnreachable = errors.New("controlroom: the Control Room did not answer")
 type StatusError struct {
 	Status  int
 	Message string
+	// RetryAfter is the wait a 429 or 503 asked for in Retry-After, or 0.
+	RetryAfter time.Duration
 }
 
 func (e *StatusError) Error() string {
@@ -61,15 +64,19 @@ func NewClient(base, key string, hc *http.Client) (*Client, error) {
 	if key == "" {
 		return nil, errors.New("controlroom: no agent key")
 	}
-	if hc == nil {
-		hc = &http.Client{
-			Timeout: 30 * time.Second,
-			// An agent key goes to the deployment it was minted for and
-			// nowhere a redirect points.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		}
+	var cp http.Client
+	if hc != nil {
+		cp = *hc
+	} else {
+		cp.Timeout = 30 * time.Second
 	}
-	return &Client{base: base, key: key, hc: hc}, nil
+	if cp.CheckRedirect == nil {
+		// An agent key goes to the deployment it was minted for and nowhere
+		// a redirect points. A caller's client is copied, so its own
+		// redirect policy, if it has one, is left as it is.
+		cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	return &Client{base: base, key: key, hc: &cp}, nil
 }
 
 // URL is the deployment the client talks to.
@@ -107,7 +114,8 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any) error {
 		return ErrUnreachable
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &StatusError{Status: resp.StatusCode, Message: errorText(data)}
+		return &StatusError{Status: resp.StatusCode, Message: errorText(data),
+			RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -115,6 +123,24 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any) error {
 		}
 	}
 	return nil
+}
+
+// retryAfter reads a Retry-After header, in seconds or as an HTTP date.
+func retryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n < 0 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
 }
 
 // errorText reads the Control Room's {"error":{"code","message"}} or a short

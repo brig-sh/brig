@@ -21,6 +21,15 @@ const (
 	maxLineBytes   = 64 << 10
 )
 
+// Waits after a failure. A wrong key does not heal on its own, and a refused
+// kind is tried again in case the deployment learned it.
+const (
+	minBackoff   = 2 * time.Second
+	maxBackoff   = 60 * time.Second
+	authBackoff  = 10 * time.Minute
+	reprobeAfter = time.Hour
+)
+
 // A Registry names the sandboxes a node runs.
 type Registry interface {
 	// Running returns the containers running now, each with the name of the
@@ -44,12 +53,12 @@ type Reporter struct {
 	Log   *log.Logger
 
 	mu      sync.Mutex
-	offsets map[string]int64  // file name -> offset of the first unsent byte
-	seen    map[string]string // container id -> sandbox name, last reported running
-	names   map[string]string // container id -> sandbox name, ever seen, for the records it still has
-	scanned map[string]bool   // source kind -> scanned once in this process
-	refused map[string]bool   // kind -> the deployment does not take it
-	probed  map[string]bool   // kind -> its first event of this run went alone
+	offsets map[string]int64     // file name -> offset of the first unsent byte
+	seen    map[string]string    // container id -> sandbox name, last reported running
+	names   map[string]string    // container id -> sandbox name, ever seen, for the records it still has
+	scanned map[string]bool      // source kind -> scanned once in this process
+	refused map[string]time.Time // kind -> when the deployment refused it
+	probed  map[string]bool      // kind -> its first event of this run went alone
 	stats   Stats
 	backoff time.Duration
 	next    time.Time
@@ -63,6 +72,7 @@ type Stats struct {
 	Accepted   int       `json:"events_accepted"`
 	Duplicates int       `json:"events_duplicate"`
 	Rejected   int       `json:"events_rejected"`
+	Unnamed    int       `json:"events_unnamed"`
 	Refused    []string  `json:"kinds_refused,omitempty"`
 	LastError  string    `json:"last_error,omitempty"`
 	LastOK     time.Time `json:"last_ok,omitempty"`
@@ -104,7 +114,7 @@ func (r *Reporter) init() {
 		r.scanned = map[string]bool{}
 	}
 	if r.refused == nil {
-		r.refused = map[string]bool{}
+		r.refused = map[string]time.Time{}
 	}
 	if r.probed == nil {
 		r.probed = map[string]bool{}
@@ -135,7 +145,7 @@ func (r *Reporter) Tick(ctx context.Context, now time.Time) {
 	if wait {
 		return
 	}
-	err := r.report(ctx)
+	err := r.report(ctx, now)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err == nil {
@@ -146,19 +156,14 @@ func (r *Reporter) Tick(ctx context.Context, now time.Time) {
 	r.stats.LastError = err.Error()
 	var se *StatusError
 	switch {
-	case errors.As(err, &se) && se.Status == 429:
-		// The limit refills, so start over from the shortest wait.
-		r.backoff = 2 * time.Second
+	case errors.As(err, &se) && se.RetryAfter > 0:
+		r.backoff = min(se.RetryAfter, authBackoff)
 	case errors.As(err, &se) && (se.Status == 401 || se.Status == 403):
-		// A wrong or revoked credential does not heal on its own.
-		r.backoff = 10 * time.Minute
+		r.backoff = authBackoff
 	case r.backoff == 0:
-		r.backoff = 2 * time.Second
+		r.backoff = minBackoff
 	default:
-		r.backoff *= 2
-		if r.backoff > 60*time.Second {
-			r.backoff = 60 * time.Second
-		}
+		r.backoff = min(r.backoff*2, maxBackoff)
 	}
 	r.next = now.Add(r.backoff)
 	r.logf("controlroom: %v; next try in %s", err, r.backoff)
@@ -166,18 +171,23 @@ func (r *Reporter) Tick(ctx context.Context, now time.Time) {
 
 // report sends the registry, then each source. A sandbox has to be in the
 // node's registry before its events can name it.
-func (r *Reporter) report(ctx context.Context) error {
+func (r *Reporter) report(ctx context.Context, now time.Time) error {
 	if err := r.reportSandboxes(ctx); err != nil {
 		return err
 	}
 	for _, src := range r.Sources {
 		r.mu.Lock()
-		refused := r.refused[src.Kind]
+		at, refused := r.refused[src.Kind]
+		if refused && now.Sub(at) >= reprobeAfter {
+			delete(r.refused, src.Kind)
+			r.probed[src.Kind] = false
+			refused = false
+		}
 		r.mu.Unlock()
 		if refused {
 			continue
 		}
-		if err := r.reportSource(ctx, src); err != nil {
+		if err := r.reportSource(ctx, src, now); err != nil {
 			return err
 		}
 	}
@@ -241,22 +251,31 @@ type pending struct {
 // reportSource sends what the source's files gained since the last report, a
 // batch at a time, and moves a file's offset only past what the Control Room
 // answered for.
-func (r *Reporter) reportSource(ctx context.Context, src Source) error {
+func (r *Reporter) reportSource(ctx context.Context, src Source, now time.Time) error {
 	ents, err := os.ReadDir(r.Dir)
 	if err != nil {
+		r.logf("controlroom: %v", err)
 		return nil
 	}
-	r.mu.Lock()
-	first := !r.scanned[src.Kind]
-	r.scanned[src.Kind] = true
-	r.mu.Unlock()
 	var files []string
+	present := map[string]bool{}
 	for _, e := range ents {
 		if _, ok := src.match(e.Name()); ok && e.Type().IsRegular() {
 			files = append(files, e.Name())
+			present[e.Name()] = true
 		}
 	}
 	sort.Strings(files)
+	r.mu.Lock()
+	first := !r.scanned[src.Kind]
+	r.scanned[src.Kind] = true
+	// A file the node removed has nothing more to send.
+	for name := range r.offsets {
+		if _, ok := src.match(name); ok && !present[name] {
+			delete(r.offsets, name)
+		}
+	}
+	r.mu.Unlock()
 	for _, name := range files {
 		if first && src.FromEnd {
 			r.startAtEnd(name)
@@ -271,7 +290,8 @@ func (r *Reporter) reportSource(ctx context.Context, src Source) error {
 				budget -= scanned
 			}
 			r.mu.Lock()
-			if !r.probed[src.Kind] {
+			probe := !r.probed[src.Kind]
+			if probe {
 				// A kind's first event of a run goes with only the events of
 				// its own line: if the deployment does not know the kind, a
 				// handful are stored as unparsed, not 200.
@@ -296,10 +316,12 @@ func (r *Reporter) reportSource(ctx context.Context, src Source) error {
 			r.stats.Accepted += res.Accepted
 			r.stats.Duplicates += res.Duplicates
 			r.stats.Rejected += res.Rejected
-			if res.Rejected == len(evs) && res.Accepted == 0 && res.Duplicates == 0 {
-				// None stored as its kind: this deployment does not take the
-				// kind. The offset stays, so nothing is lost when it does.
-				r.refused[src.Kind] = true
+			if probe && res.Rejected == len(evs) && res.Accepted == 0 && res.Duplicates == 0 {
+				// The probe was not stored as its kind, so this deployment
+				// does not take the kind. The offset stays, so nothing is
+				// lost when it does. Later rejections are counted only: a
+				// batch of malformed lines does not stop a kind.
+				r.refused[src.Kind] = now
 				r.mu.Unlock()
 				r.logf("controlroom: %s does not take %q events yet; they are kept and not sent", r.Client.URL(), src.Kind)
 				return nil
@@ -383,7 +405,16 @@ func (r *Reporter) read(src Source, name string, budget int64) ([]pending, int64
 		// is the event's.
 		var evs []Event
 		if text != "" {
-			if ev, ok := src.Parse(text, id, sandbox); ok && len(ev.Line) <= maxLineBytes {
+			ev, ok := src.Parse(text, id, sandbox)
+			switch {
+			case !ok || len(ev.Line) > maxLineBytes:
+			case ev.Sandbox == "":
+				// The Control Room files an event under a sandbox, and
+				// nothing names this container's.
+				r.mu.Lock()
+				r.stats.Unnamed++
+				r.mu.Unlock()
+			default:
 				ev.Kind, ev.File, ev.Offset = src.Kind, name, start
 				evs = append(evs, ev)
 			}
