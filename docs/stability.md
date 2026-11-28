@@ -87,6 +87,11 @@ These can change without a deprecation cycle:
   no compatibility promise. A field can be added, renamed or removed in any
   release. It is public so that another program, such as a Kubernetes
   operator, can link the types without linking Brig.
+- The Go package `github.com/brig-sh/brig/api/controlroom`, which reports a
+  node's sandboxes, the warden's findings and the model's tool calls to the
+  NOFire AI Control Room. It is alpha, and it carries no compatibility
+  promise. It is public so that the warden, which runs where Brig does not,
+  links it without linking Brig.
 
 ## Retired spellings
 
