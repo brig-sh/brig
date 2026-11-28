@@ -156,7 +156,7 @@ func (r *Reporter) Tick(ctx context.Context, now time.Time) {
 	r.stats.LastError = err.Error()
 	var se *StatusError
 	switch {
-	case errors.As(err, &se) && se.RetryAfter > 0:
+	case errors.As(err, &se) && se.RetryAfter > 0 && (se.Status == 429 || se.Status == 503):
 		r.backoff = min(se.RetryAfter, authBackoff)
 	case errors.As(err, &se) && (se.Status == 401 || se.Status == 403):
 		r.backoff = authBackoff

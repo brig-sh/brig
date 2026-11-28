@@ -348,7 +348,8 @@ func TestFailuresBackOffAndA429WaitsAsAsked(t *testing.T) {
 	if r.backoff != 34*time.Second {
 		t.Fatalf("after a 429 without Retry-After backoff = %s", r.backoff)
 	}
-	f.status = 401
+	// A Retry-After on a 401 does not shorten the wait for a new key.
+	f.status, f.retry = 401, "1"
 	r.Tick(context.Background(), now.Add(r.backoff))
 	if r.backoff != authBackoff {
 		t.Fatalf("after a 401 backoff = %s", r.backoff)

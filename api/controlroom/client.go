@@ -114,8 +114,11 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any) error {
 		return ErrUnreachable
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &StatusError{Status: resp.StatusCode, Message: errorText(data),
-			RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		se := &StatusError{Status: resp.StatusCode, Message: errorText(data)}
+		if se.Status == http.StatusTooManyRequests || se.Status == http.StatusServiceUnavailable {
+			se.RetryAfter = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+		return se
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
